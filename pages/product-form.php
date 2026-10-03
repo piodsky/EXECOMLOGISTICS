@@ -4,12 +4,17 @@ declare(strict_types=1);
 require __DIR__ . '/../system/bootstrap.php';
 $page = require_page('inventory');
 
+$canManage = Auth::can('products.manage');                          // catalogue is company-wide
+$canAdjust = Auth::can('inventory.adjust') && Branch::isConcrete();  // stock is per branch
 $id      = input_int($_GET, 'id', 1);
 $product = null;
 if ($id !== null) {
     $product = Products::find($id) ?? throw new HttpException(404, 'Product not found.');
+} elseif (!$canManage) {
+    abort(403, 'You do not have permission to add products.');
 }
-$page['title'] = $product ? 'Edit Product' : 'Add Product';
+$ro = $canManage ? '' : ' disabled'; // read-only view for inventory.view only
+$page['title'] = $product ? ($canManage ? 'Edit Product' : $product['name']) : 'Add Product';
 $returnTo = safe_return($_POST['return'] ?? $_GET['return'] ?? null, 'inventory.php');
 $self     = 'product-form.php?' . http_build_query(array_filter(['id' => $id, 'return' => $returnTo]));
 
@@ -23,6 +28,9 @@ if (is_post()) {
         redirect('pages/' . $self);
     }
     Csrf::verifyRequest();
+    if (!$canManage) {
+        abort(403, 'You do not have permission to manage products.');
+    }
 
     [$data, $errors] = Products::validate($_POST, $id);
     $file     = $_FILES['image'] ?? null;
@@ -105,13 +113,13 @@ require ROOT_PATH . '/includes/header.php';
         <div class="form-grid">
             <label class="form-field form-field--full">
                 <span class="form-label">Name *</span>
-                <input class="form-input" name="name" maxlength="100" required value="<?= e($val('name')) ?>"<?= invalid('name') ?>>
+                <input class="form-input" name="name" maxlength="100" required value="<?= e($val('name')) ?>"<?= invalid('name') ?><?= $ro ?>>
                 <?= field_error('name') ?>
             </label>
 
             <label class="form-field">
                 <span class="form-label">Category *</span>
-                <select class="form-input" name="category_id" required<?= invalid('category_id') ?>>
+                <select class="form-input" name="category_id" required<?= invalid('category_id') ?><?= $ro ?>>
                     <option value="">Choose…</option>
                     <?php foreach ($categories as $cat): ?>
                         <option value="<?= (int) $cat['id'] ?>"<?= $val('category_id') === (string) $cat['id'] ? ' selected' : '' ?>><?= e($cat['name']) ?></option>
@@ -123,27 +131,27 @@ require ROOT_PATH . '/includes/header.php';
             <label class="form-field">
                 <span class="form-label">Price (<?= e(config('app.currency')) ?>) *</span>
                 <input class="form-input" name="price" inputmode="decimal" maxlength="10" required placeholder="0.00"
-                       value="<?= e($val('price')) ?>"<?= invalid('price') ?>>
+                       value="<?= e($val('price')) ?>"<?= invalid('price') ?><?= $ro ?>>
                 <?= field_error('price') ?>
             </label>
 
             <label class="form-field">
                 <span class="form-label">Product code *</span>
                 <input class="form-input form-input--mono" name="code" maxlength="20" required placeholder="ITM-0013"
-                       autocapitalize="characters" value="<?= e($val('code')) ?>"<?= invalid('code') ?>>
+                       autocapitalize="characters" value="<?= e($val('code')) ?>"<?= invalid('code') ?><?= $ro ?>>
                 <?= field_error('code') ?>
             </label>
 
             <label class="form-field">
                 <span class="form-label">Barcode</span>
                 <input class="form-input form-input--mono" name="barcode" maxlength="50" placeholder="Scan or type"
-                       value="<?= e($val('barcode')) ?>"<?= invalid('barcode') ?>>
+                       value="<?= e($val('barcode')) ?>"<?= invalid('barcode') ?><?= $ro ?>>
                 <?= field_error('barcode') ?>
             </label>
 
             <label class="form-field form-field--full">
                 <span class="form-label">Description</span>
-                <textarea class="form-input" name="description" rows="3" maxlength="255"<?= invalid('description') ?>><?= e($val('description')) ?></textarea>
+                <textarea class="form-input" name="description" rows="3" maxlength="255"<?= invalid('description') ?><?= $ro ?>><?= e($val('description')) ?></textarea>
                 <?= field_error('description') ?>
             </label>
         </div>
@@ -159,13 +167,13 @@ require ROOT_PATH . '/includes/header.php';
                 </div>
                 <label class="btn btn--light btn--block file-btn">
                     <?= icon('image') ?> <span id="imageLabel"><?= $imageUrl ? 'Replace image' : 'Choose image' ?></span>
-                    <input type="file" name="image" id="imageInput" accept="image/jpeg,image/png,image/webp"<?= invalid('image') ?>>
+                    <input type="file" name="image" id="imageInput" accept="image/jpeg,image/png,image/webp"<?= invalid('image') ?><?= $ro ?>>
                 </label>
                 <p class="form-hint">JPG, PNG or WebP · max 2 MB · square looks best</p>
                 <?= field_error('image') ?>
                 <?php if ($imageUrl): ?>
                     <label class="check">
-                        <input type="checkbox" name="remove_image" value="1" id="removeImage"> Remove current image
+                        <input type="checkbox" name="remove_image" value="1" id="removeImage"<?= $ro ?>> Remove current image
                     </label>
                 <?php endif; ?>
             </div>
@@ -179,16 +187,19 @@ require ROOT_PATH . '/includes/header.php';
                         <span class="form-label">In stock</span>
                         <div class="stock-now">
                             <strong><?= (int) $product['stock'] ?></strong>
-                            <button type="button" class="btn btn--light btn--sm" data-adjust
-                                    data-id="<?= (int) $product['id'] ?>" data-name="<?= e($product['name']) ?>"
-                                    data-code="<?= e($product['code']) ?>" data-stock="<?= (int) $product['stock'] ?>">
-                                <?= icon('stock') ?> Adjust
-                            </button>
+                            <?php if ($canAdjust): ?>
+                                <button type="button" class="btn btn--light btn--sm" data-adjust
+                                        data-id="<?= (int) $product['id'] ?>" data-name="<?= e($product['name']) ?>"
+                                        data-code="<?= e($product['code']) ?>" data-stock="<?= (int) $product['stock'] ?>">
+                                    <?= icon('stock') ?> Adjust
+                                </button>
+                            <?php endif; ?>
                         </div>
+                        <p class="form-hint">At <?= e(Branch::label()) ?><?= Branch::isConcrete() && Branch::canSeeAll() ? ' · company total ' . (int) $product['total_stock'] : '' ?></p>
                     </div>
                 <?php else: ?>
                     <label class="form-field">
-                        <span class="form-label">Opening stock *</span>
+                        <span class="form-label">Opening stock at <?= e(Branch::label()) ?> *</span>
                         <input class="form-input" type="number" name="stock" min="0" max="<?= Products::MAX_STOCK ?>" step="1"
                                value="<?= e(old('stock', '0')) ?>"<?= invalid('stock') ?>>
                         <?= field_error('stock') ?>
@@ -197,7 +208,7 @@ require ROOT_PATH . '/includes/header.php';
                 <label class="form-field">
                     <span class="form-label">Low-stock alert at</span>
                     <input class="form-input" type="number" name="reorder_level" min="0" max="9999" step="1"
-                           value="<?= e($val('reorder_level', '5')) ?>"<?= invalid('reorder_level') ?>>
+                           value="<?= e($val('reorder_level', '5')) ?>"<?= invalid('reorder_level') ?><?= $ro ?>>
                     <?= field_error('reorder_level') ?>
                 </label>
             </div>
@@ -205,15 +216,17 @@ require ROOT_PATH . '/includes/header.php';
 
         <section class="card card--pad">
             <label class="check check--switch">
-                <input type="checkbox" name="is_active" value="1"<?= $isActive ? ' checked' : '' ?>>
+                <input type="checkbox" name="is_active" value="1"<?= $isActive ? ' checked' : '' ?><?= $ro ?>>
                 <span><strong>Active</strong><small class="muted block">Shown on the POS and can be sold</small></span>
             </label>
         </section>
     </div>
 
     <div class="form-actions">
-        <a class="btn btn--light" href="<?= e(url('pages/' . $returnTo)) ?>">Cancel</a>
-        <button type="submit" class="btn btn--primary"><?= icon('save') ?> <?= $product ? 'Save Changes' : 'Add Product' ?></button>
+        <a class="btn btn--light" href="<?= e(url('pages/' . $returnTo)) ?>"><?= $canManage ? 'Cancel' : 'Back' ?></a>
+        <?php if ($canManage): ?>
+            <button type="submit" class="btn btn--primary"><?= icon('save') ?> <?= $product ? 'Save Changes' : 'Add Product' ?></button>
+        <?php endif; ?>
     </div>
 </form>
 
@@ -222,32 +235,37 @@ require ROOT_PATH . '/includes/header.php';
         <header class="card__head"><h2><?= icon('clock') ?> Stock History</h2><span class="muted">Last <?= count($movements) ?> changes</span></header>
         <div class="table-wrap">
             <table class="table">
-                <thead><tr><th>Date</th><th>Type</th><th class="num">Change</th><th class="num">Stock after</th><th>Note</th><th>By</th></tr></thead>
+                <thead><tr><th>Date</th><th>Type</th><th class="num">Change</th><th class="num">Stock after</th><th>Note</th><th>By</th><th>Branch</th></tr></thead>
                 <tbody>
                 <?php foreach ($movements as $m): ?>
                     <tr>
                         <td><?= e(date('M j, Y g:i A', strtotime($m['created_at']))) ?></td>
                         <td><span class="badge"><?= e($typeLabels[$m['type']] ?? $m['type']) ?></span></td>
                         <td class="num <?= (int) $m['quantity'] < 0 ? 'text-danger' : 'text-success' ?>"><?= (int) $m['quantity'] > 0 ? '+' : '' ?><?= (int) $m['quantity'] ?></td>
-                        <td class="num"><?= (int) $m['stock_after'] ?></td>
+                        <td class="num"<?= Branch::canSeeAll() ? ' title="Company total after: ' . (int) $m['stock_after'] . '"' : '' ?>><?= $m['location_qty_after'] !== null ? (int) $m['location_qty_after'] : (Branch::canSeeAll() ? (int) $m['stock_after'] : '—') ?></td>
                         <td>
-                            <?php if ($m['sale_no']): ?>
+                            <?php if ($m['sale_no'] && Auth::can('sales.view')): ?>
                                 <a href="<?= e(url('pages/sale-view.php?id=' . (int) $m['sale_id'])) ?>"><?= e($m['type'] === 'void' ? ($m['note'] ?? 'Voided sale No. ' . $m['sale_no']) : 'Sale No. ' . $m['sale_no']) ?></a>
+                            <?php elseif ($m['sale_no']): ?>
+                                <?= e($m['type'] === 'void' ? ($m['note'] ?? 'Voided sale No. ' . $m['sale_no']) : 'Sale No. ' . $m['sale_no']) ?>
                             <?php else: ?>
                                 <?= e($m['note'] ?? '') ?>
                             <?php endif; ?>
                         </td>
                         <td class="muted"><?= e($m['username'] ?? '—') ?></td>
+                        <td><span class="badge" title="<?= e($m['branch_name'] ?? '') ?>"><?= e($m['branch_code'] ?? '') ?></span></td>
                     </tr>
                 <?php endforeach; ?>
                 <?php if (!$movements): ?>
-                    <tr><td colspan="6" class="empty">No stock changes yet.</td></tr>
+                    <tr><td colspan="7" class="empty">No stock changes yet.</td></tr>
                 <?php endif; ?>
                 </tbody>
             </table>
         </div>
     </section>
-    <?php require ROOT_PATH . '/includes/stock-dialog.php'; ?>
+    <?php if ($canAdjust): ?>
+        <?php require ROOT_PATH . '/includes/stock-dialog.php'; ?>
+    <?php endif; ?>
 <?php endif; ?>
 
 <?php require ROOT_PATH . '/includes/footer.php'; ?>

@@ -28,11 +28,12 @@ final class Sales
     }
 
     /**
-     * Complete a sale: validate stock, save sale + items, deduct stock — all or nothing.
+     * Complete a sale at the current branch: validate stock at the branch's default location,
+     * save sale + items, deduct stock — all or nothing.
      *
      * @param array<int,int> $qtyById    product_id => quantity
      * @param int|null       $paidCents  cash received (required for cash, ignored otherwise)
-     * @throws HttpException 409 when stock is insufficient, 422 on invalid data
+     * @throws HttpException 409 when stock is insufficient, 422 on invalid data / no branch chosen
      */
     public static function complete(
         int $userId,
@@ -42,13 +43,21 @@ final class Sales
         float $discountPercent,
         ?int $paidCents,
     ): array {
+        $branchId = Branch::forWrite();
+        $location = Branch::defaultLocation($branchId);
+
         $pdo = db();
         $pdo->beginTransaction();
 
         try {
             if ($customerId !== null) {
-                $stmt = $pdo->prepare('SELECT id FROM customers WHERE id = ? AND is_active = ?');
-                $stmt->execute([$customerId, 1]);
+                // Active and visible at this branch (customers are shared through customer_branches).
+                $stmt = $pdo->prepare(
+                    'SELECT c.id FROM customers c
+                      WHERE c.id = ? AND c.is_active = ?
+                        AND EXISTS (SELECT 1 FROM customer_branches cb WHERE cb.customer_id = c.id AND cb.branch_id = ?)'
+                );
+                $stmt->execute([$customerId, 1, $branchId]);
                 if (!$stmt->fetch()) {
                     throw new HttpException(422, 'The selected customer no longer exists. Please choose another.');
                 }
@@ -58,7 +67,7 @@ final class Sales
             $ids  = array_keys($qtyById);
             $in   = implode(',', array_fill(0, count($ids), '?'));
             $stmt = $pdo->prepare(
-                "SELECT id, code, name, price, stock, is_active FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE"
+                "SELECT id, code, name, price, is_active FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE"
             );
             $stmt->execute($ids);
             $products = [];
@@ -75,21 +84,19 @@ final class Sales
                     $problems[] = ['product_id' => $id, 'stock' => 0, 'message' => 'An item in the cart is no longer available.'];
                     continue;
                 }
-                if ((int) $p['stock'] < $qty) {
+                $available = Stock::balance($id, $location['id']); // locked with the product row
+                if ($available < $qty) {
                     $problems[] = [
                         'product_id' => $id,
-                        'stock'      => (int) $p['stock'],
-                        'message'    => (int) $p['stock'] === 0
-                            ? sprintf('%s is out of stock.', $p['name'])
-                            : sprintf('%s: only %d left.', $p['name'], $p['stock']),
+                        'stock'      => $available,
+                        'message'    => $available === 0
+                            ? sprintf('%s is out of stock at %s.', $p['name'], $location['branch_name'])
+                            : sprintf('%s: only %d left at %s.', $p['name'], $available, $location['branch_name']),
                     ];
                     continue;
                 }
                 $price     = to_cents($p['price']);
-                $lines[]   = [
-                    'id' => $id, 'code' => $p['code'], 'name' => $p['name'], 'price' => $price, 'qty' => $qty,
-                    'stock_after' => (int) $p['stock'] - $qty, // row is locked, so this is exact
-                ];
+                $lines[]   = ['id' => $id, 'code' => $p['code'], 'name' => $p['name'], 'price' => $price, 'qty' => $qty];
                 $subtotal += $price * $qty;
             }
 
@@ -117,12 +124,13 @@ final class Sales
             $change = $paidCents - $total;
 
             $pdo->prepare(
-                'INSERT INTO sales (sale_no, user_id, customer_id, payment_type, status, subtotal, discount_percent,
+                'INSERT INTO sales (sale_no, branch_id, user_id, customer_id, payment_type, status, subtotal, discount_percent,
                                     discount_amount, vat_rate, vat_amount, total, amount_paid, change_amount,
                                     created_at, completed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
             )->execute([
                 'TMP' . bin2hex(random_bytes(8)), // replaced with the padded ID below
+                $branchId,
                 $userId,
                 $customerId,
                 $paymentType,
@@ -144,18 +152,13 @@ final class Sales
                 'INSERT INTO sale_items (sale_id, product_id, product_code, product_name, unit_price, quantity, line_total)
                  VALUES (?, ?, ?, ?, ?, ?, ?)'
             );
-            $deduct = $pdo->prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
-
             foreach ($lines as $line) {
                 $insertItem->execute([
                     $saleId, $line['id'], $line['code'], $line['name'],
                     from_cents($line['price']), $line['qty'], from_cents($line['price'] * $line['qty']),
                 ]);
-                $deduct->execute([$line['qty'], $line['id'], $line['qty']]);
-                if ($deduct->rowCount() !== 1) {
-                    throw new HttpException(409, "Not enough stock for {$line['name']}.");
-                }
-                Products::log($line['id'], $userId, 'sale', -$line['qty'], $line['stock_after'], null, $saleId);
+                // Deducts the branch location + company total and writes the ledger row (409 if short).
+                Stock::move($line['id'], $location, -$line['qty'], 'sale', null, $saleId, $userId);
             }
 
             $pdo->commit();
@@ -177,19 +180,23 @@ final class Sales
         ];
     }
 
-    /** Sale header + items (receipts, sale details). Null if not found. */
+    /** Sale header + items (receipts, sale details). Null if not found or outside the branch scope. */
     public static function find(int $id): ?array
     {
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
         $stmt = db()->prepare(
             "SELECT s.*, u.full_name AS cashier_name, COALESCE(c.name, 'Walk-in Customer') AS customer_name,
-                    v.full_name AS voided_by_name
+                    v.full_name AS voided_by_name,
+                    b.code AS branch_code, b.name AS branch_name, b.address AS branch_address,
+                    b.contact_no AS branch_contact, b.tin_branch_code AS branch_tin
                FROM sales s
                JOIN users u ON u.id = s.user_id
+               JOIN branches b ON b.id = s.branch_id
                LEFT JOIN customers c ON c.id = s.customer_id
                LEFT JOIN users v ON v.id = s.voided_by
-              WHERE s.id = ?"
+              WHERE s.id = ? AND {$scope}"
         );
-        $stmt->execute([$id]);
+        $stmt->execute([$id, ...$params]);
         $sale = $stmt->fetch();
         if (!$sale) {
             return null;
@@ -225,11 +232,13 @@ final class Sales
     {
         [$where, $params] = self::where($f);
         $stmt = db()->prepare(
-            "SELECT s.id, s.sale_no, s.customer_id, s.payment_type, s.status, s.total, s.created_at,
+            "SELECT s.id, s.sale_no, s.customer_id, s.payment_type, s.status, s.total, s.created_at, s.branch_id,
                     COALESCE(c.name, 'Walk-in Customer') AS customer_name, u.full_name AS cashier_name,
+                    b.code AS branch_code, b.name AS branch_name,
                     (SELECT COALESCE(SUM(si.quantity), 0) FROM sale_items si WHERE si.sale_id = s.id) AS items
                FROM sales s
                JOIN users u ON u.id = s.user_id
+               JOIN branches b ON b.id = s.branch_id
                LEFT JOIN customers c ON c.id = s.customer_id
               WHERE {$where}
               ORDER BY s.created_at DESC, s.id DESC
@@ -258,8 +267,8 @@ final class Sales
 
     private static function where(array $f): array
     {
-        $where  = ["s.status IN ('completed', 'cancelled')"];
-        $params = [];
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
+        $where = ["s.status IN ('completed', 'cancelled')", $scope];
         if ($f['q'] !== '') {
             // Sale number, customer, or any item on the sale (name / code)
             $where[] = '(s.sale_no LIKE ? OR c.name LIKE ? OR EXISTS (
@@ -291,31 +300,40 @@ final class Sales
         return [implode(' AND ', $where), $params];
     }
 
-    /** Users who can appear as the cashier of a sale (for the filter). */
+    /** Users who rang up sales in the current branch scope (for the filter). */
     public static function cashiers(): array
     {
-        $stmt = db()->prepare('SELECT id, full_name, username FROM users ORDER BY full_name');
-        $stmt->execute();
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
+        $stmt = db()->prepare(
+            "SELECT u.id, u.full_name, u.username FROM users u
+              WHERE EXISTS (SELECT 1 FROM sales s WHERE s.user_id = u.id AND {$scope})
+              ORDER BY u.full_name"
+        );
+        $stmt->execute($params);
         return $stmt->fetchAll();
     }
 
     /**
-     * Void a completed sale: mark it cancelled and put every item back in stock
-     * (logged as 'void' in stock_movements) — all or nothing.
+     * Void a completed sale (sales.cancel): mark it cancelled and put every item back in stock
+     * at the sale's branch (logged as 'void' in stock_movements) — all or nothing.
      * Returns [sale_no, units returned].
      */
     public static function void(int $id, int $userId, string $reason): array
     {
+        if (!Auth::can('sales.cancel')) {
+            throw new HttpException(403, 'You do not have permission to void sales.');
+        }
         $len = mb_strlen($reason);
         if ($len < 3 || $len > 255) {
             throw new HttpException(422, 'Enter the reason for voiding (3–255 characters).');
         }
 
+        [$scope, $scopeParams] = Branch::scopeSql('s.branch_id');
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare('SELECT id, sale_no, status FROM sales WHERE id = ? FOR UPDATE');
-            $stmt->execute([$id]);
+            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
+            $stmt->execute([$id, ...$scopeParams]);
             $sale = $stmt->fetch() ?: throw new HttpException(404, 'Sale not found.');
             if ($sale['status'] === 'cancelled') {
                 throw new HttpException(409, "Sale No. {$sale['sale_no']} is already voided.");
@@ -337,15 +355,14 @@ final class Sales
 
             $units = 0;
             if ($returns) {
+                $location = Branch::defaultLocation((int) $sale['branch_id']);
                 $in   = implode(',', array_fill(0, count($returns), '?'));
-                $stmt = $pdo->prepare("SELECT id, stock FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE");
+                $stmt = $pdo->prepare("SELECT id FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE");
                 $stmt->execute(array_keys($returns));
-                $restock = $pdo->prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
-                foreach ($stmt->fetchAll() as $p) {
-                    $qty = $returns[(int) $p['id']];
-                    $restock->execute([$qty, $p['id']]);
-                    Products::log((int) $p['id'], $userId, 'void', $qty, (int) $p['stock'] + $qty,
-                        "Voided sale No. {$sale['sale_no']}: {$reason}", $id);
+                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $productId) {
+                    $qty = $returns[(int) $productId];
+                    Stock::move((int) $productId, $location, $qty, 'void',
+                        "Voided sale No. {$sale['sale_no']}: {$reason}", $id, $userId);
                     $units += $qty;
                 }
             }
@@ -353,6 +370,11 @@ final class Sales
             $pdo->prepare(
                 "UPDATE sales SET status = 'cancelled', voided_at = NOW(), voided_by = ?, void_reason = ? WHERE id = ?"
             )->execute([$userId, $reason, $id]);
+
+            Audit::record('sales', 'void', 'sale', $id, $sale['sale_no'],
+                ['status' => 'completed', 'total' => $sale['total']],
+                ['status' => 'cancelled', 'reason' => $reason, 'units_returned' => $units],
+                (int) $sale['branch_id']);
 
             $pdo->commit();
         } catch (Throwable $e) {

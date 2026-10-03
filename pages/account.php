@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../system/bootstrap.php';
-Auth::requireRole('admin', 'cashier');
+Auth::requireLogin(); // every signed-in user, whatever their role
 $page = ['key' => 'account', 'title' => 'My Account', 'icon' => 'user'];
 $me   = Auth::user();
 
@@ -23,7 +23,7 @@ if (is_post()) {
     redirect('pages/account.php');
 }
 
-$roleName = config('app.roles')[$me['role']] ?? $me['role'];
+$myRole = $me['role_name'];
 $pageStyles = ['css/settings.css'];
 require ROOT_PATH . '/includes/header.php';
 ?>
@@ -31,7 +31,7 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>My Account</h1>
-        <p class="muted">Signed in as <strong><?= e($me['full_name']) ?></strong> (@<?= e($me['username']) ?> · <?= e($roleName) ?>).</p>
+        <p class="muted">Signed in as <strong><?= e($me['full_name']) ?></strong> (@<?= e($me['username']) ?> · <?= e($myRole) ?> · <?= e(Branch::label()) ?>).</p>
     </div>
 </div>
 

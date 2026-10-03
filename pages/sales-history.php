@@ -32,6 +32,7 @@ $pg       = paginate(Sales::count($filters), 20);
 $sales    = Sales::search($filters, $pg['per_page'], $pg['offset']);
 $summary  = Sales::summary($filters);
 $cashiers = Sales::cashiers();
+$showBranch = Branch::current() === Branch::ALL; // several branches in the list
 $returnTo = 'sales-history.php' . (($pgQuery || $pg['page'] > 1) ? '?' . http_build_query($pgQuery + ['page' => $pg['page']]) : '');
 $pgPath   = 'pages/sales-history.php';
 
@@ -68,9 +69,12 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Sales History</h1>
-        <p class="muted">Every completed and voided sale. Open a sale to reprint its receipt<?= Auth::hasRole('admin') ? ' or void it' : '' ?>.</p>
+        <p class="muted">Every completed and voided sale. Open a sale to reprint its receipt<?= Auth::can('sales.cancel') ? ' or void it' : '' ?>.</p>
     </div>
-    <span class="badge badge--period"><?= icon('calendar') ?> <?= e($period) ?></span>
+    <div class="page-actions">
+        <span class="badge badge--period badge--branch" id="scopeBranch"><?= icon('store') ?> <?= e(Branch::label()) ?></span>
+        <span class="badge badge--period"><?= icon('calendar') ?> <?= e($period) ?></span>
+    </div>
 </div>
 
 <section class="stats" aria-label="Sales summary">
@@ -151,6 +155,7 @@ require ROOT_PATH . '/includes/header.php';
                 <th>Sale No.</th>
                 <th>Date</th>
                 <th>Customer</th>
+                <?php if ($showBranch): ?><th class="col-opt">Branch</th><?php endif; ?>
                 <th class="col-opt">Cashier</th>
                 <th class="num col-opt">Items</th>
                 <th>Payment</th>
@@ -169,6 +174,7 @@ require ROOT_PATH . '/includes/header.php';
                     <td><a class="item-cell__name sale-no" href="<?= e($viewUrl) ?>"><?= e($s['sale_no']) ?></a></td>
                     <td class="nowrap"><?= e(date('M j, Y', strtotime($s['created_at']))) ?> <small class="muted sale-time"><?= e(date('g:i A', strtotime($s['created_at']))) ?></small></td>
                     <td><?= e($s['customer_name']) ?></td>
+                    <?php if ($showBranch): ?><td class="col-opt"><span class="badge badge--branch" title="<?= e($s['branch_name']) ?>"><?= e($s['branch_code']) ?></span></td><?php endif; ?>
                     <td class="col-opt"><?= e($s['cashier_name']) ?></td>
                     <td class="num col-opt"><?= (int) $s['items'] ?></td>
                     <td><span class="badge"><?= e(Sales::PAYMENT_TYPES[$s['payment_type']] ?? $s['payment_type']) ?></span></td>
@@ -184,7 +190,7 @@ require ROOT_PATH . '/includes/header.php';
                 </tr>
             <?php endforeach; ?>
             <?php if (!$sales): ?>
-                <tr><td colspan="9" class="empty">No sales found<?= $pgQuery ? ' for these filters' : ' yet' ?>.</td></tr>
+                <tr><td colspan="<?= $showBranch ? 10 : 9 ?>" class="empty">No sales found<?= $pgQuery ? ' for these filters' : ' yet' ?>.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>

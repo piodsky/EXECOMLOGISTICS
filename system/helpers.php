@@ -226,17 +226,23 @@ function abort(int $code, string $message = '', ?string $title = null): never
 
 /**
  * API endpoint guard. Call at the top of every file in /api:
- *   api_guard('POST', ['admin', 'cashier']);
- * Checks method, login, role and (for non-GET) the CSRF header.
+ *   api_guard('POST', 'pos.access');                  // permission key
+ *   api_guard('POST', ['customers.edit', 'pos.access']); // any of them
+ * Checks method, login, permission (strings containing a dot; anything else is treated as a
+ * legacy role code) and, for non-GET, the CSRF header.
  */
-function api_guard(string $method, array $roles = ['admin', 'cashier']): void
+function api_guard(string $method, array|string $access): void
 {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== $method) {
         header('Allow: ' . $method);
         json_response(['ok' => false, 'message' => 'Method not allowed.'], 405);
     }
     Auth::requireLogin();
-    if (!Auth::hasRole(...$roles)) {
+    $access = (array) $access;
+    $perms  = array_values(array_filter($access, static fn ($a) => is_string($a) && str_contains($a, '.')));
+    $roles  = array_values(array_filter($access, static fn ($a) => is_string($a) && !str_contains($a, '.')));
+    $ok = ($perms && Auth::canAny(...$perms)) || ($roles && Auth::hasRole(...$roles));
+    if (!$ok) {
         json_response(['ok' => false, 'message' => 'You do not have permission to do that.'], 403);
     }
     if ($method !== 'GET') {
@@ -244,15 +250,97 @@ function api_guard(string $method, array $roles = ['admin', 'cashier']): void
     }
 }
 
-/** Page guard: login + role check from config/menu.php. Returns the menu item. */
+/**
+ * Page guard: login + permission from config/menu.php ('permission': a key or a list = any of them;
+ * legacy 'roles' only when no permission is set). Returns the menu item.
+ */
 function require_page(string $key): array
 {
     $item = config('menu', [])[$key] ?? null;
     if (!is_array($item)) {
         throw new LogicException("Unknown page [{$key}] — add it to config/menu.php");
     }
-    Auth::requireRole(...$item['roles']);
+    if (isset($item['permission'])) {
+        Auth::requirePermission(...(array) $item['permission']);
+    } else {
+        Auth::requireRole(...($item['roles'] ?? []));
+    }
     return $item + ['key' => $key, 'title' => $item['label']];
+}
+
+/** Can the signed-in user open this menu item? */
+function can_open_menu(array $item): bool
+{
+    if (isset($item['permission'])) {
+        return Auth::canAny(...(array) $item['permission']);
+    }
+    return Auth::hasRole(...($item['roles'] ?? []));
+}
+
+/**
+ * Settings tabs in order: key => [label, icon, path, permission].
+ * includes/settings-nav.php shows the ones the user may open; each page guards its own.
+ */
+function settings_tabs(): array
+{
+    return [
+        'company'  => ['Company & Receipt', 'receipt', 'pages/settings.php',  'settings.manage'],
+        'users'    => ['Users',             'user',    'pages/users.php',     'users.view'],
+        'roles'    => ['Roles',             'shield',  'pages/roles.php',     'roles.manage'],
+        'branches' => ['Branches',          'store',   'pages/branches.php',  'branches.manage'],
+        'audit'    => ['Audit Log',         'clock',   'pages/audit-log.php', 'audit_logs.view'],
+    ];
+}
+
+/**
+ * Guard for a Settings page: login + the tab's own permission (+ extra ones, all required).
+ * Returns a page array that keeps "Settings" highlighted in the sidebar.
+ */
+function settings_page(string $tab, string $title, string ...$alsoRequired): array
+{
+    $def = settings_tabs()[$tab] ?? throw new LogicException("Unknown settings tab [{$tab}]");
+    Auth::requirePermission($def[3]);
+    foreach ($alsoRequired as $perm) {
+        Auth::requirePermission($perm);
+    }
+    $item = config('menu', [])['settings'] ?? [];
+    return ['key' => 'settings', 'title' => $title, 'tab' => $tab] + $item;
+}
+
+/** App path of a menu item (Settings → the first tab the user can open). */
+function menu_path(array $item): string
+{
+    if (!empty($item['tabs'])) {
+        foreach (settings_tabs() as [, , $path, $perm]) {
+            if (Auth::can($perm)) {
+                return $path;
+            }
+        }
+    }
+    return $item['url'];
+}
+
+/** App path of the first page the signed-in user can open (menu order), e.g. 'pages/pos.php'. */
+function home_path(): string
+{
+    foreach (config('menu', []) as $item) {
+        if (can_open_menu($item)) {
+            return menu_path($item);
+        }
+    }
+    return 'pages/account.php';
+}
+
+function home_url(): string
+{
+    return url(home_path());
+}
+
+/** CSV cell guard: values starting with = + - @ (or tab/CR) would run as formulas in Excel; prefix '. */
+function csv_cell(mixed $value): string
+{
+    $value = (string) $value;
+    return preg_match('/^[=+\-@\t\r]/', $value) ? "'" . $value : $value;
 }
 
 // ---------------------------------------------------------------------

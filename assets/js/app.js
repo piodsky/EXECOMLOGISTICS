@@ -127,6 +127,20 @@
         });
     }
 
+    // ---- Branch switcher (topbar): submit as soon as a branch is picked --
+    document.querySelectorAll('[data-branch-switch] select').forEach((select) => {
+        select.addEventListener('change', () => select.form.requestSubmit());
+    });
+    // "Choose branch" buttons (e.g. the POS notice) open the topbar switcher
+    document.querySelectorAll('[data-focus-branch]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const select = document.getElementById('branchSelect');
+            if (!select) return;
+            select.focus();
+            try { select.showPicker(); } catch (e) { /* not supported or not allowed: focus is enough */ }
+        });
+    });
+
     // ---- Dismissible alerts ---------------------------------------------
     document.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-dismiss="alert"]');
@@ -162,7 +176,7 @@
         if (e.key === 'F2' || e.key === 'F3') {
             if (search && search.offsetParent !== null) {
                 focusSearch();
-            } else if (body.dataset.page && body.dataset.page !== 'pos') {
+            } else if (body.dataset.pos === '1' && body.dataset.page !== 'pos') {
                 window.location.href = `${BB.baseUrl}/pages/pos.php`;
             }
         }

@@ -24,7 +24,36 @@ Read this first; open only the files a task needs.
       `pages/user-form.php`, My Account `pages/account.php` (all roles), tabs `includes/settings-nav.php`,
       `assets/css/settings.css`, classes `system/Settings.php` + `system/Users.php`, password stamp in `Auth`.
       No schema change. All four phases are done; the old coming-soon placeholder was removed.
+- [x] Phase 5 (= v2 phases 1+2): branches, branch isolation, per-branch stock, data-driven roles & permissions,
+      Branch master data, audit log. Migration `migrations/003_branches_permissions.sql`. Plan for later phases
+      (master data, warehouse/receiving/serials, branch transfers, POS pricing, job orders, dashboards) is in the
+      "EXECOM Migration Blueprint" artifact (v2, 27 sections).
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## Branches, roles & permissions (Phase 5)
+- Branches: MAR Maramag City (main, id 1, all pre-Phase-5 data), MLB, CDO, DAV, VAL. Address/contact/TIN are NULL until
+  the owner fills them in Settings → Branches (don't invent). Each branch has warehouse MAIN + location GENERAL
+  (created automatically with a new branch).
+- Roles live in `roles` (super_admin is_super = every permission, locked; branch_admin; cashier; technician; custom roles
+  allowed). `users.role` = role code (FK roles.code). Permission keys: `config/permissions.php` (must match the
+  `permissions` table). Check with `Auth::can/canAny/requirePermission`; `hasRole/requireRole` are deprecated.
+  Menu items use `'permission'` (string or any-of array); `api_guard('POST', 'pos.access')` takes permission keys (no default).
+  Settings tabs: `settings_page($tab, $title, ...)`. Landing page: `home_url()` (first menu item the user can open).
+- Permission checks are repeated inside the classes (void = `sales.cancel`, product CRUD = `products.manage`, adjust =
+  `inventory.adjust`, customer delete = `customers.delete`, users = `users.manage/delete`, settings = `settings.manage`).
+- Users: assign only roles whose permissions are a strict subset of yours; can't manage users with branches you can't
+  access; extra branches (`user_branches`) only by `branches.access_all`; ≥ 1 active super admin (row-locked).
+- Branch scope: `Branch::current()` (session, revalidated each request; 0 = All, only for `branches.access_all`),
+  `forWrite()` (422 "Choose a branch first."), `scopeSql('t.branch_id')` on every list/count/report/export,
+  `assertAccess()` → 404 for other branches' records. Never take branch_id/user_id/role from the browser.
+- Stock: ONLY `Stock::move()` writes stock (needs a transaction; locks product + `stock_balances` row; 409 if not enough
+  at the branch). `stock_balances` = qty per product × location; `products.stock` = company total; POS sells from the
+  branch's default sellable location. Integrity rule: products.stock = Σ stock_balances = Σ stock_movements.
+- Customers: one shared record with home branch + `customer_branches` visibility links; duplicate-phone check is
+  company-wide with a generic message for other branches' customers.
+- Audit: `Audit::record(module, action, …)` inside the caller's transaction (secrets stripped); viewer Settings → Audit Log.
+- Receipt prints the branch name (+ branch address/contact when set). POS cart key `bb.pos.<userId>.<branchId>`.
+- `includes/header.php` also defines `$hdr*` variables.
 
 ## User decisions (don't revert)
 - **No auto-logout.** User said "don't use session expired". `SESSION_IDLE_TIMEOUT=0`,
@@ -64,7 +93,7 @@ the main session runs each step with the agent named in project-manager's plan.
 - List shows only completed + cancelled (never held). Search = sale_no, customer name, or any item name/code.
   Filters: `search`, `from`/`to` (Y-m-d via `input_date()`, swapped if reversed, inclusive days), `status`,
   `payment`, `cashier`. Summary (`Sales::summary`) ignores the status filter so voids are always counted.
-- Everyone with the page can view + reprint (`receipt.php?id=X&autoprint=1`, new tab). Void = admin only
+- Everyone with the page can view + reprint (`receipt.php?id=X&autoprint=1`, new tab). Void = `sales.cancel` (super/branch admin)
   (server-checked, 403 for cashier), reason 3–255 chars, `Sales::void()`: transaction, lock sale + products
   `FOR UPDATE`, restock per product, `Products::log(..., 'void', +qty, ..., saleId)` with note
   "Voided sale No. X: reason", then status 'cancelled' + voided_at/by/reason. Voiding twice → 409 message.
@@ -89,8 +118,8 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Settings / Users behaviour (Phase 4)
 - Settings (admin): `Settings::validate/save` (upsert into `settings`); `Settings::PLACEHOLDERS` = the sample
   address/phone → warning banner until replaced. VAT change affects new sales only (sales store vat_rate).
-- Users (admin, pages use `require_page('settings')`): rules live in `Users` (not just the UI): no
-  deactivate/delete/role change on your own account; always ≥ 1 active admin; users with sales can't be deleted
+- Users (`users.view/manage/delete`, tab via `settings_page('users')`): rules live in `Users` (not just the UI): no
+  deactivate/delete/role change on your own account; always ≥ 1 active super admin; users with sales can't be deleted
   (sales.user_id is RESTRICT) → deactivate. Passwords: 8–72 chars, not containing the username, not in
   `Users::WEAK`. Never `flash_old()` password fields.
 - Session password stamp: `$_SESSION['auth']['pw']` = sha256(password_hash); `Auth::user()` signs the session
@@ -105,7 +134,7 @@ the main session runs each step with the agent named in project-manager's plan.
   every change writes `stock_movements` (type initial/sale/restock/adjustment/void, signed qty, stock_after).
   The product edit form never edits stock; opening stock is set on create only.
 - Delete is allowed only if never sold / never bought; otherwise deactivate (`is_active=0` hides from POS).
-- Customers: admin + cashier can add/edit; only admin can deactivate/delete. Duplicate phone numbers are rejected.
+- Customers: `customers.edit` adds/edits; `customers.delete` deactivates/deletes. Duplicate phone numbers are rejected.
 - Images: `ImageUpload::store($_FILES['image'])` (finfo + getimagesize, 2 MB, ≤4000px, random hex name);
   `ImageUpload::url()`; `ImageUpload::delete()` only deletes hex names (never the bundled sample-*.png).
   Store only after other fields validate; delete the new file if the DB save fails; delete the old one after success.
@@ -147,7 +176,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - **Node.js is NOT installed on this PC.** Use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (75 checks: PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (123 checks incl. role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

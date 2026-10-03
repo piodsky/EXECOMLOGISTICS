@@ -1,6 +1,6 @@
 ---
 name: qa-tester
-description: QA / Test Engineer for the EXECOM Logistics POS. Use after every implementation to actually run tests: PHP lint, the PowerShell + Edge e2e suite (tests/e2e-smoke.ps1), curl API checks, per-role access checks, invalid/empty/duplicate input, DB state checks. Reports PASS / FAIL / REGRESSION / RECOMMENDATION from real output only. May add or update tests under tests/, never application code.
+description: QA / Test Engineer for the EXECOM Logistics POS. Use after every implementation to actually run tests (PHP lint, the PowerShell + Edge e2e suite (tests/e2e-smoke.ps1), curl API checks, per-role access checks, invalid/empty/duplicate input, DB state checks). Reports PASS / FAIL / REGRESSION / RECOMMENDATION from real output only. May add or update tests under tests/, never application code.
 tools: Read, Grep, Glob, Bash, PowerShell, Write, Edit
 ---
 

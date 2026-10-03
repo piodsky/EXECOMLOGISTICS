@@ -232,7 +232,7 @@ kbd {
 .avatar .icon { width: 20px; height: 20px; }
 .user-menu__name { display: flex; flex-direction: column; min-width: 90px; }
 .user-menu__name strong { font-size: 14px; font-weight: 600; }
-.user-menu__name small { font-size: 12px; color: var(--on-dark-muted); }
+.user-menu__name small { max-width: 130px; overflow: hidden; font-size: 12px; color: var(--on-dark-muted); text-overflow: ellipsis; white-space: nowrap; }
 .user-menu__caret { width: 16px; height: 16px; transition: transform .15s; }
 .user-menu[open] .user-menu__caret { transform: rotate(180deg); }
 
@@ -475,6 +475,20 @@ kbd {
 .badge--success { background: var(--success-bg); color: var(--success); }
 .badge--warning { background: var(--warning-bg); color: var(--warning); }
 .badge--danger { background: var(--danger-bg); color: var(--danger); }
+.badge--info { background: var(--info-bg); color: var(--info); }
+.badge > .icon { width: 14px; height: 14px; }
+/* Branch code chip (tables: users, sales, audit) */
+.badge--branch {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--navy-600);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+    letter-spacing: .4px;
+}
+.nowrap { white-space: nowrap; }
 
 /* ---------- Alerts (flash messages) ---------- */
 .alert {
@@ -970,13 +984,86 @@ textarea.form-input { resize: vertical; min-height: 84px; }
 .error-card h1 { margin-top: 4px; font-size: 24px; }
 .error-card__msg { margin: 10px 0 24px; color: var(--text-muted); }
 
+/* ---------- Topbar branch chip + switcher ---------- */
+.branch-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    min-width: 0;
+    height: 50px;
+    padding: 0 12px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, .05);
+    color: var(--on-dark);
+    transition: background-color .15s, border-color .15s;
+}
+.branch-chip__icon { width: 22px; height: 22px; color: var(--primary-400); }
+.branch-chip--switch:hover { background: rgba(255, 255, 255, .09); border-color: rgba(255, 255, 255, .24); }
+.branch-chip--switch:focus-within { border-color: var(--accent); }
+/* "All branches" (read-only overview: the POS can't sell until one branch is picked) */
+.branch-chip.is-all { border-style: dashed; border-color: var(--primary-400); background: rgba(59, 130, 246, .14); }
+.branch-chip.is-all .branch-chip__icon { color: #fff; }
+
+.branch-switch { margin: 0; min-width: 0; }
+.branch-switch label,
+.branch-chip__label { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.branch-switch label { cursor: pointer; }
+.branch-chip small { font-size: 12px; line-height: 1.3; color: var(--on-dark-muted); }
+.branch-chip__label strong {
+    max-width: 160px;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.branch-switch select {
+    width: 160px;              /* fixed: the longest option would otherwise set the width */
+    margin: 0;
+    padding: 0 20px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--on-dark);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.branch-switch select:focus { outline: none; }
+.branch-switch select option { color: var(--text); background: var(--surface); font-weight: 400; }
+.branch-switch__caret {
+    position: absolute;
+    right: 0;
+    bottom: 2px;
+    width: 14px;
+    height: 14px;
+    color: var(--on-dark-muted);
+    pointer-events: none;
+}
+.branch-chip--switch:hover .branch-switch__caret { color: var(--on-dark); }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1360px) {
     .topbar__title { display: none; }
+    .topbar__meta .meta-item:first-child { display: none; }
+}
+@media (max-width: 1280px) {
+    .user-menu__name { display: none; }
+    .user-menu__trigger { padding-right: 10px; }
 }
 @media (max-width: 1180px) {
-    .topbar__meta .meta-item:first-child { display: none; }
-    .user-menu__name { display: none; }
+    .btn-logout { padding: 0 14px; }
+    .branch-chip { padding: 0 10px; }
+    .branch-chip__icon { display: none; }
+    .branch-switch select { width: 140px; }
+    .branch-chip__label strong { max-width: 140px; }
     .grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 992px) {
@@ -990,6 +1077,8 @@ textarea.form-input { resize: vertical; min-height: 84px; }
     .topbar__meta { display: none; }
     .btn-logout span { display: none; }
     .btn-logout { padding: 0 12px; height: 42px; }
+    .branch-chip { height: 44px; }
+    .topbar__search { min-width: 120px; }
 
     .sidebar {
         position: fixed;
@@ -1007,6 +1096,18 @@ textarea.form-input { resize: vertical; min-height: 84px; }
     .login { grid-template-columns: 1fr; }
     .login__brand { display: none; }
     .login__form { padding: 28px 20px; }
+}
+@media (max-width: 560px) {
+    .branch-chip { padding: 0 8px; }
+    .branch-chip small { display: none; }
+    .branch-switch select { width: 112px; }
+    .branch-chip__label strong { max-width: 112px; }
+}
+@media (max-width: 480px) {
+    .brand__text { display: none; }
+    .user-menu__caret { display: none; }
+    .user-menu__trigger { padding: 0 6px; }
+    .btn-logout { padding: 0 10px; }
 }
 
 /* ---------- Print: hide app chrome ---------- */

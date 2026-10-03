@@ -3,15 +3,16 @@ declare(strict_types=1);
 
 require __DIR__ . '/../system/bootstrap.php';
 $page = require_page('customers');
-$isAdmin = Auth::hasRole('admin');
+$canEdit   = Auth::can('customers.edit');
+$canDelete = Auth::can('customers.delete');
 
 // ---------------------------------------------------------------------
-// Row actions — admin only (cashiers can add and edit)
+// Row actions — customers.delete (deactivate / delete); adding and editing need customers.edit
 // ---------------------------------------------------------------------
 if (is_post()) {
     Csrf::verifyRequest();
-    if (!$isAdmin) {
-        abort(403, 'Only an administrator can deactivate or delete customers.');
+    if (!$canDelete) {
+        abort(403, 'You do not have permission to deactivate or delete customers.');
     }
     $back = safe_return($_POST['return'] ?? null, 'customers.php');
     $id   = input_int($_POST, 'id', 1) ?? 0;
@@ -61,11 +62,13 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Customers</h1>
-        <p class="muted">Regular customers and what they've bought.</p>
+        <p class="muted">Regular customers and what they've bought · <?= e(Branch::label()) ?>.</p>
     </div>
-    <a class="btn btn--primary" href="<?= e(url('pages/customer-form.php?return=' . rawurlencode($returnTo))) ?>">
-        <?= icon('plus') ?> Add Customer
-    </a>
+    <?php if ($canEdit && Branch::isConcrete()): ?>
+        <a class="btn btn--primary" href="<?= e(url('pages/customer-form.php?return=' . rawurlencode($returnTo))) ?>">
+            <?= icon('plus') ?> Add Customer
+        </a>
+    <?php endif; ?>
 </div>
 
 <section class="card">
@@ -111,7 +114,8 @@ require ROOT_PATH . '/includes/header.php';
                             <span class="avatar avatar--sm"><?= e(mb_strtoupper(mb_substr($c['name'], 0, 1))) ?></span>
                             <span>
                                 <a class="item-cell__name" href="<?= e($editUrl) ?>"><?= e($c['name']) ?></a>
-                                <small class="muted block"><?= e($c['email'] ?? '') ?></small>
+                                <?php $sub = array_filter([$c['email'] ?? '', (int) $c['branch_id'] !== Branch::current() ? 'Home: ' . $c['branch_code'] : '']); ?>
+                                <small class="muted block"><?= e(implode(' · ', $sub)) ?></small>
                             </span>
                         </div>
                     </td>
@@ -122,8 +126,8 @@ require ROOT_PATH . '/includes/header.php';
                     <td><span class="badge<?= $active ? ' badge--success' : '' ?>"><?= $active ? 'Active' : 'Inactive' ?></span></td>
                     <td class="actions-col">
                         <div class="row-actions">
-                            <a class="icon-btn" title="View / edit" aria-label="Edit <?= e($c['name']) ?>" href="<?= e($editUrl) ?>"><?= icon('edit') ?></a>
-                            <?php if ($isAdmin): ?>
+                            <a class="icon-btn" title="<?= $canEdit ? 'View / edit' : 'View' ?>" aria-label="<?= $canEdit ? 'Edit' : 'View' ?> <?= e($c['name']) ?>" href="<?= e($editUrl) ?>"><?= icon($canEdit ? 'edit' : 'eye') ?></a>
+                            <?php if ($canDelete): ?>
                                 <form method="post">
                                     <?= Csrf::field() ?>
                                     <input type="hidden" name="action" value="toggle">
@@ -133,7 +137,7 @@ require ROOT_PATH . '/includes/header.php';
                                     <button type="submit" class="icon-btn<?= $active ? '' : ' icon-btn--success' ?>"
                                             title="<?= $label ?>" aria-label="<?= $label ?> <?= e($c['name']) ?>"><?= icon('power') ?></button>
                                 </form>
-                                <?php if ((int) $c['visits'] === 0): ?>
+                                <?php if ((int) $c['all_sales'] === 0): ?>
                                     <form method="post" data-confirm="Delete <?= e($c['name']) ?> permanently? This cannot be undone.">
                                         <?= Csrf::field() ?>
                                         <input type="hidden" name="action" value="delete">

@@ -470,3 +470,9 @@ body[data-page="pos"] .content { padding: 14px 16px; }
     .cart-field__wide { grid-column: span 2; }
     .pos-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* "All branches" selected: nothing to sell until one branch is chosen (Phase 5) */
+.pos-branch-notice { flex-wrap: wrap; margin-bottom: 12px; }
+.pos-branch-notice > .icon { width: 22px; height: 22px; }
+.pos-branch-notice > span { min-width: 220px; }
+.pos-branch-notice .btn { flex-shrink: 0; }

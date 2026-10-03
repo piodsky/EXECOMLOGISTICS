@@ -4,7 +4,7 @@
  * Every endpoint starts with:
  *
  *   require __DIR__ . '/../system/bootstrap.php';
- *   api_guard('POST', ['admin', 'cashier']);   // method + login + role + CSRF
+ *   api_guard('POST', 'pos.access');   // method + login + permission + CSRF
  *   $data = request_json();
  */
 declare(strict_types=1);

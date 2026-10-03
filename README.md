@@ -20,8 +20,8 @@ PHP 8 + PDO + MySQL point-of-sale and inventory for an IT products distributor
 
    | Username | Password     | Role    |
    |----------|--------------|---------|
-   | admin    | admin123     | Admin   |
-   | cashier  | cashier123   | Cashier |
+   | admin    | admin123     | Super Administrator (Maramag, all branches) |
+   | cashier  | cashier123   | Cashier (Maramag) |
 
    **Change these passwords right away**: user menu (top right) → **Change Password**. The app reminds you at
    sign-in while a default password is in use. Add your staff under **Settings → Users**.

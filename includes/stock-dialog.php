@@ -2,6 +2,8 @@
 /**
  * "Adjust stock" dialog. Opened by any [data-adjust] button (inventory.js fills it in).
  * Posts to inventory.php (action=adjust), which redirects back to $stockReturn.
+ * The change applies to the current branch; only include it when Branch::isConcrete()
+ * and the user has inventory.adjust.
  *
  * @var string $stockReturn  page to come back to, e.g. 'inventory.php?page=2'
  */
@@ -20,7 +22,7 @@
 
         <p class="adjust-product">
             <strong id="adjustName"></strong>
-            <span class="muted">Current stock: <strong id="adjustStock"></strong></span>
+            <span class="muted">Current stock at <?= e(Branch::label()) ?>: <strong id="adjustStock"></strong></span>
         </p>
 
         <fieldset class="segmented">

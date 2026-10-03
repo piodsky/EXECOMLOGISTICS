@@ -1,8 +1,10 @@
 <?php
 /**
  * Products: validation, listing, CRUD and stock adjustments (with audit log).
- * Stock only changes through sales or adjustStock(), never by editing the product,
- * so every change lands in stock_movements.
+ * The catalogue (products, prices) is company-wide; stock is per branch (stock_balances).
+ * Stock only changes through sales or adjustStock() (both via Stock::move), never by editing
+ * the product, so every change lands in stock_movements.
+ * Stock figures shown here are the sum over the current branch scope ("All branches" = company total).
  */
 declare(strict_types=1);
 
@@ -27,15 +29,32 @@ final class Products
         return $stmt->fetchAll();
     }
 
+    /**
+     * Join adding `bs.qty` = stock in the current branch scope (NULL when none; use COALESCE).
+     * @return array{0:string, 1:list<int>}
+     */
+    private static function stockJoin(): array
+    {
+        [$scope, $params] = Branch::scopeSql('sb.branch_id');
+        return [
+            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
+                         WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",
+            $params,
+        ];
+    }
+
+    /** Product with `stock` = stock in the current scope and `total_stock` = company total. */
     public static function find(int $id): ?array
     {
+        [$join, $params] = self::stockJoin();
         $stmt = db()->prepare(
-            'SELECT p.*, c.name AS category_name,
+            "SELECT p.*, p.stock AS total_stock, COALESCE(bs.qty, 0) AS stock, c.name AS category_name,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
                FROM products p JOIN categories c ON c.id = p.category_id
-              WHERE p.id = ?'
+               {$join}
+              WHERE p.id = ?"
         );
-        $stmt->execute([$id]);
+        $stmt->execute([...$params, $id]);
         return $stmt->fetch() ?: null;
     }
 
@@ -46,25 +65,28 @@ final class Products
     /** @param array{q:string, category:?int, status:string} $f */
     public static function count(array $f): int
     {
+        [$join, $joinParams] = self::stockJoin();
         [$where, $params] = self::where($f);
-        $stmt = db()->prepare("SELECT COUNT(*) FROM products p WHERE {$where}");
-        $stmt->execute($params);
+        $stmt = db()->prepare("SELECT COUNT(*) FROM products p {$join} WHERE {$where}");
+        $stmt->execute([...$joinParams, ...$params]);
         return (int) $stmt->fetchColumn();
     }
 
     public static function search(array $f, int $limit, int $offset): array
     {
+        [$join, $joinParams] = self::stockJoin();
         [$where, $params] = self::where($f);
         $stmt = db()->prepare(
-            "SELECT p.id, p.code, p.barcode, p.name, p.price, p.stock, p.reorder_level, p.image, p.is_active,
-                    c.name AS category_name,
+            "SELECT p.id, p.code, p.barcode, p.name, p.price, COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock,
+                    p.reorder_level, p.image, p.is_active, c.name AS category_name,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
                FROM products p JOIN categories c ON c.id = p.category_id
+               {$join}
               WHERE {$where}
               ORDER BY p.is_active DESC, c.sort_order, p.code
               LIMIT ? OFFSET ?"
         );
-        $stmt->execute([...$params, $limit, $offset]);
+        $stmt->execute([...$joinParams, ...$params, $limit, $offset]);
         return $stmt->fetchAll();
     }
 
@@ -84,23 +106,27 @@ final class Products
         $where[] = match ($f['status']) {
             'active'   => 'p.is_active = 1',
             'inactive' => 'p.is_active = 0',
-            'low'      => 'p.is_active = 1 AND p.stock > 0 AND p.stock <= p.reorder_level',
-            'out'      => 'p.is_active = 1 AND p.stock = 0',
+            'low'      => 'p.is_active = 1 AND COALESCE(bs.qty, 0) > 0 AND COALESCE(bs.qty, 0) <= p.reorder_level',
+            'out'      => 'p.is_active = 1 AND COALESCE(bs.qty, 0) = 0',
             default    => '1 = 1',
         };
         return [implode(' AND ', $where), $params];
     }
 
+    /** Active products, stock value, low and out of stock — in the current branch scope. */
     public static function summary(): array
     {
+        [$join, $params] = self::stockJoin();
         $stmt = db()->prepare(
-            'SELECT COUNT(*) AS items,
-                    COALESCE(SUM(price * stock), 0) AS stock_value,
-                    COALESCE(SUM(stock > 0 AND stock <= reorder_level), 0) AS low,
-                    COALESCE(SUM(stock = 0), 0) AS out_of_stock
-               FROM products WHERE is_active = ?'
+            "SELECT COUNT(*) AS items,
+                    COALESCE(SUM(p.price * COALESCE(bs.qty, 0)), 0) AS stock_value,
+                    COALESCE(SUM(COALESCE(bs.qty, 0) > 0 AND COALESCE(bs.qty, 0) <= p.reorder_level), 0) AS low,
+                    COALESCE(SUM(COALESCE(bs.qty, 0) = 0), 0) AS out_of_stock
+               FROM products p
+               {$join}
+              WHERE p.is_active = ?"
         );
-        $stmt->execute([1]);
+        $stmt->execute([...$params, 1]);
         return $stmt->fetch();
     }
 
@@ -151,11 +177,13 @@ final class Products
             $errors['reorder_level'] = 'Enter a whole number from 0 to 9999.';
         }
 
-        // Opening stock is only set when creating; afterwards use Adjust stock.
+        // Opening stock is only set when creating (at the current branch); afterwards use Adjust stock.
         if ($id === null) {
             $data['stock'] = input_int($in, 'stock', 0, self::MAX_STOCK);
             if ($data['stock'] === null) {
                 $errors['stock'] = 'Enter a whole number from 0 to ' . number_format(self::MAX_STOCK) . '.';
+            } elseif ($data['stock'] > 0 && !Branch::isConcrete()) {
+                $errors['stock'] = 'Choose a branch first (top bar): opening stock is added to that branch.';
             }
         }
 
@@ -173,12 +201,28 @@ final class Products
         return (bool) $stmt->fetchColumn();
     }
 
+    private static function requireManage(): void
+    {
+        if (!Auth::can('products.manage')) {
+            throw new HttpException(403, 'You do not have permission to manage products.');
+        }
+    }
+
+    /** Fields recorded in the audit log. */
+    private static function auditFields(array $p): array
+    {
+        return array_intersect_key($p, array_flip(
+            ['category_id', 'code', 'barcode', 'name', 'description', 'price', 'reorder_level', 'image', 'is_active']
+        ));
+    }
+
     // ------------------------------------------------------------------
-    // Create / update / status / delete
+    // Create / update / status / delete  (products.manage)
     // ------------------------------------------------------------------
 
     public static function create(array $d, ?string $image, int $userId): int
     {
+        self::requireManage();
         $pdo = db();
         $pdo->beginTransaction();
         try {
@@ -187,62 +231,115 @@ final class Products
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )->execute([
                 $d['category_id'], $d['code'], $d['barcode'], $d['name'], $d['description'],
-                number_format($d['price'], 2, '.', ''), $d['stock'], $d['reorder_level'], $image, $d['is_active'],
+                number_format($d['price'], 2, '.', ''), 0, $d['reorder_level'], $image, $d['is_active'],
             ]);
             $id = (int) $pdo->lastInsertId();
-            self::log($id, $userId, 'initial', $d['stock'], $d['stock'], 'Opening stock');
+
+            // Opening stock goes to the current branch's default location (Stock::move sets products.stock).
+            if ($d['stock'] > 0 || Branch::isConcrete()) {
+                Stock::move($id, Branch::defaultLocation(Branch::forWrite()), $d['stock'], 'initial', 'Opening stock', null, $userId);
+            }
+            Audit::record('products', 'create', 'product', $id, $d['code'], null,
+                self::auditFields($d + ['image' => $image]) + ['opening_stock' => $d['stock'], 'branch' => Branch::label()]);
             $pdo->commit();
             return $id;
         } catch (Throwable $e) {
-            $pdo->rollBack();
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             throw $e;
         }
     }
 
     public static function update(int $id, array $d, ?string $image): void
     {
-        db()->prepare(
-            'UPDATE products SET category_id = ?, code = ?, barcode = ?, name = ?, description = ?, price = ?,
-                                 reorder_level = ?, image = ?, is_active = ?
-              WHERE id = ?'
-        )->execute([
-            $d['category_id'], $d['code'], $d['barcode'], $d['name'], $d['description'],
-            number_format($d['price'], 2, '.', ''), $d['reorder_level'], $image, $d['is_active'], $id,
-        ]);
+        self::requireManage();
+        $before = self::find($id) ?? throw new HttpException(404, 'Product not found.');
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare(
+                'UPDATE products SET category_id = ?, code = ?, barcode = ?, name = ?, description = ?, price = ?,
+                                     reorder_level = ?, image = ?, is_active = ?
+                  WHERE id = ?'
+            )->execute([
+                $d['category_id'], $d['code'], $d['barcode'], $d['name'], $d['description'],
+                number_format($d['price'], 2, '.', ''), $d['reorder_level'], $image, $d['is_active'], $id,
+            ]);
+            $after = ['price' => number_format($d['price'], 2, '.', ''), 'image' => $image] + $d;
+            [$old, $new] = Audit::diff(self::auditFields($before), self::auditFields($after));
+            if ($new) {
+                Audit::record('products', 'update', 'product', $id, $d['code'], $old, $new);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /** @return array the product after the change */
     public static function toggleActive(int $id): array
     {
+        self::requireManage();
         $product = self::find($id) ?? throw new HttpException(404, 'Product not found.');
-        db()->prepare('UPDATE products SET is_active = ? WHERE id = ?')
-            ->execute([(int) $product['is_active'] === 1 ? 0 : 1, $id]);
-        $product['is_active'] = (int) $product['is_active'] === 1 ? 0 : 1;
+        $next = (int) $product['is_active'] === 1 ? 0 : 1;
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE products SET is_active = ? WHERE id = ?')->execute([$next, $id]);
+            Audit::record('products', $next ? 'activate' : 'deactivate', 'product', $id, $product['code'],
+                ['is_active' => (int) $product['is_active']], ['is_active' => $next]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        $product['is_active'] = $next;
         return $product;
     }
 
     /** Hard delete — only for products that were never sold (sales history must keep its link). */
     public static function delete(int $id): array
     {
+        self::requireManage();
         $product = self::find($id) ?? throw new HttpException(404, 'Product not found.');
         if ((int) $product['times_sold'] > 0) {
             throw new HttpException(409, "{$product['name']} has sales history, so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
-        db()->prepare('DELETE FROM products WHERE id = ?')->execute([$id]);
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('DELETE FROM products WHERE id = ?')->execute([$id]);
+            Audit::record('products', 'delete', 'product', $id, $product['code'],
+                self::auditFields($product) + ['company_stock' => (int) $product['total_stock']], null);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
         ImageUpload::delete($product['image']);
         return $product;
     }
 
     // ------------------------------------------------------------------
-    // Stock
+    // Stock (inventory.adjust) — always at the current branch
     // ------------------------------------------------------------------
 
     /**
-     * Add or remove stock with a reason. Returns [product name, new stock].
+     * Add or remove stock with a reason at the current branch's default location.
+     * Returns [product name, new stock at the branch, branch name].
      * @param int $change  positive = add, negative = remove
      */
     public static function adjustStock(int $id, int $change, string $reason, string $note, int $userId): array
     {
+        if (!Auth::can('inventory.adjust')) {
+            throw new HttpException(403, 'You do not have permission to adjust stock.');
+        }
         if ($change === 0) {
             throw new HttpException(422, 'Enter a quantity greater than zero.');
         }
@@ -250,55 +347,55 @@ final class Products
         if (($direction === 'add' && $change < 0) || ($direction === 'remove' && $change > 0)) {
             throw new HttpException(422, "“{$label}” can't be used when " . ($change > 0 ? 'adding' : 'removing') . ' stock.');
         }
+        $branchId = Branch::forWrite();
 
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare('SELECT name, stock FROM products WHERE id = ? FOR UPDATE');
+            $stmt = $pdo->prepare('SELECT code, name FROM products WHERE id = ? FOR UPDATE');
             $stmt->execute([$id]);
             $product = $stmt->fetch() ?: throw new HttpException(404, 'Product not found.');
 
-            $new = (int) $product['stock'] + $change;
+            $location = Branch::defaultLocation($branchId);
+            $before   = Stock::balance($id, $location['id']);
+            $new      = $before + $change;
             if ($new < 0) {
-                throw new HttpException(422, "You can't remove " . abs($change) . " — only {$product['stock']} {$product['name']} in stock.");
+                throw new HttpException(422, "You can't remove " . abs($change) . " — only {$before} {$product['name']} in stock at {$location['branch_name']}.");
             }
             if ($new > self::MAX_STOCK) {
                 throw new HttpException(422, 'Stock can be at most ' . number_format(self::MAX_STOCK) . '.');
             }
 
-            $pdo->prepare('UPDATE products SET stock = ? WHERE id = ?')->execute([$new, $id]);
-            self::log($id, $userId, $reason === 'restock' ? 'restock' : 'adjustment', $change, $new,
-                $label . ($note !== '' ? ' — ' . $note : ''));
+            $type = $reason === 'restock' ? 'restock' : 'adjustment';
+            Stock::move($id, $location, $change, $type, $label . ($note !== '' ? ' — ' . $note : ''), null, $userId);
+            Audit::record('inventory', 'stock_adjust', 'product', $id, $product['code'],
+                ['qty' => $before], ['qty' => $new, 'change' => $change, 'reason' => $reason, 'note' => $note], $branchId);
             $pdo->commit();
         } catch (Throwable $e) {
-            $pdo->rollBack();
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             throw $e;
         }
-        return [$product['name'], $new];
+        return [$product['name'], $new, $location['branch_name']];
     }
 
-    /** Write one audit row. Call inside the same transaction as the stock change. */
-    public static function log(int $productId, ?int $userId, string $type, int $qty, int $stockAfter, ?string $note, ?int $saleId = null): void
-    {
-        db()->prepare(
-            'INSERT INTO stock_movements (product_id, user_id, sale_id, type, quantity, stock_after, note)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        )->execute([$productId, $userId, $saleId, $type, $qty, $stockAfter, $note !== null ? mb_substr($note, 0, 255) : null]);
-    }
-
+    /** Stock history of a product in the current branch scope. */
     public static function movements(int $productId, int $limit = 15): array
     {
+        [$scope, $params] = Branch::scopeSql('m.branch_id');
         $stmt = db()->prepare(
-            'SELECT m.type, m.quantity, m.stock_after, m.note, m.created_at, m.sale_id,
-                    u.username, s.sale_no
+            "SELECT m.type, m.quantity, m.stock_after, m.location_qty_after, m.note, m.created_at, m.sale_id,
+                    u.username, s.sale_no, b.code AS branch_code, b.name AS branch_name
                FROM stock_movements m
                LEFT JOIN users u ON u.id = m.user_id
                LEFT JOIN sales s ON s.id = m.sale_id
-              WHERE m.product_id = ?
+               LEFT JOIN branches b ON b.id = m.branch_id
+              WHERE m.product_id = ? AND {$scope}
               ORDER BY m.id DESC
-              LIMIT ?'
+              LIMIT ?"
         );
-        $stmt->execute([$productId, $limit]);
+        $stmt->execute([$productId, ...$params, $limit]);
         return $stmt->fetchAll();
     }
 }

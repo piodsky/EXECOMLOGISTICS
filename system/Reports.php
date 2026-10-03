@@ -51,11 +51,15 @@ final class Reports
         ];
     }
 
-    /** [SQL, params] limiting `s` to completed sales inside the range. */
+    /** [SQL, params] limiting `s` to completed sales inside the range and the current branch scope. */
     private static function range(string $from, string $to): array
     {
         $end = (new DateTimeImmutable($to))->modify('+1 day')->format('Y-m-d 00:00:00');
-        return ["s.status = 'completed' AND s.created_at >= ? AND s.created_at < ?", [$from . ' 00:00:00', $end]];
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
+        return [
+            "s.status = 'completed' AND s.created_at >= ? AND s.created_at < ? AND {$scope}",
+            [$from . ' 00:00:00', $end, ...$params],
+        ];
     }
 
     // ------------------------------------------------------------------
@@ -209,32 +213,47 @@ final class Reports
     // Inventory (right now, not date-bound)
     // ------------------------------------------------------------------
 
-    /** Stock value (price × stock) and units per category, active products only. */
+    /** [JOIN, params] adding `bs.qty` = stock of product `p` in the current branch scope. */
+    private static function stockJoin(): array
+    {
+        [$scope, $params] = Branch::scopeSql('sb.branch_id');
+        return [
+            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
+                         WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",
+            $params,
+        ];
+    }
+
+    /** Stock value (price × stock) and units per category, active products only (current branch scope). */
     public static function stockByCategory(): array
     {
+        [$join, $params] = self::stockJoin();
         $stmt = db()->prepare(
-            'SELECT c.name, COUNT(p.id) AS products, COALESCE(SUM(p.stock), 0) AS units,
-                    COALESCE(SUM(p.price * p.stock), 0) AS value
+            "SELECT c.name, COUNT(p.id) AS products, COALESCE(SUM(COALESCE(bs.qty, 0)), 0) AS units,
+                    COALESCE(SUM(p.price * COALESCE(bs.qty, 0)), 0) AS value
                FROM categories c
                LEFT JOIN products p ON p.category_id = c.id AND p.is_active = ?
+               {$join}
               GROUP BY c.id, c.name, c.sort_order
-              ORDER BY value DESC, c.sort_order'
+              ORDER BY value DESC, c.sort_order"
         );
-        $stmt->execute([1]);
+        $stmt->execute([1, ...$params]);
         return $stmt->fetchAll();
     }
 
-    /** Active products at or below their low-stock level, emptiest first. */
+    /** Active products at or below their low-stock level in the current branch scope, emptiest first. */
     public static function lowStock(int $limit = 20): array
     {
+        [$join, $params] = self::stockJoin();
         $stmt = db()->prepare(
-            'SELECT p.id, p.code, p.name, p.stock, p.reorder_level, c.name AS category
+            "SELECT p.id, p.code, p.name, COALESCE(bs.qty, 0) AS stock, p.reorder_level, c.name AS category
                FROM products p JOIN categories c ON c.id = p.category_id
-              WHERE p.is_active = ? AND p.stock <= p.reorder_level
-              ORDER BY p.stock, (p.stock - p.reorder_level), p.name
-              LIMIT ?'
+               {$join}
+              WHERE p.is_active = ? AND COALESCE(bs.qty, 0) <= p.reorder_level
+              ORDER BY stock, (COALESCE(bs.qty, 0) - p.reorder_level), p.name
+              LIMIT ?"
         );
-        $stmt->execute([1, $limit]);
+        $stmt->execute([...$params, 1, $limit]);
         return $stmt->fetchAll();
     }
 }

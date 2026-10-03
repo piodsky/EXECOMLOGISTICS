@@ -1,6 +1,6 @@
 <?php
 /**
- * Authentication & role checks.
+ * Authentication, permissions (config/permissions.php + roles) and the signed-in user.
  * Only the user ID (and a stamp of the password hash) is kept in the session; the user row
  * is reloaded on every request, so disabling a user, changing a role or resetting a
  * password applies at once (a new password ends that user's other sessions).
@@ -27,7 +27,11 @@ final class Auth
             return ['ok' => false, 'error' => "Too many failed attempts. Please wait {$minutes} minutes and try again."];
         }
 
-        $stmt = db()->prepare('SELECT id, password_hash, is_active FROM users WHERE username = ? LIMIT 1');
+        $stmt = db()->prepare(
+            'SELECT u.id, u.password_hash, u.is_active, u.branch_id, r.id AS role_id, r.is_active AS role_active, r.is_super
+               FROM users u LEFT JOIN roles r ON r.code = u.role
+              WHERE u.username = ? LIMIT 1'
+        );
         $stmt->execute([$username]);
         $user = $stmt->fetch();
 
@@ -40,6 +44,15 @@ final class Auth
 
         if ((int) $user['is_active'] !== 1) {
             return ['ok' => false, 'error' => 'This account is disabled. Please contact the administrator.'];
+        }
+        if ($user['role_id'] === null || (int) $user['role_active'] !== 1) {
+            return ['ok' => false, 'error' => 'Your role is inactive. Contact the administrator.'];
+        }
+
+        // A user needs at least one active branch to work in.
+        $accessAll = (int) $user['is_super'] === 1 || self::roleHas((int) $user['role_id'], 'branches.access_all');
+        if (Branch::allowedIdsFor((int) $user['id'], (int) $user['branch_id'], $accessAll) === []) {
+            return ['ok' => false, 'error' => 'Your branch is inactive. Contact the administrator.'];
         }
 
         if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
@@ -69,24 +82,39 @@ final class Auth
 
         db()->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?')->execute([$userId]);
 
-        self::$loaded = false;
-        self::$user   = null;
+        self::$loaded      = false;
+        self::$user        = null;
+        self::$permissions = null;
+        Branch::reset();
     }
 
     public static function logout(): void
     {
-        self::$user   = null;
-        self::$loaded = true;
+        self::$user        = null;
+        self::$loaded      = true;
+        self::$permissions = null;
+        Branch::reset();
         Session::restart();
     }
 
+    /**
+     * The signed-in user (reloaded every request; inactive users or roles are signed out):
+     * id, username, full_name, role (code), role_name, is_super (0|1), branch_id (home branch).
+     */
     public static function user(): ?array
     {
         if (!self::$loaded) {
             self::$loaded = true;
             $id = $_SESSION['auth']['id'] ?? null;
             if (is_int($id)) {
-                $stmt = db()->prepare('SELECT id, username, full_name, role, password_hash FROM users WHERE id = ? AND is_active = 1 LIMIT 1');
+                $stmt = db()->prepare(
+                    'SELECT u.id, u.username, u.full_name, u.role, u.branch_id, u.password_hash,
+                            r.id AS role_id, r.name AS role_name, r.is_super
+                       FROM users u
+                       JOIN roles r ON r.code = u.role AND r.is_active = 1
+                      WHERE u.id = ? AND u.is_active = 1
+                      LIMIT 1'
+                );
                 $stmt->execute([$id]);
                 $row   = $stmt->fetch() ?: null;
                 $stamp = $row ? hash('sha256', $row['password_hash']) : '';
@@ -98,11 +126,99 @@ final class Auth
                     self::$user = null;
                 } else {
                     unset($row['password_hash']);
+                    $row['id']        = (int) $row['id'];
+                    $row['branch_id'] = (int) $row['branch_id'];
+                    $row['role_id']   = (int) $row['role_id'];
+                    $row['is_super']  = (int) $row['is_super'];
                     self::$user = $row;
                 }
             }
         }
         return self::$user;
+    }
+
+    // ------------------------------------------------------------------
+    // Permissions (config/permissions.php). Default deny.
+    // ------------------------------------------------------------------
+
+    /** @var list<string>|null permission keys of the signed-in user (memoised per request) */
+    private static ?array $permissions = null;
+
+    public static function isSuper(): bool
+    {
+        $user = self::user();
+        return $user !== null && $user['is_super'] === 1;
+    }
+
+    /** Permission keys the signed-in user holds (a super role holds every registered key). */
+    public static function permissions(): array
+    {
+        $user = self::user();
+        if ($user === null) {
+            return [];
+        }
+        if (self::$permissions === null) {
+            if ($user['is_super'] === 1) {
+                self::$permissions = array_keys(config('permissions', []));
+            } else {
+                $stmt = db()->prepare(
+                    'SELECT p.perm_key FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+                      WHERE rp.role_id = ? ORDER BY p.sort_order'
+                );
+                $stmt->execute([$user['role_id']]);
+                self::$permissions = array_values(array_intersect(
+                    $stmt->fetchAll(PDO::FETCH_COLUMN),
+                    array_keys(config('permissions', []))
+                ));
+            }
+        }
+        return self::$permissions;
+    }
+
+    public static function can(string $key): bool
+    {
+        if (!array_key_exists($key, config('permissions', []))) {
+            if (config('app.debug', false)) {
+                throw new LogicException("Unknown permission [{$key}]: add it to config/permissions.php");
+            }
+            log_message('warning', "Unknown permission checked: {$key}");
+            return false;
+        }
+        $user = self::user();
+        if ($user === null) {
+            return false;
+        }
+        return $user['is_super'] === 1 || in_array($key, self::permissions(), true);
+    }
+
+    public static function canAny(string ...$keys): bool
+    {
+        foreach ($keys as $key) {
+            if (self::can($key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Login + at least one of the permissions, else 403. */
+    public static function requirePermission(string ...$keys): void
+    {
+        self::requireLogin();
+        if (!self::canAny(...$keys)) {
+            abort(403, 'You do not have permission to access this page.');
+        }
+    }
+
+    /** Does a role (by id) hold a permission? Used before a session exists (sign-in). */
+    private static function roleHas(int $roleId, string $key): bool
+    {
+        $stmt = db()->prepare(
+            'SELECT 1 FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id
+              WHERE rp.role_id = ? AND p.perm_key = ? LIMIT 1'
+        );
+        $stmt->execute([$roleId, $key]);
+        return (bool) $stmt->fetchColumn();
     }
 
     /** Hash of the stored password hash: changes whenever the password does. */
@@ -131,6 +247,7 @@ final class Auth
         return self::user() ? (int) self::user()['id'] : null;
     }
 
+    /** @deprecated kept for compatibility; use can() with a permission key. */
     public static function hasRole(string ...$roles): bool
     {
         $user = self::user();
@@ -170,7 +287,7 @@ final class Auth
             && !preg_match('#//|\\\\|[\r\n]#', substr($url, 1))) {
             return $url;
         }
-        return url('pages/pos.php');
+        return home_url();
     }
 
     private static function isLockedOut(string $username, string $ip, int $max, int $minutes): bool

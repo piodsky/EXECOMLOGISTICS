@@ -4,7 +4,7 @@ declare(strict_types=1);
 require __DIR__ . '/system/bootstrap.php';
 
 if (Auth::check()) {
-    redirect('pages/pos.php');
+    redirect(home_url());
 }
 
 if (is_post()) {

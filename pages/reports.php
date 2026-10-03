@@ -24,15 +24,14 @@ $cashiers = Reports::byCashier($from, $to);
 // CSV export (same period) — opens in Excel
 // ---------------------------------------------------------------------
 if (($_GET['export'] ?? '') === 'csv') {
-    // Cells starting with = + - @ would run as formulas in Excel; prefix them with '.
-    $cell = static fn (string $v): string => preg_match('/^[=+\-@\t\r]/', $v) ? "'" . $v : $v;
+    // Text cells go through csv_cell() (formula guard for Excel).
     $num  = static fn ($v): string => number_format((float) $v, 2, '.', '');
 
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="execom-sales-' . $from . '-to-' . $to . '.csv"');
     $out = fopen('php://output', 'w');
     fwrite($out, "\xEF\xBB\xBF"); // UTF-8 BOM so Excel reads it correctly
-    fputcsv($out, ['EXECOM Logistics sales report', $from . ' to ' . $to]);
+    fputcsv($out, ['EXECOM Logistics sales report', $from . ' to ' . $to, csv_cell(Branch::label())]);
     fputcsv($out, []);
     fputcsv($out, ['Transactions', 'Net sales (incl. VAT)', 'Average sale', 'Items sold', 'Discounts', 'VAT']);
     fputcsv($out, [(int) $totals['transactions'], $num($totals['net']), $num($totals['average']), (int) $totals['items'], $num($totals['discounts']), $num($totals['vat'])]);
@@ -44,7 +43,7 @@ if (($_GET['export'] ?? '') === 'csv') {
     fputcsv($out, []);
     fputcsv($out, ['Top items', 'Code', 'Qty sold', 'Item sales (before discount & VAT)']);
     foreach ($top as $t) {
-        fputcsv($out, [$cell($t['name']), $cell($t['code']), (int) $t['qty'], $num($t['revenue'])]);
+        fputcsv($out, [csv_cell($t['name']), csv_cell($t['code']), (int) $t['qty'], $num($t['revenue'])]);
     }
     fclose($out);
     exit;
@@ -128,7 +127,7 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Reports</h1>
-        <p class="muted">Completed sales for the period (voided sales are left out) and today's inventory.</p>
+        <p class="muted">Completed sales for the period (voided sales are left out) and today's inventory · <strong id="reportScope"><?= e(Branch::label()) ?></strong>.</p>
     </div>
     <div class="page-actions no-print">
         <a class="btn btn--light" href="<?= e($link($baseQuery + ['export' => 'csv'])) ?>" id="exportCsv"><?= icon('download') ?> Export CSV</a>

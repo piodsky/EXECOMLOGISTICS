@@ -6,7 +6,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../../system/bootstrap.php';
-api_guard('POST');
+api_guard('POST', 'customers.edit');
 
 $customer = Customers::validate(request_json());
 $id = Customers::create($customer);

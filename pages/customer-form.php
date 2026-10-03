@@ -4,11 +4,16 @@ declare(strict_types=1);
 require __DIR__ . '/../system/bootstrap.php';
 $page = require_page('customers');
 
+$canEdit  = Auth::can('customers.edit');
 $id       = input_int($_GET, 'id', 1);
 $customer = null;
 if ($id !== null) {
+    // null when the customer isn't visible at the current branch
     $customer = Customers::find($id) ?? throw new HttpException(404, 'Customer not found.');
+} elseif (!$canEdit) {
+    abort(403, 'You do not have permission to add customers.');
 }
+$ro = $canEdit ? '' : ' disabled'; // read-only view for customers.view only
 $page['title'] = $customer ? $customer['name'] : 'Add Customer';
 $returnTo = safe_return($_POST['return'] ?? $_GET['return'] ?? null, 'customers.php');
 $self     = 'customer-form.php?' . http_build_query(array_filter(['id' => $id, 'return' => $returnTo]));
@@ -18,6 +23,9 @@ $self     = 'customer-form.php?' . http_build_query(array_filter(['id' => $id, '
 // ---------------------------------------------------------------------
 if (is_post()) {
     Csrf::verifyRequest();
+    if (!$canEdit) {
+        abort(403, 'You do not have permission to edit customers.');
+    }
     [$data, $errors] = Customers::check($_POST, $id);
 
     if ($errors) {
@@ -27,12 +35,18 @@ if (is_post()) {
         redirect('pages/' . $self);
     }
 
-    if ($customer) {
-        Customers::update($id, $data);
-        flash('success', "{$data['name']} was updated.");
-    } else {
-        Customers::create($data);
-        flash('success', "{$data['name']} was added.");
+    try {
+        if ($customer) {
+            Customers::update($id, $data);
+            flash('success', "{$data['name']} was updated.");
+        } else {
+            Customers::create($data); // added at the current branch
+            flash('success', "{$data['name']} was added.");
+        }
+    } catch (HttpException $e) {
+        flash_old(array_filter($_POST, 'is_string'));
+        flash('error', $e->getMessage());
+        redirect('pages/' . $self);
     }
     redirect('pages/' . $returnTo);
 }
@@ -55,6 +69,7 @@ require ROOT_PATH . '/includes/header.php';
         <?php if ($customer): ?>
             <p class="muted">
                 Customer since <?= e(date('M j, Y', strtotime($customer['created_at']))) ?>
+                · Home branch <?= e($customer['branch_code'] . ' · ' . $customer['branch_name']) ?>
                 <?php if ((int) $customer['is_active'] !== 1): ?> · <span class="badge">Inactive</span><?php endif; ?>
             </p>
         <?php endif; ?>
@@ -70,30 +85,32 @@ require ROOT_PATH . '/includes/header.php';
         <div class="form-grid">
             <label class="form-field form-field--full">
                 <span class="form-label">Name *</span>
-                <input class="form-input" name="name" maxlength="100" required value="<?= e($val('name')) ?>"<?= invalid('name') ?>>
+                <input class="form-input" name="name" maxlength="100" required value="<?= e($val('name')) ?>"<?= invalid('name') ?><?= $ro ?>>
                 <?= field_error('name') ?>
             </label>
             <label class="form-field">
                 <span class="form-label">Phone</span>
                 <input class="form-input" name="phone" maxlength="30" inputmode="tel" placeholder="0917 123 4567"
-                       value="<?= e($val('phone')) ?>"<?= invalid('phone') ?>>
+                       value="<?= e($val('phone')) ?>"<?= invalid('phone') ?><?= $ro ?>>
                 <?= field_error('phone') ?>
             </label>
             <label class="form-field">
                 <span class="form-label">Email</span>
-                <input class="form-input" type="email" name="email" maxlength="120" value="<?= e($val('email')) ?>"<?= invalid('email') ?>>
+                <input class="form-input" type="email" name="email" maxlength="120" value="<?= e($val('email')) ?>"<?= invalid('email') ?><?= $ro ?>>
                 <?= field_error('email') ?>
             </label>
             <label class="form-field form-field--full">
                 <span class="form-label">Address</span>
-                <input class="form-input" name="address" maxlength="255" value="<?= e($val('address')) ?>"<?= invalid('address') ?>>
+                <input class="form-input" name="address" maxlength="255" value="<?= e($val('address')) ?>"<?= invalid('address') ?><?= $ro ?>>
                 <?= field_error('address') ?>
             </label>
         </div>
 
         <div class="form-actions form-actions--inline">
-            <a class="btn btn--light" href="<?= e(url('pages/' . $returnTo)) ?>">Cancel</a>
-            <button type="submit" class="btn btn--primary"><?= icon('save') ?> <?= $customer ? 'Save Changes' : 'Add Customer' ?></button>
+            <a class="btn btn--light" href="<?= e(url('pages/' . $returnTo)) ?>"><?= $canEdit ? 'Cancel' : 'Back' ?></a>
+            <?php if ($canEdit): ?>
+                <button type="submit" class="btn btn--primary"><?= icon('save') ?> <?= $customer ? 'Save Changes' : 'Add Customer' ?></button>
+            <?php endif; ?>
         </div>
     </form>
 
@@ -110,16 +127,19 @@ require ROOT_PATH . '/includes/header.php';
                 <table class="table">
                     <thead><tr><th>Sale No.</th><th>Date</th><th class="num">Items</th><th>Payment</th><th class="num">Total</th><th></th></tr></thead>
                     <tbody>
+                    <?php $canSales = Auth::can('sales.view'); ?>
                     <?php foreach ($recent as $s): ?>
                         <tr>
-                            <td><a class="item-cell__name" href="<?= e(url('pages/sale-view.php?id=' . (int) $s['id'])) ?>"><?= e($s['sale_no']) ?></a><?= $s['status'] === 'cancelled' ? ' <span class="badge badge--danger">Voided</span>' : '' ?></td>
+                            <td><?php if ($canSales): ?><a class="item-cell__name" href="<?= e(url('pages/sale-view.php?id=' . (int) $s['id'])) ?>"><?= e($s['sale_no']) ?></a><?php else: ?><?= e($s['sale_no']) ?><?php endif; ?><?= $s['status'] === 'cancelled' ? ' <span class="badge badge--danger">Voided</span>' : '' ?></td>
                             <td><?= e(date('M j, Y g:i A', strtotime($s['created_at']))) ?></td>
                             <td class="num"><?= (int) $s['items'] ?></td>
                             <td><span class="badge"><?= e($paymentLabels[$s['payment_type']] ?? $s['payment_type']) ?></span></td>
                             <td class="num"><?= e(money($s['total'])) ?></td>
                             <td class="num">
-                                <a class="icon-btn icon-btn--sm" href="<?= e(url('pages/receipt.php?id=' . (int) $s['id'])) ?>" target="_blank" rel="noopener"
-                                   title="Open receipt" aria-label="Open receipt <?= e($s['sale_no']) ?>"><?= icon('external') ?></a>
+                                <?php if ($canSales): ?>
+                                    <a class="icon-btn icon-btn--sm" href="<?= e(url('pages/receipt.php?id=' . (int) $s['id'])) ?>" target="_blank" rel="noopener"
+                                       title="Open receipt" aria-label="Open receipt <?= e($s['sale_no']) ?>"><?= icon('external') ?></a>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

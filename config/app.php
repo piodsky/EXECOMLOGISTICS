@@ -26,8 +26,5 @@ return [
         'lockout_minutes'    => (int) Env::get('LOGIN_LOCKOUT_MINUTES', 15),
     ],
 
-    'roles' => [
-        'admin'   => 'Administrator',
-        'cashier' => 'Cashier',
-    ],
+    // Roles and permissions live in the database (roles, role_permissions) and config/permissions.php.
 ];

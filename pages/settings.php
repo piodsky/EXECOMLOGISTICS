@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../system/bootstrap.php';
-$page = require_page('settings');
+$page = settings_page('company', 'Settings'); // settings.manage
 
 // ---------------------------------------------------------------------
 // Save (PRG)

@@ -67,3 +67,195 @@
 .table-foot .icon { width: 16px; height: 16px; margin-top: 1px; }
 
 .account-layout { max-width: 520px; }
+
+/* =====================================================================
+   Phase 5: roles & permissions, branches, users' branches, audit log
+   ===================================================================== */
+
+/* ---------- Role choice on the user form (radios stay [name=role][value=<code>]) ---------- */
+.role-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 10px;
+}
+.role-option { position: relative; display: flex; cursor: pointer; }
+.role-option input { position: absolute; opacity: 0; pointer-events: none; }
+.role-option__box {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    transition: border-color .15s, background-color .15s, box-shadow .15s;
+}
+.role-option__box > .icon { width: 20px; height: 20px; margin-top: 1px; color: var(--text-muted); }
+.role-option__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.role-option__text strong { font-size: 14px; }
+.role-option__text small { color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+.role-option:hover .role-option__box { border-color: var(--accent); }
+.role-option input:checked + .role-option__box {
+    border-color: var(--primary);
+    background: var(--info-bg);
+    box-shadow: inset 0 0 0 1px var(--primary);
+}
+.role-option input:checked + .role-option__box > .icon { color: var(--primary); }
+.role-option input:focus-visible + .role-option__box { outline: 2px solid var(--accent); outline-offset: 2px; }
+.role-option input:disabled + .role-option__box { opacity: .6; cursor: not-allowed; }
+.role-option:has(input:disabled) { cursor: not-allowed; }
+.role-option:has(input:disabled):hover .role-option__box { border-color: var(--border); }
+.role-option input:checked:disabled + .role-option__box { opacity: .85; }
+.role-field .form-hint { margin-top: 2px; }
+
+/* ---------- Extra branches (user form) ---------- */
+.branch-access { margin: 0; padding: 0; border: 0; }
+.check-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+}
+.check-list .check {
+    align-items: center;
+    margin: 0;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    transition: border-color .15s, background-color .15s;
+}
+.check-list .check input { margin: 0; }
+.check-list .check strong { margin-right: 4px; font-family: Consolas, "Courier New", monospace; color: var(--navy-600); }
+.check-list .check:hover { border-color: var(--accent); }
+.check-list .check:has(input:checked) { border-color: var(--primary); background: var(--info-bg); }
+.check-list .check:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.check-list .check:has(input:focus:not(:focus-visible)) { outline: 0; }
+
+/* ---------- Users list ---------- */
+.user-extra { margin-top: 3px; font-size: 12px; }
+
+/* ---------- Role form: permission grid grouped by module ---------- */
+.role-form { display: grid; gap: 16px; }
+.perm-hint { margin: -10px 0 14px; }
+.perm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    align-items: start;
+}
+.perm-group {
+    min-width: 0;
+    margin: 0;
+    padding: 12px 14px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+.perm-group legend {
+    float: left;               /* keeps the legend inside the box instead of on the border */
+    width: 100%;
+    margin: 0 0 2px;
+    padding: 0 0 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--navy-600);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+}
+.perm-group legend + * { clear: both; }
+.perm-item { position: relative; margin-top: 10px; }
+.perm-item > span { flex: 1; min-width: 0; line-height: 1.35; }
+.perm-item small { display: block; margin-top: 1px; font-size: 11px; }
+.perm-item code { font-family: Consolas, "Courier New", monospace; overflow-wrap: anywhere; }
+.perm-item input:disabled { cursor: not-allowed; }
+.perm-item:has(input:disabled) { cursor: not-allowed; }
+.perm-item.is-unavailable > span { color: var(--text-muted); }
+.perm-item__lock { width: 14px; height: 14px; margin-top: 3px; color: var(--text-muted); }
+.role-locked { align-items: flex-start; }
+.role-form.is-locked .perm-group { background: var(--surface); }
+
+/* ---------- Branches ---------- */
+.branch-code {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    min-width: 46px;
+    height: 36px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--navy-600);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .5px;
+}
+.badge--main { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; background: var(--primary); color: #fff; vertical-align: 1px; }
+.location-tag { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+.location-tag .icon { width: 15px; height: 15px; }
+.location-list > div {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+.location-list dt { font-size: 12px; }
+.location-list dd { text-align: left; font-variant-numeric: normal; }
+.location-list + .form-hint { margin-top: 10px; }
+
+/* ---------- Audit log ---------- */
+.audit-table td { vertical-align: top; }
+.audit-table th:last-child { width: 40%; }
+.audit-action { text-transform: capitalize; }
+.audit-changes {
+    display: grid;
+    grid-template-columns: minmax(70px, max-content) minmax(0, 1fr);
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 13px;
+}
+.audit-changes > div { display: contents; }
+.audit-changes dt { color: var(--text-muted); text-transform: capitalize; }
+.audit-changes dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.audit-old,
+.audit-new { padding: 0 4px; border-radius: 4px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.audit-old { background: var(--danger-bg); color: #a82520; text-decoration: line-through; }
+.audit-new { background: var(--success-bg); color: #1f6b35; }
+.audit-changes + small { margin-top: 6px; }
+
+/* ---------- Settings tabs: 5 tabs; pills when they have to wrap ---------- */
+.settings-tab { white-space: nowrap; }
+@media (max-width: 720px) {
+    .settings-tabs { gap: 6px; padding-bottom: 12px; }
+    .settings-tab {
+        margin: 0;
+        padding: 7px 12px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface);
+        font-size: 14px;
+    }
+    .settings-tab.is-active { border-color: var(--primary); background: var(--primary); color: #fff; }
+    .settings-tab .icon { width: 16px; height: 16px; }
+}
+
+/* Tablets: Last Sign-in is also on the user form (Activity); audit changes stack label over value */
+@media (max-width: 1200px) {
+    .users-table .col-opt,
+    .branches-table .col-opt { display: none; }
+    .audit-changes { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .audit-changes dt { font-size: 12px; }
+    .audit-changes dd { margin-bottom: 6px; }
+}
+
+/* Stacked switches in a side card (branch form: Active + Main store) */
+.card--pad > .check--switch ~ .check--switch { margin-top: 14px; }
+/* Locked (read-only) role: granted permissions in bold, the rest muted, so the state is not colour/greyed-checkbox only */
+.role-form.is-locked .perm-item > span { color: var(--text-muted); }
+.role-form.is-locked .perm-item:has(input:checked) > span { color: var(--text); font-weight: 600; }
+.role-form.is-locked .perm-item small { font-weight: 400; }

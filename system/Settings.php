@@ -78,6 +78,10 @@ final class Settings
     /** Save all values at once. */
     public static function save(array $data): void
     {
+        if (!Auth::can('settings.manage')) {
+            throw new HttpException(403, 'You do not have permission to change the company settings.');
+        }
+        [$old, $new] = Audit::diff(self::all(), $data);
         $pdo = db();
         $pdo->beginTransaction();
         try {
@@ -87,6 +91,9 @@ final class Settings
             );
             foreach ($data as $key => $value) {
                 $stmt->execute([$key, $value]);
+            }
+            if ($new) {
+                Audit::record('settings', 'update', 'settings', null, 'Company & receipt', $old, $new);
             }
             $pdo->commit();
         } catch (Throwable $e) {

@@ -1,6 +1,6 @@
 <?php
 /**
- * One sale: items, totals, reprint, and Void (admin only).
+ * One sale: items, totals, reprint, and Void (sales.cancel). Sales outside the branch scope are 404.
  * pages/sale-view.php?id=5&return=sales-history.php%3Fpage%3D2
  */
 declare(strict_types=1);
@@ -13,7 +13,7 @@ $sale = Sales::find($id);
 if ($sale === null || $sale['status'] === 'held') {
     throw new HttpException(404, 'Sale not found.');
 }
-$isAdmin  = Auth::hasRole('admin');
+$canVoid  = Auth::can('sales.cancel');
 $returnTo = safe_return($_POST['return'] ?? $_GET['return'] ?? null, 'sales-history.php');
 $self     = 'sale-view.php?' . http_build_query(['id' => $id, 'return' => $returnTo]);
 
@@ -22,8 +22,8 @@ $self     = 'sale-view.php?' . http_build_query(['id' => $id, 'return' => $retur
 // ---------------------------------------------------------------------
 if (is_post()) {
     Csrf::verifyRequest();
-    if (!$isAdmin) {
-        abort(403, 'Only an administrator can void a sale.');
+    if (!$canVoid) {
+        abort(403, 'You do not have permission to void sales.');
     }
     try {
         if (input_string($_POST, 'action', 20) !== 'void') {
@@ -62,7 +62,7 @@ require ROOT_PATH . '/includes/header.php';
         <a class="btn btn--light" href="<?= e($printUrl) ?>" target="_blank" rel="noopener" id="reprintBtn">
             <?= icon('printer') ?> Reprint Receipt
         </a>
-        <?php if ($isAdmin && !$isVoid): ?>
+        <?php if ($canVoid && !$isVoid): ?>
             <button type="button" class="btn btn--danger" data-open="voidDialog" id="voidBtn"><?= icon('x') ?> Void Sale</button>
         <?php endif; ?>
     </div>
@@ -127,12 +127,13 @@ require ROOT_PATH . '/includes/header.php';
             <h2 class="card__title">Details</h2>
             <dl class="detail-list">
                 <div><dt>Customer</dt><dd>
-                    <?php if ($sale['customer_id'] !== null): ?>
+                    <?php if ($sale['customer_id'] !== null && Auth::can('customers.view')): ?>
                         <a href="<?= e(url('pages/customer-form.php?id=' . (int) $sale['customer_id'])) ?>"><?= e($sale['customer_name']) ?></a>
                     <?php else: ?>
                         <?= e($sale['customer_name']) ?>
                     <?php endif; ?>
                 </dd></div>
+                <div><dt>Branch</dt><dd id="saleBranch"><?= e($sale['branch_code'] . ' · ' . $sale['branch_name']) ?></dd></div>
                 <div><dt>Cashier</dt><dd><?= e($sale['cashier_name']) ?></dd></div>
                 <div><dt>Payment</dt><dd><span class="badge"><?= e(Sales::PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?></span></dd></div>
                 <div><dt>Amount Paid</dt><dd><?= e(money($sale['amount_paid'])) ?></dd></div>
@@ -142,7 +143,7 @@ require ROOT_PATH . '/includes/header.php';
     </aside>
 </div>
 
-<?php if ($isAdmin && !$isVoid): ?>
+<?php if ($canVoid && !$isVoid): ?>
     <dialog class="modal" id="voidDialog" aria-labelledby="voidTitle">
         <form class="modal__body" method="post" action="<?= e(url('pages/' . $self)) ?>">
             <header class="modal__head">

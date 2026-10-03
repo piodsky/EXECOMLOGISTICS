@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 403' -and $txt -match '(reports|settings).php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -159,13 +159,38 @@ function Text([string]$sel) { Eval "document.querySelector('$sel')?.textContent.
 function Check([bool]$cond, [string]$label) {
     if ($cond) { Write-Output "PASS  $label" } else { Write-Output "FAIL  $label"; $script:fails++ }
 }
-function Login([string]$u, [string]$p) {
+function Login([string]$u, [string]$p, [string]$landing = 'pos.php') {
     Nav "$Base/login.php"
     [void](Eval 'localStorage.clear()')
     [void](Eval "document.querySelector('[name=username]').value='$u'; document.querySelector('[name=password]').value='$p'; document.querySelector('.login__form').submit()")
     Start-Sleep -Milliseconds 500
-    WaitFor "location.pathname.endsWith('/pages/pos.php') && document.readyState==='complete'" 'redirect to POS'
+    WaitFor "location.pathname.endsWith('/pages/$landing') && document.readyState==='complete'" "redirect to $landing"
 }
+function Logout {
+    [void](Eval "document.querySelector('form.topbar__logout').submit()")
+    Start-Sleep -Milliseconds 400
+    WaitFor "location.pathname.endsWith('/login.php') && document.readyState==='complete'" 'logout'
+}
+# Submits something that reloads the page (form post + redirect) and waits for the new page.
+function Submit([string]$js, [string]$label) {
+    [void](Eval "window.__old = true; $js")
+    WaitFor "window.__old === undefined && document.readyState === 'complete'" $label
+}
+function SwitchBranch([int]$id) {
+    Submit "const s = document.getElementById('branchSelect'); s.value = '$id'; s.dispatchEvent(new Event('change'))" "switch to branch $id"
+}
+function Status([string]$path) { Eval "fetch('$Base/$path').then(r => r.status)" }
+# POS checkout through the API (as pos.js does); returns 'ok:<sale_no>' or '<status>:<message>'.
+function ApiSale([int]$productId) {
+    Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: $productId, qty: 1}], customer_id: null, payment_type: 'cash', discount_percent: '0', amount_paid: '99999.00'}}).then(d => 'ok:' + d.sale.sale_no, e => e.status + ':' + e.message)"
+}
+function AddUser([string]$full, [string]$uname, [string]$role, [int]$homeBranch, [int]$extra = 0) {
+    Nav "$Base/pages/user-form.php"
+    $x = if ($extra) { "f.querySelector('[name=`"branches[]`"][value=`"$extra`"]').checked = true;" } else { '' }
+    Submit "const f = document.getElementById('userForm'); f.full_name.value = '$full'; f.username.value = '$uname'; f.querySelector('[name=role][value=$role]').checked = true; f.branch_id.value = '$homeBranch'; $x f.password.value = '$script:pw'; f.password_confirm.value = '$script:pw'; f.requestSubmit()" "add $uname"
+    Check ((Text '.alert--success span') -eq "$full can now sign in as $uname.") "admin adds $role $uname ($(Text '.alert span'))"
+}
+$script:pw = 'Mindanao#2026'
 function ClickCard([string]$name) {
     [void](Eval "[...document.querySelectorAll('.product-card')].find(c => c.querySelector('.product-card__name').textContent === '$name').click()")
 }
@@ -406,6 +431,125 @@ try {
     Nav "$Base/pages/nope.php"
     Shot '11-404'
 
+    # --- Phase 5: branches, branch stock, roles & permissions, audit log ---
+    # Ids from database.sql: branch 1 = MAR (main), 4 = DAV; product 2 = Mouse, 11 = Webcam; sales 1-5 are MAR.
+    Nav "$Base/pages/pos.php"
+    Logout
+    Login 'admin' 'admin123'
+    $sel = Eval "(() => { const s = document.getElementById('branchSelect'); return s ? s.options[s.selectedIndex].textContent : ''; })()"
+    Check ($sel -like 'MAR*Maramag City') "admin branch chip shows MAR ($sel)"
+    Check ((Eval "[...document.querySelectorAll('#branchSelect option')].map(o => o.value).sort().join(',')") -eq '0,1,2,3,4,5') 'switcher: All (0) + 5 branches'
+    SwitchBranch 0
+    WaitFor "location.pathname.endsWith('/pages/pos.php')" 'back on POS'
+    Check ((Eval "!!document.getElementById('chooseBranchNotice')") -and (Eval "document.querySelectorAll('.product-card').length") -eq 0) 'POS with All branches asks to choose a branch'
+    Shot '24-pos-all-branches'
+    SwitchBranch 1
+    WaitFor "document.querySelectorAll('.product-card').length === 12" 'MAR products back'
+    Check (Eval "!document.getElementById('chooseBranchNotice')") 'switching back to MAR restores the products'
+
+    AddUser 'Dave Admin' 'davadmin' 'branch_admin' 4
+    AddUser 'Dina Cash' 'davcash' 'cashier' 4
+    AddUser 'Tony Tech' 'davtech' 'technician' 4
+    AddUser 'Mila Multi' 'davmulti' 'cashier' 4 1
+    Check ((Text '#usersTable tr[data-username=davmulti] .user-extra') -like '*MAR*') 'extra branch MAR shown in the users list'
+    $multiId = [int](Eval "new URL(document.querySelector('#usersTable tr[data-username=davmulti] a.icon-btn').href).searchParams.get('id')")
+    Shot '25-users-branches'
+
+    # Roles editor: unknown permission key, locked super role, no self-demotion / self-deactivation
+    Nav "$Base/pages/role-form.php"
+    Submit "const f = document.getElementById('roleForm'); f.name.value = 'QA Role'; f.code.value = 'qa_role'; const i = document.createElement('input'); i.type = 'hidden'; i.name = 'permissions[]'; i.value = 'bogus.key'; f.appendChild(i); f.requestSubmit()" 'role save'
+    Check ((Eval "document.body.textContent.includes('Unknown permission: bogus.key.')") -and (Eval "location.pathname.endsWith('role-form.php')")) 'roles: unknown permission key is rejected'
+    Nav "$Base/pages/roles.php"
+    Check (Eval "!document.querySelector('#rolesTable tr[data-role=qa_role]')") 'roles: rejected role was not created'
+    Nav (Eval "document.querySelector('#rolesTable tr[data-role=super_admin] a').href")
+    Check (Eval "!!document.getElementById('roleLocked') && !document.querySelector('#roleForm button[type=submit]')") 'super admin role is locked (no save)'
+    Nav "$Base/pages/user-form.php?id=1"
+    Submit "const f = document.getElementById('userForm'); f.querySelector('input[type=hidden][name=role]').value = 'cashier'; f.requestSubmit()" 'self demote'
+    Check (Eval "document.body.textContent.includes(`"You can't change your own role.`")") 'last super admin cannot demote themselves'
+    $r = Eval "fetch('$Base/pages/users.php', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, action: 'toggle', id: '1'})}).then(r => r.text()).then(t => t.includes('deactivate your own account') ? 'blocked' : 'not blocked')"
+    Check ($r -eq 'blocked') "last super admin cannot deactivate themselves ($r)"
+    Nav "$Base/pages/users.php"
+    Check ((Text '#usersTable tr[data-username=admin] td:nth-child(6) .badge') -eq 'Active') 'admin is still active'
+
+    # Admin on MAR can still sell
+    Nav "$Base/pages/pos.php"
+    WaitFor "document.querySelectorAll('.product-card').length === 12" 'admin POS'
+    $r = ApiSale 2
+    Check ($r -like 'ok:*') "admin sells at MAR ($r)"
+
+    # Branch stock: +3 Webcam at DAV only
+    SwitchBranch 4
+    Nav "$Base/pages/inventory.php?search=webcam"
+    Check ((Text '#stockScope') -eq 'Davao City' -and [int](Eval "document.querySelector('[data-adjust]').dataset.stock") -eq 0) 'DAV inventory: Webcam 0 before'
+    [void](Eval "document.querySelector('[data-adjust]').click()")
+    Submit "document.getElementById('adjustQty').value = '3'; document.getElementById('adjustReason').value = 'restock'; document.querySelector('#adjustDialog form').requestSubmit()" 'adjust save'
+    Check ((Text '.alert--success span') -like 'Webcam: +3. Stock at Davao City is now 3.') "DAV adjust +3 ($(Text '.alert span'))"
+    Check ([int](Eval "document.querySelector('[data-adjust]').dataset.stock") -eq 3) 'DAV inventory shows Webcam 3'
+    Nav "$Base/pages/product-form.php?id=11"
+    $hint = Eval "[...document.querySelectorAll('.form-hint')].map(p => p.textContent).find(t => t.includes('company total')) || ''"
+    Check ($hint -like '*Davao City*company total 19') "product page: company total = MAR 16 + DAV 3 ($hint)"
+    Check ((Eval "document.querySelector('.history-card tbody tr td:last-child').textContent.trim()") -eq 'DAV') 'stock history row carries branch DAV'
+    SwitchBranch 1
+    Nav "$Base/pages/inventory.php?search=webcam"
+    Check ([int](Eval "document.querySelector('[data-adjust]').dataset.stock") -eq 16) 'MAR Webcam unchanged (16)'
+    Logout
+
+    # Branch admin (DAV)
+    Login 'davadmin' $script:pw
+    $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
+    Check ($menu -eq 'POS Sales|Sales History|Inventory|Customers|Reports|Settings') "branch admin menu: $menu"
+    Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
+    Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
+    $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
+    Check ($st -eq '403,403,403') "branch admin: roles/branches/company settings 403 ($st)"
+    $st = "$(Status 'pages/receipt.php?id=1'),$(Status 'pages/sale-view.php?id=1')"
+    Check ($st -eq '404,404') "branch admin: MAR receipt / sale view 404 ($st)"
+    Nav "$Base/pages/sales-history.php"
+    Check ((Eval "document.querySelectorAll('.sales-table .sale-no').length") -eq 0) 'branch admin: DAV sales history is empty'
+    Nav "$Base/pages/customers.php"
+    Check ((Eval "document.querySelectorAll('main tbody .item-cell__name').length") -eq 0) 'branch admin: MAR customers hidden'
+    Nav "$Base/pages/user-form.php"
+    $roles = Eval "[...document.querySelectorAll('[name=role]')].map(r => r.value).join(',')"
+    Check ($roles -notlike '*branch_admin*' -and $roles -notlike '*super_admin*' -and $roles -like '*cashier*') "branch admin can assign only: $roles"
+    Nav "$Base/pages/users.php"
+    Check (Eval "(() => { const r = document.querySelector('#usersTable tr[data-username=davmulti]'); return !!r && r.querySelectorAll('.row-actions > *').length === 0 && !r.querySelector('a.item-cell__name'); })()") 'multi-branch cashier row has no actions'
+    Check ((Status "pages/user-form.php?id=$multiId") -eq 403) 'branch admin: user-form of multi-branch cashier 403'
+    Nav "$Base/pages/product-form.php?id=11"
+    Check (Eval "!document.body.textContent.includes('company total')") 'branch admin: no company total on product page'
+    Shot '26-branch-admin'
+    Logout
+
+    # Technician
+    Login 'davtech' $script:pw 'inventory.php'
+    Check $true 'technician lands on Inventory'
+    $st = "$(Status 'pages/pos.php'),$(Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: 11, qty: 1}], payment_type: 'cash', amount_paid: '99999'}}).then(() => 200, e => e.status)"),$(Status 'pages/account.php')"
+    Check ($st -eq '403,403,200') "technician: pos.php / checkout API / account ($st)"
+    Logout
+
+    # DAV cashier (single branch): stock is per branch; tampered switch is refused
+    Login 'davcash' $script:pw
+    WaitFor "document.querySelectorAll('.product-card').length === 12" 'DAV POS products'
+    Check ((Eval "[...document.querySelectorAll('.product-card .stock-pill')].filter(p => p.textContent !== 'Out of stock').map(p => p.textContent).join('|')") -eq 'In Stock: 3') 'DAV POS: every product out of stock except the 3 DAV Webcams'
+    $r = Eval "fetch('$Base/pages/switch-branch.php', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, branch_id: '1', return: 'pos.php'})}).then(r => r.status)"
+    Nav "$Base/pages/pos.php"
+    Check ($r -eq 403 -and (Text '[data-branch-code]') -like 'DAV*') "tampered switch to MAR refused ($r), still DAV"
+    $r = ApiSale 2
+    Check ($r -like '409:*Mouse is out of stock at Davao City*') "DAV cashier cannot sell MAR stock ($r)"
+    $r = ApiSale 11
+    Check ($r -like 'ok:*') "DAV cashier sells the DAV Webcam ($r)"
+    Logout
+
+    # Audit log
+    Login 'admin' 'admin123'
+    Nav "$Base/pages/audit-log.php"
+    Check ((Eval "document.querySelectorAll('#auditTable tr[data-module=inventory]').length") -eq 0) 'audit log on MAR hides the DAV stock adjustment (scoped)'
+    SwitchBranch 0
+    Check ((Eval "document.querySelectorAll('#auditTable tr[data-module=sales][data-action=void]').length") -ge 1) 'audit log: sale void'
+    Check ((Eval "document.querySelectorAll('#auditTable tr[data-module=users][data-action=create]').length") -ge 5) 'audit log: 5 user creations'
+    Check ((Eval "document.querySelectorAll('#auditTable tr[data-module=inventory][data-action=stock_adjust]').length") -ge 1) 'audit log: stock adjustment'
+    Check (Eval "![...document.querySelectorAll('#auditTable dt')].some(d => /pass|hash|csrf/i.test(d.textContent))") 'audit log: no password / CSRF fields'
+    Shot '27-audit-log'
+
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"
     Check ($n -gt 30) "icons.svg valid XML ($n icons)"
@@ -421,6 +565,26 @@ try {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -like "*$prof*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
+
+# --- Stock integrity in the test DB (after the browser part) ---
+function Sql([string]$q) {
+    try {
+        $env:MYSQL_PWD = EnvValue 'DB_PASS' ''
+        $o = & 'C:\xampp\mysql\bin\mysql.exe' @mysqlArgs -N -B $testDb -e $q 2>&1
+    } finally { Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue }
+    return (($o | ForEach-Object { "$_" }) -join ' ').Trim()
+}
+try {
+    $bad = Sql 'SELECT COUNT(*) FROM products p WHERE p.stock <> (SELECT COALESCE(SUM(b.qty), 0) FROM stock_balances b WHERE b.product_id = p.id) OR p.stock <> (SELECT COALESCE(SUM(m.quantity), 0) FROM stock_movements m WHERE m.product_id = p.id)'
+    Check ($bad -eq '0') "integrity: products.stock = SUM(balances) = SUM(movements) for every product (mismatches: $bad)"
+    $bad = Sql 'SELECT COUNT(*) FROM stock_movements WHERE branch_id IS NULL OR warehouse_id IS NULL OR location_id IS NULL'
+    Check ($bad -eq '0') "integrity: every movement has branch/warehouse/location ($bad without)"
+    $w = Sql "SELECT CONCAT(branch_id, ':', qty) FROM stock_balances WHERE product_id = 11 ORDER BY branch_id"
+    Check ($w -eq '1:16 4:2') "integrity: Webcam balances MAR 16, DAV 2 ($w)"
+    $w = Sql 'SELECT COUNT(*) FROM stock_movements WHERE product_id = 11 AND branch_id = 4'
+    Check ($w -eq '2') "integrity: 2 DAV ledger rows for Webcam (adjust + sale) ($w)"
+} catch { Write-Output "FAIL  integrity SQL: $($_.Exception.Message)"; $script:fails++ }
+
 if ($script:fails -or $Keep) {
     Write-Output "Test copy kept: $e2eDir  ($Base, DB $testDb)"
 } else {

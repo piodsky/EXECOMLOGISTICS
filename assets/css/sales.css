@@ -4,10 +4,10 @@
 
 .badge--period { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; background: #dce9fc; color: #133d80; font-size: 13px; }
 .badge--period .icon { width: 16px; height: 16px; }
+.badge--period.badge--branch { padding: 7px 14px; border: 0; border-radius: 999px; font-family: inherit; font-size: 13px; letter-spacing: 0; }
 .stat__value small { margin-left: 6px; }
 
 /* ---------- List ---------- */
-.nowrap { white-space: nowrap; }
 .sale-no { font-variant-numeric: tabular-nums; }
 .sales-table tr.is-void td { color: var(--text-muted); }
 .sales-table tr.is-void .sale-total { text-decoration: line-through; }

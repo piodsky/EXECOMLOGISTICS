@@ -34,10 +34,10 @@ if (is_post()) {
                 $qty = input_int($_POST, 'quantity', 1, Products::MAX_STOCK)
                     ?? throw new HttpException(422, 'Enter a quantity from 1 to ' . number_format(Products::MAX_STOCK) . '.');
                 $change = $direction === 'add' ? $qty : -$qty;
-                [$name, $new] = Products::adjustStock(
+                [$name, $new, $branchName] = Products::adjustStock(
                     $id, $change, input_string($_POST, 'reason', 20), input_string($_POST, 'note', 200), (int) Auth::id()
                 );
-                flash('success', sprintf('%s: %s%d. Stock is now %d.', $name, $change > 0 ? '+' : '−', $qty, $new));
+                flash('success', sprintf('%s: %s%d. Stock at %s is now %d.', $name, $change > 0 ? '+' : '−', $qty, $branchName, $new));
                 break;
 
             default:
@@ -69,6 +69,8 @@ $products   = Products::search($filters, $pg['per_page'], $pg['offset']);
 $summary    = Products::summary();
 $categories = Products::categories();
 
+$canManage   = Auth::can('products.manage');
+$canAdjust   = Auth::can('inventory.adjust') && Branch::isConcrete(); // adjustments go to one branch
 $returnTo    = 'inventory.php' . (($pgQuery || $pg['page'] > 1) ? '?' . http_build_query($pgQuery + ['page' => $pg['page']]) : '');
 $stockReturn = $returnTo;
 $pgPath      = 'pages/inventory.php';
@@ -80,12 +82,20 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Inventory</h1>
-        <p class="muted">Products, prices, stock levels and images.</p>
+        <p class="muted">Products, prices, stock levels and images · stock at <strong id="stockScope"><?= e(Branch::label()) ?></strong>.</p>
     </div>
-    <a class="btn btn--primary" href="<?= e(url('pages/product-form.php?return=' . rawurlencode($returnTo))) ?>">
-        <?= icon('plus') ?> Add Product
-    </a>
+    <?php if ($canManage): ?>
+        <a class="btn btn--primary" href="<?= e(url('pages/product-form.php?return=' . rawurlencode($returnTo))) ?>">
+            <?= icon('plus') ?> Add Product
+        </a>
+    <?php endif; ?>
 </div>
+<?php if (Auth::can('inventory.adjust') && !Branch::isConcrete()): ?>
+    <div class="alert alert--info" role="status">
+        <?= icon('info') ?>
+        <span>Showing the total stock of all branches. Choose a branch in the top bar to adjust its stock.</span>
+    </div>
+<?php endif; ?>
 
 <section class="stats" aria-label="Inventory summary">
     <a class="stat stat--link" href="<?= e(url('pages/inventory.php?status=active')) ?>">
@@ -178,14 +188,17 @@ require ROOT_PATH . '/includes/header.php';
                     </td>
                     <td class="actions-col">
                         <div class="row-actions">
-                            <button type="button" class="icon-btn" title="Adjust stock" aria-label="Adjust stock of <?= e($p['name']) ?>"
-                                    data-adjust data-id="<?= (int) $p['id'] ?>" data-name="<?= e($p['name']) ?>"
-                                    data-code="<?= e($p['code']) ?>" data-stock="<?= $stock ?>">
-                                <?= icon('stock') ?>
-                            </button>
-                            <a class="icon-btn" title="Edit" aria-label="Edit <?= e($p['name']) ?>" href="<?= e($editUrl) ?>">
-                                <?= icon('edit') ?>
+                            <?php if ($canAdjust): ?>
+                                <button type="button" class="icon-btn" title="Adjust stock" aria-label="Adjust stock of <?= e($p['name']) ?>"
+                                        data-adjust data-id="<?= (int) $p['id'] ?>" data-name="<?= e($p['name']) ?>"
+                                        data-code="<?= e($p['code']) ?>" data-stock="<?= $stock ?>">
+                                    <?= icon('stock') ?>
+                                </button>
+                            <?php endif; ?>
+                            <a class="icon-btn" title="<?= $canManage ? 'Edit' : 'View' ?>" aria-label="<?= $canManage ? 'Edit' : 'View' ?> <?= e($p['name']) ?>" href="<?= e($editUrl) ?>">
+                                <?= icon($canManage ? 'edit' : 'eye') ?>
                             </a>
+                            <?php if ($canManage): ?>
                             <form method="post">
                                 <?= Csrf::field() ?>
                                 <input type="hidden" name="action" value="toggle">
@@ -208,6 +221,7 @@ require ROOT_PATH . '/includes/header.php';
                                     </button>
                                 </form>
                             <?php endif; ?>
+                            <?php endif; ?>
                         </div>
                     </td>
                 </tr>
@@ -222,5 +236,7 @@ require ROOT_PATH . '/includes/header.php';
     <?php require ROOT_PATH . '/includes/pagination.php'; ?>
 </section>
 
-<?php require ROOT_PATH . '/includes/stock-dialog.php'; ?>
+<?php if ($canAdjust): ?>
+    <?php require ROOT_PATH . '/includes/stock-dialog.php'; ?>
+<?php endif; ?>
 <?php require ROOT_PATH . '/includes/footer.php'; ?>

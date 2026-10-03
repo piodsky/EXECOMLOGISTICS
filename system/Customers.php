@@ -2,23 +2,41 @@
 /**
  * Customers: validation, listing with purchase stats, CRUD.
  * Used by the Customers pages and the POS quick-add (api/customers/create.php).
+ *
+ * Customers are shared across branches: one record with a home branch (customers.branch_id)
+ * plus visibility links (customer_branches). Everything here only sees customers linked to the
+ * current branch scope; purchase stats only count sales of that scope.
  */
 declare(strict_types=1);
 
 final class Customers
 {
-    /** Active customers for dropdowns. */
+    /** [SQL, params]: customer `c` is visible in the current branch scope. */
+    private static function visible(): array
+    {
+        [$scope, $params] = Branch::scopeSql('cb.branch_id');
+        return ["EXISTS (SELECT 1 FROM customer_branches cb WHERE cb.customer_id = c.id AND {$scope})", $params];
+    }
+
+    /** Active customers for dropdowns (POS). */
     public static function active(): array
     {
-        $stmt = db()->prepare('SELECT id, name, phone FROM customers WHERE is_active = ? ORDER BY name');
-        $stmt->execute([1]);
+        [$visible, $params] = self::visible();
+        $stmt = db()->prepare("SELECT c.id, c.name, c.phone FROM customers c WHERE c.is_active = ? AND {$visible} ORDER BY c.name");
+        $stmt->execute([1, ...$params]);
         return $stmt->fetchAll();
     }
 
+    /** Customer visible in the current scope, or null. */
     public static function find(int $id): ?array
     {
-        $stmt = db()->prepare('SELECT * FROM customers WHERE id = ?');
-        $stmt->execute([$id]);
+        [$visible, $params] = self::visible();
+        $stmt = db()->prepare(
+            "SELECT c.*, b.code AS branch_code, b.name AS branch_name
+               FROM customers c JOIN branches b ON b.id = c.branch_id
+              WHERE c.id = ? AND {$visible}"
+        );
+        $stmt->execute([$id, ...$params]);
         return $stmt->fetch() ?: null;
     }
 
@@ -45,7 +63,10 @@ final class Customers
             if (!preg_match('/^[0-9+()\s-]{7,30}$/', $phone)) {
                 $errors['phone'] = 'Enter a valid phone number (digits, spaces, + - ( ) only).';
             } elseif ($owner = self::phoneOwner($phone, $id)) {
-                $errors['phone'] = "This number already belongs to {$owner}.";
+                // Company-wide check; don't reveal a customer the user can't see.
+                $errors['phone'] = $owner['visible']
+                    ? "This number already belongs to {$owner['name']}."
+                    : 'This phone number is already registered at another branch.';
             }
         }
         if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
@@ -70,12 +91,16 @@ final class Customers
         return $data;
     }
 
-    private static function phoneOwner(string $phone, ?int $exceptId): ?string
+    /** @return array{name:string, visible:bool}|null */
+    private static function phoneOwner(string $phone, ?int $exceptId): ?array
     {
-        $stmt = db()->prepare('SELECT name FROM customers WHERE phone = ? AND id <> ? LIMIT 1');
-        $stmt->execute([$phone, $exceptId ?? 0]);
-        $name = $stmt->fetchColumn();
-        return $name !== false ? (string) $name : null;
+        [$visible, $params] = self::visible();
+        $stmt = db()->prepare(
+            "SELECT c.name, ({$visible}) AS visible FROM customers c WHERE c.phone = ? AND c.id <> ? LIMIT 1"
+        );
+        $stmt->execute([...$params, $phone, $exceptId ?? 0]);
+        $row = $stmt->fetch();
+        return $row ? ['name' => (string) $row['name'], 'visible' => (int) $row['visible'] === 1] : null;
     }
 
     // ------------------------------------------------------------------
@@ -94,27 +119,31 @@ final class Customers
     public static function search(array $f, int $limit, int $offset): array
     {
         [$where, $params] = self::where($f);
+        [$salesScope, $salesParams] = Branch::scopeSql('sa.branch_id');
         $stmt = db()->prepare(
-            "SELECT c.id, c.name, c.phone, c.email, c.is_active, c.created_at,
-                    COALESCE(s.visits, 0) AS visits, COALESCE(s.spent, 0) AS spent, s.last_visit
+            "SELECT c.id, c.name, c.phone, c.email, c.is_active, c.created_at, c.branch_id,
+                    b.code AS branch_code, b.name AS branch_name,
+                    COALESCE(s.visits, 0) AS visits, COALESCE(s.spent, 0) AS spent, s.last_visit,
+                    (SELECT COUNT(*) FROM sales sx WHERE sx.customer_id = c.id) AS all_sales
                FROM customers c
+               JOIN branches b ON b.id = c.branch_id
                LEFT JOIN (
-                    SELECT customer_id, COUNT(*) AS visits, SUM(total) AS spent, MAX(created_at) AS last_visit
-                      FROM sales WHERE status = ? AND customer_id IS NOT NULL
-                     GROUP BY customer_id
+                    SELECT sa.customer_id, COUNT(*) AS visits, SUM(sa.total) AS spent, MAX(sa.created_at) AS last_visit
+                      FROM sales sa WHERE sa.status = ? AND sa.customer_id IS NOT NULL AND {$salesScope}
+                     GROUP BY sa.customer_id
                ) s ON s.customer_id = c.id
               WHERE {$where}
               ORDER BY c.is_active DESC, c.name
               LIMIT ? OFFSET ?"
         );
-        $stmt->execute(['completed', ...$params, $limit, $offset]);
+        $stmt->execute(['completed', ...$salesParams, ...$params, $limit, $offset]);
         return $stmt->fetchAll();
     }
 
     private static function where(array $f): array
     {
-        $where  = ['1 = 1'];
-        $params = [];
+        [$visible, $params] = self::visible();
+        $where = [$visible];
         if ($f['q'] !== '') {
             $where[] = '(c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
             $like = like_pattern($f['q']);
@@ -128,54 +157,91 @@ final class Customers
         return [implode(' AND ', $where), $params];
     }
 
-    /** Visits, total spent, average and last visit for one customer. */
+    /** Visits, total spent, average and last visit for one customer (sales in the current scope). */
     public static function stats(int $id): array
     {
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
         $stmt = db()->prepare(
-            'SELECT COUNT(*) AS visits, COALESCE(SUM(total), 0) AS spent,
-                    COALESCE(AVG(total), 0) AS average, MAX(created_at) AS last_visit
-               FROM sales WHERE customer_id = ? AND status = ?'
+            "SELECT COUNT(*) AS visits, COALESCE(SUM(s.total), 0) AS spent,
+                    COALESCE(AVG(s.total), 0) AS average, MAX(s.created_at) AS last_visit
+               FROM sales s WHERE s.customer_id = ? AND s.status = ? AND {$scope}"
         );
-        $stmt->execute([$id, 'completed']);
+        $stmt->execute([$id, 'completed', ...$params]);
         return $stmt->fetch();
     }
 
     public static function recentSales(int $id, int $limit = 10): array
     {
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
         $stmt = db()->prepare(
-            'SELECT s.id, s.sale_no, s.total, s.payment_type, s.status, s.created_at,
+            "SELECT s.id, s.sale_no, s.total, s.payment_type, s.status, s.created_at,
                     (SELECT COALESCE(SUM(quantity), 0) FROM sale_items si WHERE si.sale_id = s.id) AS items
                FROM sales s
-              WHERE s.customer_id = ?
+              WHERE s.customer_id = ? AND {$scope}
               ORDER BY s.created_at DESC
-              LIMIT ?'
+              LIMIT ?"
         );
-        $stmt->execute([$id, $limit]);
+        $stmt->execute([$id, ...$params, $limit]);
         return $stmt->fetchAll();
     }
 
     // ------------------------------------------------------------------
-    // Create / update / status / delete
+    // Create / update (customers.edit) — status / delete (customers.delete)
     // ------------------------------------------------------------------
 
+    private static function requirePermission(string $key, string $message): void
+    {
+        if (!Auth::can($key)) {
+            throw new HttpException(403, $message);
+        }
+    }
+
+    /** New customer at the current branch (home branch + visibility link). */
     public static function create(array $data): int
     {
-        db()->prepare('INSERT INTO customers (name, phone, email, address) VALUES (?, ?, ?, ?)')
-            ->execute([$data['name'], $data['phone'], $data['email'], $data['address']]);
-        return (int) db()->lastInsertId();
+        self::requirePermission('customers.edit', 'You do not have permission to add customers.');
+        $branchId = Branch::forWrite();
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('INSERT INTO customers (name, phone, email, address, branch_id) VALUES (?, ?, ?, ?, ?)')
+                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $branchId]);
+            $id = (int) $pdo->lastInsertId();
+            $pdo->prepare('INSERT INTO customer_branches (customer_id, branch_id) VALUES (?, ?)')->execute([$id, $branchId]);
+            $pdo->commit();
+            return $id;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public static function update(int $id, array $data): void
     {
+        self::requirePermission('customers.edit', 'You do not have permission to edit customers.');
+        self::find($id) ?? throw new HttpException(404, 'Customer not found.');
         db()->prepare('UPDATE customers SET name = ?, phone = ?, email = ?, address = ? WHERE id = ?')
             ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $id]);
     }
 
     public static function toggleActive(int $id): array
     {
+        self::requirePermission('customers.delete', 'You do not have permission to deactivate customers.');
         $customer = self::find($id) ?? throw new HttpException(404, 'Customer not found.');
         $next = (int) $customer['is_active'] === 1 ? 0 : 1;
-        db()->prepare('UPDATE customers SET is_active = ? WHERE id = ?')->execute([$next, $id]);
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE customers SET is_active = ? WHERE id = ?')->execute([$next, $id]);
+            Audit::record('customers', $next ? 'activate' : 'deactivate', 'customer', $id, $customer['name'],
+                ['is_active' => (int) $customer['is_active']], ['is_active' => $next]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
         $customer['is_active'] = $next;
         return $customer;
     }
@@ -183,13 +249,26 @@ final class Customers
     /** Hard delete — only for customers without any sales (their receipts must keep the name). */
     public static function delete(int $id): array
     {
+        self::requirePermission('customers.delete', 'You do not have permission to delete customers.');
         $customer = self::find($id) ?? throw new HttpException(404, 'Customer not found.');
         $stmt = db()->prepare('SELECT COUNT(*) FROM sales WHERE customer_id = ?');
         $stmt->execute([$id]);
         if ((int) $stmt->fetchColumn() > 0) {
             throw new HttpException(409, "{$customer['name']} has purchase history, so they can't be deleted. Deactivate them instead to hide them from the POS.");
         }
-        db()->prepare('DELETE FROM customers WHERE id = ?')->execute([$id]);
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('DELETE FROM customers WHERE id = ?')->execute([$id]); // links cascade
+            Audit::record('customers', 'delete', 'customer', $id, $customer['name'],
+                array_intersect_key($customer, array_flip(['name', 'phone', 'email', 'address', 'branch_id', 'is_active'])), null);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
         return $customer;
     }
 }

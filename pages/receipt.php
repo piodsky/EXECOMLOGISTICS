@@ -7,14 +7,17 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../system/bootstrap.php';
-Auth::requireRole('admin', 'cashier');
+Auth::requirePermission('sales.view', 'pos.access');
 allow_same_origin_framing();
 
 $id   = input_int($_GET, 'id', 1);
-$sale = $id !== null ? Sales::find($id) : null;
+$sale = $id !== null ? Sales::find($id) : null; // null when outside the user's branch scope
 if ($sale === null || $sale['status'] === 'held') {
     abort(404, 'Receipt not found.');
 }
+// Branch address/contact when filled in, else the company's.
+$rcptAddress = trim((string) $sale['branch_address']) !== '' ? $sale['branch_address'] : setting('shop_address');
+$rcptPhone   = trim((string) $sale['branch_contact']) !== '' ? $sale['branch_contact'] : setting('shop_phone');
 
 $autoPrint = ($_GET['autoprint'] ?? '') === '1';
 $isVoid    = $sale['status'] === 'cancelled';
@@ -36,14 +39,17 @@ $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at'])
 
 <div class="receipt-toolbar no-print">
     <button type="button" id="printBtn">Print receipt</button>
-    <a href="<?= e(url('pages/pos.php')) ?>">Back to POS</a>
+    <?php if (Auth::can('pos.access')): ?>
+        <a href="<?= e(url('pages/pos.php')) ?>">Back to POS</a>
+    <?php endif; ?>
 </div>
 
 <article class="receipt">
     <header class="receipt__head">
         <h1><?= e(setting('shop_name', 'EXECOM Logistics')) ?></h1>
-        <p><?= e(setting('shop_address')) ?></p>
-        <p>Tel: <?= e(setting('shop_phone')) ?></p>
+        <p class="receipt__branch" id="receiptBranch"><?= e($sale['branch_name']) ?> Branch</p>
+        <p><?= e($rcptAddress) ?></p>
+        <p>Tel: <?= e($rcptPhone) ?></p>
         <?php if (setting('shop_tin') !== ''): ?>
             <p>VAT Reg TIN: <?= e(setting('shop_tin')) ?></p>
         <?php endif; ?>

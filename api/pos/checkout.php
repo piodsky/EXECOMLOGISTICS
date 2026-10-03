@@ -12,7 +12,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../../system/bootstrap.php';
-api_guard('POST');
+api_guard('POST', 'pos.access');
 
 $data = request_json();
 

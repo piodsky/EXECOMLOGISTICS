@@ -8,9 +8,11 @@ $stmt = db()->prepare('SELECT id, name, icon FROM categories WHERE is_active = ?
 $stmt->execute([1]);
 $categories = $stmt->fetchAll();
 
-$customers = Customers::active();
+$posBranch = Branch::current();          // 0 = "All branches": nothing can be sold until one is chosen
+$customers = Branch::isConcrete() ? Customers::active() : [];
 $vatRate   = (float) setting('vat_rate', '12');
 $vatLabel  = rtrim(rtrim(number_format($vatRate, 2, '.', ''), '0'), '.');
+$canAddCustomer = Auth::can('customers.edit');
 
 $pageStyles  = ['css/pos.css'];
 $pageScripts = ['js/pos.js'];
@@ -18,8 +20,17 @@ $pageScripts = ['js/pos.js'];
 require ROOT_PATH . '/includes/header.php';
 ?>
 
+<?php if (!Branch::isConcrete()): ?>
+    <div class="alert alert--warning pos-branch-notice" role="status" id="chooseBranchNotice">
+        <?= icon('store') ?>
+        <span><strong>Choose a branch to start selling.</strong> You are viewing all branches; the POS sells from one branch's stock at a time.</span>
+        <button type="button" class="btn btn--sm btn--light" data-focus-branch>Choose branch</button>
+    </div>
+<?php endif; ?>
+
 <div class="pos" id="pos"
      data-user-id="<?= (int) Auth::id() ?>"
+     data-branch-id="<?= (int) $posBranch ?>"
      data-vat-rate="<?= e((string) $vatRate) ?>"
      data-currency="<?= e(config('app.currency')) ?>"
      data-icons="<?= e(asset('img/icons.svg')) ?>"
@@ -76,9 +87,11 @@ require ROOT_PATH . '/includes/header.php';
                         <option value="<?= (int) $c['id'] ?>"><?= e($c['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
-                <button type="button" class="icon-btn" id="addCustomerBtn" aria-label="Add new customer" title="Add new customer">
-                    <?= icon('plus') ?>
-                </button>
+                <?php if ($canAddCustomer): ?>
+                    <button type="button" class="icon-btn" id="addCustomerBtn" aria-label="Add new customer" title="Add new customer">
+                        <?= icon('plus') ?>
+                    </button>
+                <?php endif; ?>
             </div>
             <div class="cart-field">
                 <span class="cart-field__icon"><?= icon('wallet') ?></span>

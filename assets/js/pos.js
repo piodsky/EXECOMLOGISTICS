@@ -21,7 +21,7 @@
         currency: root.dataset.currency || '₱',
         icons: root.dataset.icons,
         receiptUrl: root.dataset.receiptUrl,
-        storageKey: `bb.pos.${root.dataset.userId}`,
+        storageKey: `bb.pos.${root.dataset.userId}.${root.dataset.branchId}`,
     };
 
     const els = {
@@ -167,6 +167,14 @@
     // Products
     // ------------------------------------------------------------------
     async function loadProducts() {
+        if (root.dataset.branchId === '0') {
+            // "All branches": stock is per branch, so there is nothing to sell until one is chosen
+            const msg = document.createElement('p');
+            msg.className = 'product-grid__state';
+            msg.textContent = 'Choose a branch in the top bar to see its products and stock.';
+            els.grid.replaceChildren(msg);
+            return;
+        }
         try {
             const data = await BB.api('pos/products.php');
             state.products = data.products;
@@ -731,7 +739,7 @@
     els.doneDialog.addEventListener('close', () => focusSearch());
 
     // Customer dialog
-    $('addCustomerBtn').addEventListener('click', () => {
+    $('addCustomerBtn')?.addEventListener('click', () => {
         els.customerForm.reset();
         els.customerError.hidden = true;
         els.customerDialog.showModal();
