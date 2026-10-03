@@ -74,6 +74,14 @@ final class Sales
             foreach ($stmt->fetchAll() as $row) {
                 $products[(int) $row['id']] = $row;
             }
+            // Products of a deactivated category are hidden from the POS, so they are not for sale either.
+            $stmt = $pdo->prepare(
+                "SELECT p.id FROM products p JOIN categories c ON c.id = p.category_id WHERE p.id IN ({$in}) AND c.is_active = 0"
+            );
+            $stmt->execute($ids);
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $hiddenId) {
+                $products[(int) $hiddenId]['is_active'] = 0;
+            }
 
             $lines    = [];
             $problems = [];

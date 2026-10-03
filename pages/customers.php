@@ -45,9 +45,12 @@ $statuses = ['all' => 'All customers', 'active' => 'Active', 'inactive' => 'Inac
 $filters = [
     'q'      => input_string($_GET, 'search', 100),
     'status' => is_string($_GET['status'] ?? null) && array_key_exists($_GET['status'], $statuses) ? $_GET['status'] : 'all',
+    'type'   => input_int($_GET, 'type', 1),
 ];
+$types = MasterData::options('customer-types', $filters['type']);
 $pgQuery = array_filter([
     'search' => $filters['q'],
+    'type'   => $filters['type'],
     'status' => $filters['status'] !== 'all' ? $filters['status'] : null,
 ], static fn ($v) => $v !== '' && $v !== null);
 
@@ -75,9 +78,15 @@ require ROOT_PATH . '/includes/header.php';
     <form class="toolbar" method="get" action="<?= e(url('pages/customers.php')) ?>" role="search">
         <label class="toolbar__search">
             <?= icon('search') ?>
-            <input class="form-input" type="search" name="search" maxlength="100" placeholder="Name, phone or email"
+            <input class="form-input" type="search" name="search" maxlength="100" placeholder="Name, phone, email or TIN"
                    value="<?= e($filters['q']) ?>" aria-label="Search customers">
         </label>
+        <select class="form-input" name="type" aria-label="Customer type">
+            <option value="">All types</option>
+            <?php foreach ($types as $t): ?>
+                <option value="<?= (int) $t['id'] ?>"<?= $filters['type'] === (int) $t['id'] ? ' selected' : '' ?>><?= e($t['name']) ?></option>
+            <?php endforeach; ?>
+        </select>
         <select class="form-input" name="status" aria-label="Status">
             <?php foreach ($statuses as $value => $label): ?>
                 <option value="<?= e($value) ?>"<?= $filters['status'] === $value ? ' selected' : '' ?>><?= e($label) ?></option>
@@ -90,10 +99,11 @@ require ROOT_PATH . '/includes/header.php';
     </form>
 
     <div class="table-wrap">
-        <table class="table table--list">
+        <table class="table table--list customers-table" id="customersTable">
             <thead>
             <tr>
                 <th>Customer</th>
+                <th class="col-opt">Type</th>
                 <th>Phone</th>
                 <th class="num">Visits</th>
                 <th class="num">Total Spent</th>
@@ -119,6 +129,7 @@ require ROOT_PATH . '/includes/header.php';
                             </span>
                         </div>
                     </td>
+                    <td class="col-opt"><?= e($c['type_name'] ?? '—') ?><?php if ($c['tin']): ?><span class="cell-sub">TIN <?= e($c['tin']) ?></span><?php endif; ?></td>
                     <td><?= e($c['phone'] ?? '—') ?></td>
                     <td class="num"><?= (int) $c['visits'] ?></td>
                     <td class="num"><?= e(money($c['spent'])) ?></td>
@@ -153,7 +164,7 @@ require ROOT_PATH . '/includes/header.php';
                 </tr>
             <?php endforeach; ?>
             <?php if (!$customers): ?>
-                <tr><td colspan="7" class="empty">No customers found<?= $pgQuery ? ' for these filters' : '' ?>.</td></tr>
+                <tr><td colspan="8" class="empty">No customers found<?= $pgQuery ? ' for these filters' : '' ?>.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>

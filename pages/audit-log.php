@@ -38,6 +38,9 @@ $decode = static function (?string $json): array {
         return [];
     }
     $v = json_decode($json, true);
+    if (is_array($v) && !Auth::can('products.cost')) {
+        unset($v['unit_cost']); // product cost is only shown to products.cost
+    }
     return is_array($v) ? $v : [];
 };
 /** One value as short readable text. */

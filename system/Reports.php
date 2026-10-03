@@ -213,21 +213,10 @@ final class Reports
     // Inventory (right now, not date-bound)
     // ------------------------------------------------------------------
 
-    /** [JOIN, params] adding `bs.qty` = stock of product `p` in the current branch scope. */
-    private static function stockJoin(): array
-    {
-        [$scope, $params] = Branch::scopeSql('sb.branch_id');
-        return [
-            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
-                         WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",
-            $params,
-        ];
-    }
-
     /** Stock value (price × stock) and units per category, active products only (current branch scope). */
     public static function stockByCategory(): array
     {
-        [$join, $params] = self::stockJoin();
+        [$join, $params] = Stock::scopeJoin();
         $stmt = db()->prepare(
             "SELECT c.name, COUNT(p.id) AS products, COALESCE(SUM(COALESCE(bs.qty, 0)), 0) AS units,
                     COALESCE(SUM(p.price * COALESCE(bs.qty, 0)), 0) AS value
@@ -244,7 +233,7 @@ final class Reports
     /** Active products at or below their low-stock level in the current branch scope, emptiest first. */
     public static function lowStock(int $limit = 20): array
     {
-        [$join, $params] = self::stockJoin();
+        [$join, $params] = Stock::scopeJoin();
         $stmt = db()->prepare(
             "SELECT p.id, p.code, p.name, COALESCE(bs.qty, 0) AS stock, p.reorder_level, c.name AS category
                FROM products p JOIN categories c ON c.id = p.category_id

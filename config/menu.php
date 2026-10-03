@@ -32,6 +32,13 @@ return [
         'url'        => 'pages/customers.php',
         'permission' => 'customers.view',
     ],
+    // Lists tab (master_data.manage) or, without it, the Suppliers tab (see pages/master-data.php).
+    'master-data' => [
+        'label'      => 'Master Data',
+        'icon'       => 'layers',
+        'url'        => 'pages/master-data.php',
+        'permission' => ['master_data.manage', 'suppliers.view'],
+    ],
     'reports' => [
         'label'      => 'Reports',
         'icon'       => 'chart',

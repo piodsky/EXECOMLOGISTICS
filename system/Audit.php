@@ -11,21 +11,23 @@ declare(strict_types=1);
 final class Audit
 {
     /** Company-wide master data: logged without a branch (only access_all users see these rows). */
-    private const GLOBAL_MODULES = ['roles', 'branches', 'settings', 'products'];
+    private const GLOBAL_MODULES = ['roles', 'branches', 'settings', 'products', 'master_data', 'suppliers'];
 
     /** Keys never written to the log. */
     private const SECRET_KEYS = ['password', 'password_hash', 'password_confirm', 'current_password', '_csrf', 'csrf', 'token'];
 
     /** Module => label for the filter. */
     public const MODULES = [
-        'users'     => 'Users',
-        'roles'     => 'Roles',
-        'branches'  => 'Branches',
-        'settings'  => 'Settings',
-        'sales'     => 'Sales',
-        'inventory' => 'Inventory',
-        'products'  => 'Products',
-        'customers' => 'Customers',
+        'users'       => 'Users',
+        'roles'       => 'Roles',
+        'branches'    => 'Branches',
+        'settings'    => 'Settings',
+        'sales'       => 'Sales',
+        'inventory'   => 'Inventory',
+        'products'    => 'Products',
+        'customers'   => 'Customers',
+        'master_data' => 'Master Data',
+        'suppliers'   => 'Suppliers',
     ];
 
     /**

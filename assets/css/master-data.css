@@ -1,0 +1,54 @@
+/* =====================================================================
+   Master Data (Phase 6): list tabs, generic list table, add/edit dialog, suppliers
+   Tabs reuse .settings-tabs / .settings-tab from settings.css.
+   ===================================================================== */
+
+.md-tabs .settings-tab { padding: 10px 12px; }
+
+.md-name { display: inline-flex; align-items: center; gap: 10px; }
+.md-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--primary);
+}
+.md-icon .icon { width: 18px; height: 18px; }
+.md-code,
+.supplier-code {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* Add / edit dialog */
+.md-icons { margin: 0; padding: 0; border: 0; }
+.md-icons__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.md-icons__grid label { cursor: pointer; }
+.md-icons__grid input { position: absolute; opacity: 0; pointer-events: none; }
+.md-icons__grid label > span {
+    display: grid;
+    place-items: center;
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-muted);
+}
+.md-icons__grid label > span .icon { width: 20px; height: 20px; }
+.md-icons__grid label:hover > span { border-color: var(--accent); }
+.md-icons__grid input:checked + span { border-color: var(--primary); background: var(--primary); color: #fff; }
+.md-icons__grid input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Tablets: drop the optional columns (sort order, supplier TIN / terms) */
+@media (max-width: 1200px) {
+    .md-table .col-opt,
+    .suppliers-table .col-opt { display: none; }
+}

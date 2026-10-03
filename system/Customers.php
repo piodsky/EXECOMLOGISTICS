@@ -27,17 +27,22 @@ final class Customers
         return $stmt->fetchAll();
     }
 
-    /** Customer visible in the current scope, or null. */
+    /** Customer visible in the current scope (with 'contacts'), or null. */
     public static function find(int $id): ?array
     {
         [$visible, $params] = self::visible();
         $stmt = db()->prepare(
-            "SELECT c.*, b.code AS branch_code, b.name AS branch_name
+            "SELECT c.*, b.code AS branch_code, b.name AS branch_name, ct.name AS type_name
                FROM customers c JOIN branches b ON b.id = c.branch_id
+               LEFT JOIN customer_types ct ON ct.id = c.customer_type_id
               WHERE c.id = ? AND {$visible}"
         );
         $stmt->execute([$id, ...$params]);
-        return $stmt->fetch() ?: null;
+        $customer = $stmt->fetch() ?: null;
+        if ($customer !== null) {
+            $customer['contacts'] = Contacts::forOwner('customers', $id);
+        }
+        return $customer;
     }
 
     // ------------------------------------------------------------------
@@ -46,7 +51,8 @@ final class Customers
 
     /**
      * Validate raw input (form or JSON).
-     * @return array{0: array{name:string, phone:?string, email:?string, address:?string}, 1: array<string,string>}
+     * Customer type and TIN are optional (the POS quick-add sends neither).
+     * @return array{0: array{name:string, phone:?string, email:?string, address:?string, customer_type_id:?int, tin:?string}, 1: array<string,string>}
      */
     public static function check(array $input, ?int $id = null): array
     {
@@ -54,7 +60,25 @@ final class Customers
         $phone   = input_string($input, 'phone', 30);
         $email   = input_string($input, 'email', 120);
         $address = input_string($input, 'address', 255);
+        $tin     = input_string($input, 'tin', 20);
+        $typeId  = input_int($input, 'customer_type_id', 1);
         $errors  = [];
+
+        $rawType = $input['customer_type_id'] ?? '';
+        if ((is_string($rawType) && trim($rawType) !== '') || is_int($rawType)) {
+            $currentType = null;
+            if ($id !== null) {
+                $stmt = db()->prepare('SELECT customer_type_id FROM customers WHERE id = ?');
+                $stmt->execute([$id]);
+                $currentType = ($v = $stmt->fetchColumn()) !== false && $v !== null ? (int) $v : null;
+            }
+            if (!MasterData::isChoice('customer-types', $typeId, $currentType)) {
+                $errors['customer_type_id'] = 'Choose a customer type from the list.';
+            }
+        }
+        if ($tin !== '' && !preg_match('/^[0-9][0-9-]{8,19}$/', $tin)) {
+            $errors['tin'] = 'Use digits and dashes (e.g. 123-456-789-000).';
+        }
 
         if (mb_strlen($name) < 2) {
             $errors['name'] = 'Enter the customer name (at least 2 characters).';
@@ -78,6 +102,8 @@ final class Customers
             'phone'   => $phone !== '' ? $phone : null,
             'email'   => $email !== '' ? $email : null,
             'address' => $address !== '' ? $address : null,
+            'customer_type_id' => $typeId,
+            'tin'     => $tin !== '' ? $tin : null,
         ], $errors];
     }
 
@@ -107,7 +133,7 @@ final class Customers
     // Listing
     // ------------------------------------------------------------------
 
-    /** @param array{q:string, status:string} $f */
+    /** @param array{q:string, status:string, type?:?int} $f */
     public static function count(array $f): int
     {
         [$where, $params] = self::where($f);
@@ -121,12 +147,13 @@ final class Customers
         [$where, $params] = self::where($f);
         [$salesScope, $salesParams] = Branch::scopeSql('sa.branch_id');
         $stmt = db()->prepare(
-            "SELECT c.id, c.name, c.phone, c.email, c.is_active, c.created_at, c.branch_id,
-                    b.code AS branch_code, b.name AS branch_name,
+            "SELECT c.id, c.name, c.phone, c.email, c.tin, c.is_active, c.created_at, c.branch_id,
+                    b.code AS branch_code, b.name AS branch_name, ct.name AS type_name,
                     COALESCE(s.visits, 0) AS visits, COALESCE(s.spent, 0) AS spent, s.last_visit,
                     (SELECT COUNT(*) FROM sales sx WHERE sx.customer_id = c.id) AS all_sales
                FROM customers c
                JOIN branches b ON b.id = c.branch_id
+               LEFT JOIN customer_types ct ON ct.id = c.customer_type_id
                LEFT JOIN (
                     SELECT sa.customer_id, COUNT(*) AS visits, SUM(sa.total) AS spent, MAX(sa.created_at) AS last_visit
                       FROM sales sa WHERE sa.status = ? AND sa.customer_id IS NOT NULL AND {$salesScope}
@@ -145,9 +172,13 @@ final class Customers
         [$visible, $params] = self::visible();
         $where = [$visible];
         if ($f['q'] !== '') {
-            $where[] = '(c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)';
+            $where[] = '(c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR c.tin LIKE ?)';
             $like = like_pattern($f['q']);
-            array_push($params, $like, $like, $like);
+            array_push($params, $like, $like, $like, $like);
+        }
+        if (($f['type'] ?? null) !== null) {
+            $where[]  = 'c.customer_type_id = ?';
+            $params[] = $f['type'];
         }
         $where[] = match ($f['status']) {
             'active'   => 'c.is_active = 1',
@@ -196,18 +227,29 @@ final class Customers
         }
     }
 
-    /** New customer at the current branch (home branch + visibility link). */
-    public static function create(array $data): int
+    private const AUDIT_FIELDS = ['name', 'phone', 'email', 'address', 'customer_type_id', 'tin'];
+
+    /**
+     * New customer at the current branch (home branch + visibility link).
+     * @param list<array> $contacts from Contacts::parse()
+     */
+    public static function create(array $data, array $contacts = []): int
     {
         self::requirePermission('customers.edit', 'You do not have permission to add customers.');
         $branchId = Branch::forWrite();
+        $data += ['customer_type_id' => null, 'tin' => null];
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('INSERT INTO customers (name, phone, email, address, branch_id) VALUES (?, ?, ?, ?, ?)')
-                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $branchId]);
+            $pdo->prepare('INSERT INTO customers (name, phone, email, address, customer_type_id, tin, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $data['customer_type_id'], $data['tin'], $branchId]);
             $id = (int) $pdo->lastInsertId();
             $pdo->prepare('INSERT INTO customer_branches (customer_id, branch_id) VALUES (?, ?)')->execute([$id, $branchId]);
+            if ($contacts) {
+                Contacts::replace('customers', $id, $contacts);
+            }
+            Audit::record('customers', 'create', 'customer', $id, $data['name'], null,
+                array_intersect_key($data, array_flip(self::AUDIT_FIELDS)) + ['contacts' => array_column($contacts, 'name')], $branchId);
             $pdo->commit();
             return $id;
         } catch (Throwable $e) {
@@ -218,12 +260,33 @@ final class Customers
         }
     }
 
-    public static function update(int $id, array $data): void
+    /** @param list<array>|null $contacts from Contacts::parse() (replaces the saved ones); null keeps them */
+    public static function update(int $id, array $data, ?array $contacts = null): void
     {
         self::requirePermission('customers.edit', 'You do not have permission to edit customers.');
-        self::find($id) ?? throw new HttpException(404, 'Customer not found.');
-        db()->prepare('UPDATE customers SET name = ?, phone = ?, email = ?, address = ? WHERE id = ?')
-            ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $id]);
+        $before = self::find($id) ?? throw new HttpException(404, 'Customer not found.');
+        $pdo = db();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE customers SET name = ?, phone = ?, email = ?, address = ?, customer_type_id = ?, tin = ? WHERE id = ?')
+                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $data['customer_type_id'], $data['tin'], $id]);
+            if ($contacts !== null) {
+                Contacts::replace('customers', $id, $contacts);
+            }
+            [$old, $new] = Audit::diff(
+                array_intersect_key($before, array_flip(self::AUDIT_FIELDS)) + ['contacts' => array_column($before['contacts'], 'name')],
+                array_intersect_key($data, array_flip(self::AUDIT_FIELDS)) + ['contacts' => array_column($contacts ?? $before['contacts'], 'name')]
+            );
+            if ($new) {
+                Audit::record('customers', 'update', 'customer', $id, $data['name'], $old, $new);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public static function toggleActive(int $id): array

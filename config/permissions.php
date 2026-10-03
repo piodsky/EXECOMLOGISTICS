@@ -1,7 +1,7 @@
 <?php
 /**
  * Permission registry: key => [module, label].
- * Must match the `permissions` table seed (database.sql / migrations/003). Roles get permissions
+ * Must match the `permissions` table seed (database.sql / migrations/003, 004). Roles get permissions
  * through `role_permissions`; a role with roles.is_super = 1 holds every key (also future ones).
  * Check with Auth::can('key'); an unknown key is a programming error.
  */
@@ -17,6 +17,10 @@ return [
     'inventory.view'      => ['Inventory', 'View products and stock (read-only)'],
     'inventory.adjust'    => ['Inventory', 'Adjust stock'],
     'products.manage'     => ['Inventory', 'Add, edit, deactivate and delete products'],
+    'products.cost'       => ['Inventory', 'See and edit unit cost'],
+    'master_data.manage'  => ['Master Data', 'Manage categories, brands, models, units, customer types and service lists'],
+    'suppliers.view'      => ['Suppliers', 'View suppliers'],
+    'suppliers.manage'    => ['Suppliers', 'Add, edit and deactivate suppliers'],
     'reports.view'        => ['Reports',   'View reports and export CSV'],
     'users.view'          => ['Users',     'View users'],
     'users.manage'        => ['Users',     'Add and edit users, reset passwords, activate/deactivate'],

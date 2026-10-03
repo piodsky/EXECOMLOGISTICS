@@ -1049,6 +1049,16 @@ textarea.form-input { resize: vertical; min-height: 84px; }
 }
 .branch-chip--switch:hover .branch-switch__caret { color: var(--on-dark); }
 
+/* ---------- Phase 6: contact person rows (supplier + customer forms), optional list columns ---------- */
+.contact-rows { display: grid; gap: 12px; }
+.contact-row { margin: 0; padding: 12px 14px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.contact-row legend { padding: 0 6px; }
+.contact-grid { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 12px; }
+.form-label--sm { font-size: 13px; }
+.cell-sub { display: block; color: var(--text-muted); font-size: 12px; }
+.form-stack { display: grid; gap: 16px; min-width: 0; }
+.form-section-title { margin: 22px 0 12px; font-size: 15px; font-weight: 700; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 1360px) {
     .topbar__title { display: none; }
@@ -1057,6 +1067,10 @@ textarea.form-input { resize: vertical; min-height: 84px; }
 @media (max-width: 1280px) {
     .user-menu__name { display: none; }
     .user-menu__trigger { padding-right: 10px; }
+}
+@media (max-width: 1200px) {
+    .inventory-table .col-opt,
+    .customers-table .col-opt { display: none; }
 }
 @media (max-width: 1180px) {
     .btn-logout { padding: 0 14px; }

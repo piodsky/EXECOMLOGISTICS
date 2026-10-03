@@ -82,6 +82,21 @@ final class Stock
         return ['location_qty' => $new, 'stock' => $total];
     }
 
+    /**
+     * [JOIN, params] adding `bs.qty` = stock of product `p` in the current branch scope
+     * (NULL when there is none; use COALESCE(bs.qty, 0)). Shared by Products and Reports.
+     * @return array{0:string, 1:list<int>}
+     */
+    public static function scopeJoin(): array
+    {
+        [$scope, $params] = Branch::scopeSql('sb.branch_id');
+        return [
+            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
+                         WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",
+            $params,
+        ];
+    }
+
     private static function assertTransaction(): void
     {
         if (!db()->inTransaction()) {

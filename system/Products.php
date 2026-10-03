@@ -11,6 +11,7 @@ declare(strict_types=1);
 final class Products
 {
     public const MAX_STOCK = 99999;
+    public const MAX_WARRANTY_DAYS = 3650;
 
     /** Adjustment reasons: key => [label, allowed direction] */
     public const REASONS = [
@@ -29,58 +30,69 @@ final class Products
         return $stmt->fetchAll();
     }
 
-    /**
-     * Join adding `bs.qty` = stock in the current branch scope (NULL when none; use COALESCE).
-     * @return array{0:string, 1:list<int>}
-     */
-    private static function stockJoin(): array
-    {
-        [$scope, $params] = Branch::scopeSql('sb.branch_id');
-        return [
-            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
-                         WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",
-            $params,
-        ];
-    }
-
     /** Product with `stock` = stock in the current scope and `total_stock` = company total. */
     public static function find(int $id): ?array
     {
-        [$join, $params] = self::stockJoin();
+        [$join, $params] = Stock::scopeJoin();
         $stmt = db()->prepare(
             "SELECT p.*, p.stock AS total_stock, COALESCE(bs.qty, 0) AS stock, c.name AS category_name,
+                    br.name AS brand_name, pm.name AS model_name, un.code AS unit_code, un.name AS unit_name,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
                FROM products p JOIN categories c ON c.id = p.category_id
+               LEFT JOIN brands br ON br.id = p.brand_id
+               LEFT JOIN product_models pm ON pm.id = p.model_id
+               LEFT JOIN units un ON un.id = p.unit_id
                {$join}
               WHERE p.id = ?"
         );
         $stmt->execute([...$params, $id]);
-        return $stmt->fetch() ?: null;
+        $product = $stmt->fetch() ?: null;
+        if ($product !== null && !Auth::can('products.cost')) {
+            unset($product['unit_cost']); // never leaves the server without products.cost
+        }
+        return $product;
+    }
+
+    /** Id of the default unit (PC = Piece) while it is active, else null. */
+    public static function defaultUnitId(): ?int
+    {
+        $stmt = db()->prepare('SELECT id FROM units WHERE code = ? AND is_active = ?');
+        $stmt->execute(['PC', 1]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (int) $id;
     }
 
     // ------------------------------------------------------------------
     // Listing
     // ------------------------------------------------------------------
 
-    /** @param array{q:string, category:?int, status:string} $f */
+    /** Brand / model / unit joins used by the list (aliases br, pm, un). */
+    private const LIST_JOINS = 'LEFT JOIN brands br ON br.id = p.brand_id
+               LEFT JOIN product_models pm ON pm.id = p.model_id
+               LEFT JOIN units un ON un.id = p.unit_id';
+
+    /** @param array{q:string, category:?int, brand?:?int, status:string} $f */
     public static function count(array $f): int
     {
-        [$join, $joinParams] = self::stockJoin();
+        [$join, $joinParams] = Stock::scopeJoin();
         [$where, $params] = self::where($f);
-        $stmt = db()->prepare("SELECT COUNT(*) FROM products p {$join} WHERE {$where}");
+        $stmt = db()->prepare("SELECT COUNT(*) FROM products p " . self::LIST_JOINS . " {$join} WHERE {$where}");
         $stmt->execute([...$joinParams, ...$params]);
         return (int) $stmt->fetchColumn();
     }
 
     public static function search(array $f, int $limit, int $offset): array
     {
-        [$join, $joinParams] = self::stockJoin();
+        [$join, $joinParams] = Stock::scopeJoin();
         [$where, $params] = self::where($f);
+        $cost = Auth::can('products.cost') ? 'p.unit_cost, ' : ''; // cost only with products.cost
         $stmt = db()->prepare(
-            "SELECT p.id, p.code, p.barcode, p.name, p.price, COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock,
+            "SELECT p.id, p.code, p.barcode, p.name, p.price, {$cost}COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock,
                     p.reorder_level, p.image, p.is_active, c.name AS category_name,
+                    br.name AS brand_name, pm.name AS model_name, un.code AS unit_code, un.name AS unit_name,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
                FROM products p JOIN categories c ON c.id = p.category_id
+               " . self::LIST_JOINS . "
                {$join}
               WHERE {$where}
               ORDER BY p.is_active DESC, c.sort_order, p.code
@@ -95,13 +107,17 @@ final class Products
         $where  = ['1 = 1'];
         $params = [];
         if ($f['q'] !== '') {
-            $where[] = '(p.name LIKE ? OR p.code LIKE ? OR p.barcode LIKE ?)';
+            $where[] = '(p.name LIKE ? OR p.code LIKE ? OR p.barcode LIKE ? OR br.name LIKE ? OR pm.name LIKE ?)';
             $like = like_pattern($f['q']);
-            array_push($params, $like, $like, $like);
+            array_push($params, $like, $like, $like, $like, $like);
         }
         if ($f['category'] !== null) {
             $where[]  = 'p.category_id = ?';
             $params[] = $f['category'];
+        }
+        if (($f['brand'] ?? null) !== null) {
+            $where[]  = 'p.brand_id = ?';
+            $params[] = $f['brand'];
         }
         $where[] = match ($f['status']) {
             'active'   => 'p.is_active = 1',
@@ -116,7 +132,7 @@ final class Products
     /** Active products, stock value, low and out of stock — in the current branch scope. */
     public static function summary(): array
     {
-        [$join, $params] = self::stockJoin();
+        [$join, $params] = Stock::scopeJoin();
         $stmt = db()->prepare(
             "SELECT COUNT(*) AS items,
                     COALESCE(SUM(p.price * COALESCE(bs.qty, 0)), 0) AS stock_value,
@@ -149,12 +165,53 @@ final class Products
             'price'         => input_decimal($in, 'price', 0, 999999.99),
             'reorder_level' => input_int($in, 'reorder_level', 0, 9999),
             'is_active'     => isset($in['is_active']) ? 1 : 0,
+            'brand_id'      => input_int($in, 'brand_id', 1),
+            'model_id'      => input_int($in, 'model_id', 1),
+            'unit_id'       => input_int($in, 'unit_id', 1),
+            'track_serial'  => isset($in['track_serial']) ? 1 : 0,
+            'specs'         => input_string($in, 'specs', 500),
         ];
 
-        $categoryIds = array_map('intval', array_column(self::categories(), 'id'));
-        if ($data['category_id'] === null || !in_array($data['category_id'], $categoryIds, true)) {
+        // Current master data values stay valid even after they were deactivated.
+        $current = ['category_id' => null, 'brand_id' => null, 'model_id' => null, 'unit_id' => null];
+        if ($id !== null) {
+            $stmt = db()->prepare('SELECT category_id, brand_id, model_id, unit_id FROM products WHERE id = ?');
+            $stmt->execute([$id]);
+            $current = array_map(static fn ($v) => $v === null ? null : (int) $v, $stmt->fetch() ?: $current);
+        }
+        if (!MasterData::isChoice('categories', $data['category_id'], $current['category_id'])) {
             $errors['category_id'] = 'Choose a category.';
         }
+        if (is_string($in['brand_id'] ?? null) && trim($in['brand_id']) !== '' && !MasterData::isChoice('brands', $data['brand_id'], $current['brand_id'])) {
+            $errors['brand_id'] = 'Choose a brand from the list.';
+        }
+        if ($data['model_id'] !== null || (is_string($in['model_id'] ?? null) && trim($in['model_id']) !== '')) {
+            $models = MasterData::options('models', $current['model_id']);
+            if ($data['brand_id'] === null) {
+                $errors['model_id'] = 'Choose the brand first.';
+            } elseif ($data['model_id'] === null || !isset($models[$data['model_id']])
+                || (int) $models[$data['model_id']]['brand_id'] !== $data['brand_id']) {
+                $errors['model_id'] = 'Choose a model of the selected brand.';
+            }
+        }
+        if (!MasterData::isChoice('units', $data['unit_id'], $current['unit_id'])) {
+            $errors['unit_id'] = 'Choose a unit.';
+        }
+        $raw = $in['warranty_days'] ?? '';
+        $data['warranty_days'] = is_string($raw) && trim($raw) === '' ? 0 : input_int($in, 'warranty_days', 0, self::MAX_WARRANTY_DAYS);
+        if ($data['warranty_days'] === null) {
+            $errors['warranty_days'] = 'Enter the warranty in days, 0 to ' . number_format(self::MAX_WARRANTY_DAYS) . '.';
+        }
+        // Unit cost: only with products.cost; otherwise null = keep the stored value (0 for a new product).
+        $data['unit_cost'] = null;
+        if (Auth::can('products.cost')) {
+            $raw = $in['unit_cost'] ?? '';
+            $data['unit_cost'] = is_string($raw) && trim($raw) === '' ? 0.0 : input_decimal($in, 'unit_cost', 0, 999999.99);
+            if ($data['unit_cost'] === null) {
+                $errors['unit_cost'] = 'Enter a cost from 0.00 to 999,999.99.';
+            }
+        }
+        $data['specs'] = $data['specs'] !== '' ? $data['specs'] : null;
         if (!preg_match('/^[A-Z0-9][A-Z0-9-]{1,19}$/', $data['code'])) {
             $errors['code'] = 'Use 2–20 letters, numbers or dashes (e.g. ITM-0013).';
         } elseif (self::taken('code', $data['code'], $id)) {
@@ -212,7 +269,8 @@ final class Products
     private static function auditFields(array $p): array
     {
         return array_intersect_key($p, array_flip(
-            ['category_id', 'code', 'barcode', 'name', 'description', 'price', 'reorder_level', 'image', 'is_active']
+            ['category_id', 'code', 'barcode', 'name', 'description', 'price', 'reorder_level', 'image', 'is_active',
+             'brand_id', 'model_id', 'unit_id', 'unit_cost', 'track_serial', 'warranty_days', 'specs']
         ));
     }
 
@@ -223,15 +281,22 @@ final class Products
     public static function create(array $d, ?string $image, int $userId): int
     {
         self::requireManage();
+        if (!Auth::can('products.cost')) {
+            $d['unit_cost'] = null; // re-checked here, not only in validate()
+        }
+        $d['unit_cost'] ??= 0.0; // no products.cost: a new product starts at cost 0
         $pdo = db();
         $pdo->beginTransaction();
         try {
             $pdo->prepare(
-                'INSERT INTO products (category_id, code, barcode, name, description, price, stock, reorder_level, image, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO products (category_id, code, barcode, name, description, price, stock, reorder_level, image, is_active,
+                                       brand_id, model_id, unit_id, unit_cost, track_serial, warranty_days, specs)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )->execute([
                 $d['category_id'], $d['code'], $d['barcode'], $d['name'], $d['description'],
                 number_format($d['price'], 2, '.', ''), 0, $d['reorder_level'], $image, $d['is_active'],
+                $d['brand_id'], $d['model_id'], $d['unit_id'], number_format((float) ($d['unit_cost'] ?? 0), 2, '.', ''),
+                $d['track_serial'], $d['warranty_days'], $d['specs'],
             ]);
             $id = (int) $pdo->lastInsertId();
 
@@ -255,18 +320,30 @@ final class Products
     {
         self::requireManage();
         $before = self::find($id) ?? throw new HttpException(404, 'Product not found.');
+        if (!Auth::can('products.cost')) {
+            $d['unit_cost'] = null; // re-checked here, not only in validate()
+        }
         $pdo = db();
         $pdo->beginTransaction();
         try {
+            // unit_cost === null (no products.cost): the stored cost is kept.
+            $cost = $d['unit_cost'] !== null ? number_format((float) $d['unit_cost'], 2, '.', '') : null;
             $pdo->prepare(
                 'UPDATE products SET category_id = ?, code = ?, barcode = ?, name = ?, description = ?, price = ?,
-                                     reorder_level = ?, image = ?, is_active = ?
+                                     reorder_level = ?, image = ?, is_active = ?, brand_id = ?, model_id = ?, unit_id = ?,
+                                     unit_cost = COALESCE(?, unit_cost), track_serial = ?, warranty_days = ?, specs = ?
                   WHERE id = ?'
             )->execute([
                 $d['category_id'], $d['code'], $d['barcode'], $d['name'], $d['description'],
-                number_format($d['price'], 2, '.', ''), $d['reorder_level'], $image, $d['is_active'], $id,
+                number_format($d['price'], 2, '.', ''), $d['reorder_level'], $image, $d['is_active'],
+                $d['brand_id'], $d['model_id'], $d['unit_id'], $cost, $d['track_serial'], $d['warranty_days'], $d['specs'], $id,
             ]);
             $after = ['price' => number_format($d['price'], 2, '.', ''), 'image' => $image] + $d;
+            if ($cost === null) {
+                unset($after['unit_cost']); // unchanged (and $before has no cost without products.cost)
+            } else {
+                $after['unit_cost'] = $cost;
+            }
             [$old, $new] = Audit::diff(self::auditFields($before), self::auditFields($after));
             if ($new) {
                 Audit::record('products', 'update', 'product', $id, $d['code'], $old, $new);

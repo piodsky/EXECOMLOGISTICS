@@ -27,9 +27,11 @@ if (is_post()) {
         abort(403, 'You do not have permission to edit customers.');
     }
     [$data, $errors] = Customers::check($_POST, $id);
+    [$contacts, $contactErrors] = Contacts::parse($_POST);
+    $errors += $contactErrors;
 
     if ($errors) {
-        flash_old(array_filter($_POST, 'is_string'));
+        flash_old(array_filter($_POST, 'is_string') + Contacts::flatOld($_POST));
         flash_errors($errors);
         flash('error', 'Please fix the highlighted fields.');
         redirect('pages/' . $self);
@@ -37,14 +39,14 @@ if (is_post()) {
 
     try {
         if ($customer) {
-            Customers::update($id, $data);
+            Customers::update($id, $data, $contacts);
             flash('success', "{$data['name']} was updated.");
         } else {
-            Customers::create($data); // added at the current branch
+            Customers::create($data, $contacts); // added at the current branch
             flash('success', "{$data['name']} was added.");
         }
     } catch (HttpException $e) {
-        flash_old(array_filter($_POST, 'is_string'));
+        flash_old(array_filter($_POST, 'is_string') + Contacts::flatOld($_POST));
         flash('error', $e->getMessage());
         redirect('pages/' . $self);
     }
@@ -58,6 +60,8 @@ $stats  = $customer ? Customers::stats($id) : null;
 $recent = $customer ? Customers::recentSales($id, 10) : [];
 $val    = static fn (string $key): string => old($key, (string) ($customer[$key] ?? ''));
 $paymentLabels = Sales::PAYMENT_TYPES;
+$types       = MasterData::options('customer-types', isset($customer['customer_type_id']) ? (int) $customer['customer_type_id'] : null);
+$contactRows = $canEdit ? Contacts::formRows($customer['contacts'] ?? []) : ($customer['contacts'] ?? []);
 
 require ROOT_PATH . '/includes/header.php';
 ?>
@@ -104,7 +108,29 @@ require ROOT_PATH . '/includes/header.php';
                 <input class="form-input" name="address" maxlength="255" value="<?= e($val('address')) ?>"<?= invalid('address') ?><?= $ro ?>>
                 <?= field_error('address') ?>
             </label>
+            <label class="form-field">
+                <span class="form-label">Customer type</span>
+                <select class="form-input" name="customer_type_id"<?= invalid('customer_type_id') ?><?= $ro ?>>
+                    <option value="">Not set</option>
+                    <?php foreach ($types as $t): ?>
+                        <option value="<?= (int) $t['id'] ?>"<?= $val('customer_type_id') === (string) $t['id'] ? ' selected' : '' ?>><?= e($t['name']) ?><?= (int) $t['is_active'] === 1 ? '' : ' (inactive)' ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <?= field_error('customer_type_id') ?>
+            </label>
+            <label class="form-field">
+                <span class="form-label">TIN</span>
+                <input class="form-input form-input--mono" name="tin" maxlength="20" placeholder="000-000-000-000"
+                       value="<?= e($val('tin')) ?>"<?= invalid('tin') ?><?= $ro ?>>
+                <?= field_error('tin') ?>
+            </label>
         </div>
+
+        <h3 class="form-section-title">Contact Persons</h3>
+        <?php require ROOT_PATH . '/includes/contact-rows.php'; ?>
+        <?php if ($canEdit): ?>
+            <p class="form-hint">For companies, schools and government offices. Up to <?= Contacts::MAX ?>; empty rows are ignored.</p>
+        <?php endif; ?>
 
         <div class="form-actions form-actions--inline">
             <a class="btn btn--light" href="<?= e(url('pages/' . $returnTo)) ?>"><?= $canEdit ? 'Cancel' : 'Back' ?></a>

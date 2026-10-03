@@ -28,7 +28,34 @@ Read this first; open only the files a task needs.
       Branch master data, audit log. Migration `migrations/003_branches_permissions.sql`. Plan for later phases
       (master data, warehouse/receiving/serials, branch transfers, POS pricing, job orders, dashboards) is in the
       "EXECOM Migration Blueprint" artifact (v2, 27 sections).
+- [x] Phase 6 (= v2 phase 3): master data (categories, brands, models, units, customer types, service lists),
+      suppliers + contacts, product brand/model/unit/cost/serial/warranty/specs, customer type/TIN/contacts.
+      Migration `migrations/004_master_data.sql`. Payment methods / discount types wait for POS pricing (v2 phase 6).
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## Master data & suppliers (Phase 6)
+- Permissions: `master_data.manage` (super admin only), `suppliers.view` / `suppliers.manage` / `products.cost`
+  (also branch_admin). Menu "Master Data" (icon `layers`) = any of master_data.manage / suppliers.view; a
+  suppliers-only user lands on `suppliers.php`. Audit modules `master_data` + `suppliers` are global (branch NULL).
+- Simple lists: registry `config/master-data.php` (table/list names are code literals), class `MasterData`, one page
+  `pages/master-data.php?list=<key>` (dialog PRG form, tabs `includes/master-data-nav.php`). Generic lists live in
+  `lookups` (device_type, job_type, service_category, warranty_type). Names unique case-insensitively (models: per
+  brand); delete only when unused (`MasterData::USAGE`), else 409 "Deactivate instead"; a used model's brand is locked
+  (also a composite FK). Inactive entries are only offered as a record's current value (`options()/isChoice()`).
+  Products in a deactivated category are hidden from the POS and refused by `Sales::complete()`.
+- Suppliers: `Suppliers` (code auto `SUP-0001`, `deleteBlocker()` gets receiving checks later), `pages/suppliers.php`
+  + `supplier-form.php` (read-only without suppliers.manage).
+- Contacts (`Contacts`, suppliers + customers): max 5, form keys `contacts[i][name|position|phone|email]`, flat old
+  keys `contact_{i}_{field}`, `replace()` only inside the owner's transaction; `Customers::update(..., null)` keeps
+  them. Audit stores contact names only. Shared rows template `includes/contact-rows.php`.
+- Products: `price` = suggested price (label "Suggested price"); unit required (PC default); model must belong to
+  the brand; `unit_cost` only with `products.cost`: never rendered/exported without it (find() unsets it, audit viewer
+  hides it), ignored on save (update keeps the stored value, create = 0); warranty_days 0–3650; track_serial; specs.
+- Dependent selects in app.js: `select[data-filter-by]` + `option[data-parent]`.
+- Shared stock join: `Stock::scopeJoin()`. Users: grants to inactive branches are kept on save; update rechecks
+  role/branches (`assertAssignable`).
+- Deferred: linking an existing customer to another branch (needs a "link to this branch" action; the duplicate-phone
+  message still says "registered at another branch").
 
 ## Branches, roles & permissions (Phase 5)
 - Branches: MAR Maramag City (main, id 1, all pre-Phase-5 data), MLB, CDO, DAV, VAL. Address/contact/TIN are NULL until
@@ -176,7 +203,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - **Node.js is NOT installed on this PC.** Use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (123 checks incl. role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (174 checks incl. master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

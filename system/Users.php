@@ -241,18 +241,55 @@ final class Users
         }
     }
 
+    /**
+     * Set a user's extra branches to $branchIds (active branches). Grants to inactive branches are
+     * kept: the form can't show them, so leaving them out must not silently revoke them.
+     */
     private static function syncBranches(int $userId, array $branchIds): void
     {
         $pdo = db();
+        $activeOnly = 'branch_id IN (SELECT b.id FROM branches b WHERE b.is_active = 1)';
         if ($branchIds) {
             $in = implode(',', array_fill(0, count($branchIds), '?'));
-            $pdo->prepare("DELETE FROM user_branches WHERE user_id = ? AND branch_id NOT IN ({$in})")->execute([$userId, ...$branchIds]);
+            $pdo->prepare("DELETE FROM user_branches WHERE user_id = ? AND branch_id NOT IN ({$in}) AND {$activeOnly}")->execute([$userId, ...$branchIds]);
         } else {
-            $pdo->prepare('DELETE FROM user_branches WHERE user_id = ?')->execute([$userId]);
+            $pdo->prepare("DELETE FROM user_branches WHERE user_id = ? AND {$activeOnly}")->execute([$userId]);
         }
         $add = $pdo->prepare('INSERT IGNORE INTO user_branches (user_id, branch_id, granted_by) VALUES (?, ?, ?)');
         foreach ($branchIds as $branchId) {
             $add->execute([$userId, $branchId, Auth::id()]);
+        }
+    }
+
+    /** Extra branches of a user that are inactive right now (kept by syncBranches). @return list<int> */
+    private static function inactiveGrants(int $userId): array
+    {
+        $stmt = db()->prepare(
+            'SELECT ub.branch_id FROM user_branches ub JOIN branches b ON b.id = ub.branch_id
+              WHERE ub.user_id = ? AND b.is_active = 0'
+        );
+        $stmt->execute([$userId]);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Repeat validate()'s role / branch rules on save so no caller can skip them:
+     * a changed role must be assignable, a changed home branch must be one of yours,
+     * extra branches only from users with branches.access_all and only active branches.
+     */
+    private static function assertAssignable(array $data, ?array $current, int $selfId): void
+    {
+        $isSelf     = $current !== null && (int) $current['id'] === $selfId;
+        $sameRole   = $current !== null && $data['role'] === $current['role'];
+        $roleOk     = $sameRole
+            ? ($isSelf || Roles::assignableRole(['code' => $current['role'], 'is_super' => $current['is_super']]))
+            : (!$isSelf && Roles::canAssign($data['role']));
+        $sameBranch = $current !== null && (int) $data['branch_id'] === (int) $current['branch_id'];
+        $branchOk   = $sameBranch || in_array((int) $data['branch_id'], Branch::allowedIds(), true);
+        $extraOk    = $data['branches'] === null
+            || (Branch::canSeeAll() && !$isSelf && !array_diff($data['branches'], Branch::allowedIds()));
+        if (!$roleOk || !$branchOk || !$extraOk) {
+            throw new HttpException(403, 'You cannot give this user that role or branch.');
         }
     }
 
@@ -295,6 +332,7 @@ final class Users
         if ($blocker !== null) {
             throw new HttpException(403, $blocker);
         }
+        self::assertAssignable($data, $current, $selfId);
         $pdo = db();
         $pdo->beginTransaction();
         try {
@@ -314,7 +352,10 @@ final class Users
             ];
             $after = [
                 'username' => $data['username'], 'full_name' => $data['full_name'], 'role' => $data['role'],
-                'branch_id' => $data['branch_id'], 'extra_branches' => $data['branches'] ?? array_keys($current['extra_branches']),
+                'branch_id' => $data['branch_id'],
+                'extra_branches' => $data['branches'] !== null
+                    ? array_values(array_unique([...$data['branches'], ...self::inactiveGrants($id)]))
+                    : array_keys($current['extra_branches']),
             ];
             sort($before['extra_branches']);
             sort($after['extra_branches']);

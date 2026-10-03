@@ -56,11 +56,13 @@ $statuses = ['all' => 'All products', 'active' => 'Active', 'inactive' => 'Inact
 $filters = [
     'q'        => input_string($_GET, 'search', 100),
     'category' => input_int($_GET, 'category', 1),
+    'brand'    => input_int($_GET, 'brand', 1),
     'status'   => is_string($_GET['status'] ?? null) && array_key_exists($_GET['status'], $statuses) ? $_GET['status'] : 'all',
 ];
 $pgQuery = array_filter([
     'search'   => $filters['q'],
     'category' => $filters['category'],
+    'brand'    => $filters['brand'],
     'status'   => $filters['status'] !== 'all' ? $filters['status'] : null,
 ], static fn ($v) => $v !== '' && $v !== null);
 
@@ -68,6 +70,8 @@ $pg         = paginate(Products::count($filters), 15);
 $products   = Products::search($filters, $pg['per_page'], $pg['offset']);
 $summary    = Products::summary();
 $categories = Products::categories();
+$brands     = MasterData::options('brands', $filters['brand']);
+$canCost    = Auth::can('products.cost'); // unit cost column only with products.cost
 
 $canManage   = Auth::can('products.manage');
 $canAdjust   = Auth::can('inventory.adjust') && Branch::isConcrete(); // adjustments go to one branch
@@ -120,13 +124,19 @@ require ROOT_PATH . '/includes/header.php';
     <form class="toolbar" method="get" action="<?= e(url('pages/inventory.php')) ?>" role="search">
         <label class="toolbar__search">
             <?= icon('search') ?>
-            <input class="form-input" type="search" name="search" maxlength="100" placeholder="Name, code or barcode"
+            <input class="form-input" type="search" name="search" maxlength="100" placeholder="Name, code, barcode, brand or model"
                    value="<?= e($filters['q']) ?>" aria-label="Search products">
         </label>
         <select class="form-input" name="category" aria-label="Category">
             <option value="">All categories</option>
             <?php foreach ($categories as $cat): ?>
                 <option value="<?= (int) $cat['id'] ?>"<?= $filters['category'] === (int) $cat['id'] ? ' selected' : '' ?>><?= e($cat['name']) ?></option>
+            <?php endforeach; ?>
+        </select>
+        <select class="form-input" name="brand" aria-label="Brand">
+            <option value="">All brands</option>
+            <?php foreach ($brands as $b): ?>
+                <option value="<?= (int) $b['id'] ?>"<?= $filters['brand'] === (int) $b['id'] ? ' selected' : '' ?>><?= e($b['name']) ?></option>
             <?php endforeach; ?>
         </select>
         <select class="form-input" name="status" aria-label="Status">
@@ -141,13 +151,16 @@ require ROOT_PATH . '/includes/header.php';
     </form>
 
     <div class="table-wrap">
-        <table class="table table--list">
+        <table class="table table--list inventory-table" id="inventoryTable">
             <thead>
             <tr>
                 <th>Product</th>
                 <th>Category</th>
+                <th class="col-opt">Brand</th>
                 <th class="num">Price</th>
+                <?php if ($canCost): ?><th class="num col-opt">Unit cost</th><?php endif; ?>
                 <th class="num">Stock</th>
+                <th class="col-opt">Unit</th>
                 <th>Status</th>
                 <th class="actions-col">Actions</th>
             </tr>
@@ -178,11 +191,14 @@ require ROOT_PATH . '/includes/header.php';
                         </div>
                     </td>
                     <td><?= e($p['category_name']) ?></td>
+                    <td class="col-opt"><?= e($p['brand_name'] ?? '—') ?><?php if ($p['model_name']): ?><span class="cell-sub"><?= e($p['model_name']) ?></span><?php endif; ?></td>
                     <td class="num"><?= e(money($p['price'])) ?></td>
+                    <?php if ($canCost): ?><td class="num col-opt"><?= e(money($p['unit_cost'])) ?></td><?php endif; ?>
                     <td class="num">
                         <span class="badge <?= $stockClass ?>"><?= $stock === 0 ? 'Out' : $stock ?></span>
                         <small class="muted block">min <?= (int) $p['reorder_level'] ?></small>
                     </td>
+                    <td class="col-opt"><span title="<?= e($p['unit_name'] ?? '') ?>"><?= e($p['unit_code'] ?? '—') ?></span></td>
                     <td>
                         <span class="badge<?= $active ? ' badge--success' : '' ?>"><?= $active ? 'Active' : 'Inactive' ?></span>
                     </td>
@@ -227,7 +243,7 @@ require ROOT_PATH . '/includes/header.php';
                 </tr>
             <?php endforeach; ?>
             <?php if (!$products): ?>
-                <tr><td colspan="6" class="empty">No products found<?= $pgQuery ? ' for these filters' : '' ?>.</td></tr>
+                <tr><td colspan="<?= $canCost ? 9 : 8 ?>" class="empty">No products found<?= $pgQuery ? ' for these filters' : '' ?>.</td></tr>
             <?php endif; ?>
             </tbody>
         </table>

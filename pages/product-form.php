@@ -49,7 +49,10 @@ if (is_post()) {
     }
 
     if ($errors) {
-        flash_old(array_filter($_POST, 'is_string') + ['is_active' => isset($_POST['is_active']) ? '1' : '0']);
+        flash_old(array_filter($_POST, 'is_string') + [
+            'is_active'    => isset($_POST['is_active']) ? '1' : '0',
+            'track_serial' => isset($_POST['track_serial']) ? '1' : '0',
+        ]);
         flash_errors($errors);
         flash('error', 'Please fix the highlighted fields.');
         redirect('pages/' . $self);
@@ -79,11 +82,19 @@ if (is_post()) {
 // ---------------------------------------------------------------------
 // Form
 // ---------------------------------------------------------------------
-$categories = Products::categories();
 $movements  = $product ? Products::movements($id, 15) : [];
 $imageUrl   = ImageUpload::url($product['image'] ?? null);
 $val = static fn (string $key, mixed $default = ''): string => old($key, (string) ($product[$key] ?? $default));
 $isActive   = has_old() ? old('is_active') === '1' : (int) ($product['is_active'] ?? 1) === 1;
+$tracksSerial = has_old() ? old('track_serial') === '1' : (int) ($product['track_serial'] ?? 0) === 1;
+$canCost    = Auth::can('products.cost'); // unit cost is never rendered without it
+$cur        = static fn (string $key): ?int => isset($product[$key]) ? (int) $product[$key] : null;
+$categories = MasterData::options('categories', $cur('category_id'));
+$brands     = MasterData::options('brands', $cur('brand_id'));
+$models     = MasterData::options('models', $cur('model_id'));
+$units      = MasterData::options('units', $cur('unit_id'));
+$unitValue  = $val('unit_id', (string) ($product ? '' : (Products::defaultUnitId() ?? '')));
+$inactive   = static fn (array $o): string => (int) $o['is_active'] === 1 ? '' : ' (inactive)';
 $typeLabels = ['initial' => 'Opening stock', 'sale' => 'Sale', 'restock' => 'Restock', 'adjustment' => 'Adjustment', 'void' => 'Void'];
 
 $stockReturn = $self;
@@ -122,18 +133,29 @@ require ROOT_PATH . '/includes/header.php';
                 <select class="form-input" name="category_id" required<?= invalid('category_id') ?><?= $ro ?>>
                     <option value="">Choose…</option>
                     <?php foreach ($categories as $cat): ?>
-                        <option value="<?= (int) $cat['id'] ?>"<?= $val('category_id') === (string) $cat['id'] ? ' selected' : '' ?>><?= e($cat['name']) ?></option>
+                        <option value="<?= (int) $cat['id'] ?>"<?= $val('category_id') === (string) $cat['id'] ? ' selected' : '' ?>><?= e($cat['name'] . $inactive($cat)) ?></option>
                     <?php endforeach; ?>
                 </select>
                 <?= field_error('category_id') ?>
             </label>
 
             <label class="form-field">
-                <span class="form-label">Price (<?= e(config('app.currency')) ?>) *</span>
+                <span class="form-label">Suggested price (<?= e(config('app.currency')) ?>) *</span>
                 <input class="form-input" name="price" inputmode="decimal" maxlength="10" required placeholder="0.00"
                        value="<?= e($val('price')) ?>"<?= invalid('price') ?><?= $ro ?>>
                 <?= field_error('price') ?>
+                <p class="form-hint">The selling price the POS uses.</p>
             </label>
+
+            <?php if ($canCost): ?>
+                <label class="form-field">
+                    <span class="form-label">Unit cost (<?= e(config('app.currency')) ?>)</span>
+                    <input class="form-input" name="unit_cost" inputmode="decimal" maxlength="10" placeholder="0.00"
+                           value="<?= e($val('unit_cost', '0.00')) ?>"<?= invalid('unit_cost') ?><?= $ro ?>>
+                    <?= field_error('unit_cost') ?>
+                    <p class="form-hint">What one unit costs you. Not shown on the POS or receipts.</p>
+                </label>
+            <?php endif; ?>
 
             <label class="form-field">
                 <span class="form-label">Product code *</span>
@@ -149,10 +171,62 @@ require ROOT_PATH . '/includes/header.php';
                 <?= field_error('barcode') ?>
             </label>
 
+            <label class="form-field">
+                <span class="form-label">Brand</span>
+                <select class="form-input" name="brand_id" id="productBrand"<?= invalid('brand_id') ?><?= $ro ?>>
+                    <option value="">No brand</option>
+                    <?php foreach ($brands as $b): ?>
+                        <option value="<?= (int) $b['id'] ?>"<?= $val('brand_id') === (string) $b['id'] ? ' selected' : '' ?>><?= e($b['name'] . $inactive($b)) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <?= field_error('brand_id') ?>
+            </label>
+
+            <label class="form-field">
+                <span class="form-label">Model</span>
+                <select class="form-input" name="model_id" id="productModel" data-filter-by="productBrand"<?= $ro !== '' ? ' data-locked' : '' ?><?= invalid('model_id') ?><?= $ro ?>>
+                    <option value="">No model</option>
+                    <?php foreach ($models as $m): ?>
+                        <option value="<?= (int) $m['id'] ?>" data-parent="<?= (int) $m['brand_id'] ?>"<?= $val('model_id') === (string) $m['id'] ? ' selected' : '' ?>><?= e($m['name'] . $inactive($m)) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <?= field_error('model_id') ?>
+            </label>
+
+            <label class="form-field">
+                <span class="form-label">Unit *</span>
+                <select class="form-input" name="unit_id" id="productUnit" required<?= invalid('unit_id') ?><?= $ro ?>>
+                    <option value="">Choose…</option>
+                    <?php foreach ($units as $u): ?>
+                        <option value="<?= (int) $u['id'] ?>"<?= $unitValue === (string) $u['id'] ? ' selected' : '' ?>><?= e($u['code'] . ' · ' . $u['name'] . $inactive($u)) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <?= field_error('unit_id') ?>
+            </label>
+
+            <label class="form-field">
+                <span class="form-label">Warranty (days)</span>
+                <input class="form-input" type="number" name="warranty_days" min="0" max="<?= Products::MAX_WARRANTY_DAYS ?>" step="1"
+                       value="<?= e($val('warranty_days', '0')) ?>"<?= invalid('warranty_days') ?><?= $ro ?>>
+                <?= field_error('warranty_days') ?>
+                <p class="form-hint">0 = no warranty · 365 = 1 year</p>
+            </label>
+
             <label class="form-field form-field--full">
                 <span class="form-label">Description</span>
                 <textarea class="form-input" name="description" rows="3" maxlength="255"<?= invalid('description') ?><?= $ro ?>><?= e($val('description')) ?></textarea>
                 <?= field_error('description') ?>
+            </label>
+
+            <label class="form-field form-field--full">
+                <span class="form-label">Specifications</span>
+                <textarea class="form-input" name="specs" rows="3" maxlength="500" placeholder="e.g. Core i5, 8GB RAM, 512GB SSD, 14-inch FHD"<?= invalid('specs') ?><?= $ro ?>><?= e($val('specs')) ?></textarea>
+                <?= field_error('specs') ?>
+            </label>
+
+            <label class="check form-field--full">
+                <input type="checkbox" name="track_serial" value="1"<?= $tracksSerial ? ' checked' : '' ?><?= $ro ?>>
+                <span><strong>Track serial numbers</strong><small class="muted block">For items with a serial number per unit (laptops, printers, routers)</small></span>
             </label>
         </div>
     </section>

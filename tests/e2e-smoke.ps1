@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -191,6 +191,21 @@ function AddUser([string]$full, [string]$uname, [string]$role, [int]$homeBranch,
     Check ((Text '.alert--success span') -eq "$full can now sign in as $uname.") "admin adds $role $uname ($(Text '.alert span'))"
 }
 $script:pw = 'Mindanao#2026'
+# Query the TEST database only ($testDb); returns the rows joined by spaces.
+function Sql([string]$q) {
+    try {
+        $env:MYSQL_PWD = EnvValue 'DB_PASS' ''
+        $o = & 'C:\xampp\mysql\bin\mysql.exe' @mysqlArgs -N -B $testDb -e $q 2>&1
+    } finally { Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue }
+    return (($o | ForEach-Object { "$_" }) -join ' ').Trim()
+}
+# Master Data list: open the add dialog, run $fill (f = #mdForm), submit (PRG).
+function MdAdd([string]$list, [string]$fill, [string]$label) {
+    Nav "$Base/pages/master-data.php?list=$list"
+    [void](Eval "document.getElementById('mdAdd').click()")
+    Submit "const f = document.getElementById('mdForm'); $fill; f.requestSubmit()" $label
+}
+function MdId([string]$name) { Eval "document.querySelector('#mdTable tr[data-row=`"$name`"] [data-md-edit]')?.dataset.id || ''" }
 function ClickCard([string]$name) {
     [void](Eval "[...document.querySelectorAll('.product-card')].find(c => c.querySelector('.product-card__name').textContent === '$name').click()")
 }
@@ -497,7 +512,7 @@ try {
     # Branch admin (DAV)
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
-    Check ($menu -eq 'POS Sales|Sales History|Inventory|Customers|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'POS Sales|Sales History|Inventory|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -550,6 +565,150 @@ try {
     Check (Eval "![...document.querySelectorAll('#auditTable dt')].some(d => /pass|hash|csrf/i.test(d.textContent))") 'audit log: no password / CSRF fields'
     Shot '27-audit-log'
 
+    # --- Phase 6: master data, suppliers, product + customer fields, cost visibility ---
+    # Still admin (super admin). Master data is company-wide; customers/products are saved at MAR.
+    SwitchBranch 1
+    Nav "$Base/pages/master-data.php"
+    $tabs = Eval "[...document.querySelectorAll('.md-tabs a')].map(a => a.textContent.trim()).filter(t => /Brands|Models|Units|Suppliers|Warranty Types/.test(t)).join('|')"
+    Check ($tabs -like '*Brands*Models*Units*' -and $tabs -like '*Suppliers*') "master data tabs ($tabs)"
+    Check ((Eval "document.querySelector('#mdTable').dataset.list") -eq 'categories' -and (Eval "document.querySelectorAll('#mdTable tbody tr[data-row]').length") -eq 5) 'master data opens Categories (5 sample categories)'
+    Shot '28-master-data'
+
+    MdAdd 'brands' "f.querySelector('#mdName').value = 'Lenovo'" 'add brand Lenovo'
+    Check ((Text '.alert--success span') -eq 'Brand Lenovo was added.') "md: brand added ($(Text '.alert span'))"
+    MdAdd 'brands' "f.querySelector('#mdName').value = 'HP'" 'add brand HP'
+    MdAdd 'brands' "f.querySelector('#mdName').value = 'TempBrand'" 'add brand TempBrand'
+    MdAdd 'brands' "f.querySelector('#mdName').value = 'lenovo'" 'add duplicate brand'
+    Check ((Eval "document.getElementById('mdDialog').open") -and (Text '#err-name') -like '*already exists*') "md: duplicate brand name (case-insensitive) -> field error ($(Text '#err-name'))"
+    Shot '29-md-duplicate'
+    $lenovo = MdId 'Lenovo'; $hp = MdId 'HP'; $temp = MdId 'TempBrand'
+    Check ((Sql "SELECT COUNT(*) FROM brands WHERE name = 'Lenovo'") -eq '1' -and $lenovo -ne '' -and $hp -ne '') "md: one Lenovo row in DB (ids Lenovo=$lenovo HP=$hp)"
+    Submit "document.querySelector('#mdTable tr[data-row=TempBrand] [data-act=delete]').form.submit()" 'delete unused brand'
+    $r = Eval "fetch('$Base/pages/master-data.php?list=brands', {method: 'POST', body: new URLSearchParams({action: 'delete', id: '$hp'})}).then(r => r.status)"
+    Check ($r -eq 403 -and (Sql "SELECT COUNT(*) FROM brands WHERE id = $hp") -eq '1') "md: POST without CSRF token 403 ($r)"
+    Check ((Text '.alert--success span') -eq 'TempBrand was deleted.' -and (Sql "SELECT COUNT(*) FROM brands WHERE id = $temp") -eq '0') "md: unused brand deleted ($(Text '.alert span'))"
+
+    MdAdd 'models' "f.querySelector('#mdBrand').value = '$lenovo'; f.querySelector('#mdName').value = 'ThinkPad E14'" 'add model ThinkPad'
+    Check ((Text '.alert--success span') -eq 'Model ThinkPad E14 was added.') "md: model added ($(Text '.alert span'))"
+    MdAdd 'models' "f.querySelector('#mdBrand').value = '$hp'; f.querySelector('#mdName').value = 'ProBook 440'" 'add model ProBook'
+    MdAdd 'models' "f.querySelector('#mdBrand').value = '$lenovo'; f.querySelector('#mdName').value = 'thinkpad e14'" 'add duplicate model'
+    Check ((Text '#err-name') -eq 'This brand already has a model with this name.') "md: duplicate model under the same brand -> field error ($(Text '#err-name'))"
+    MdAdd 'models' "f.querySelector('#mdName').value = 'No Brand Model'" 'add model without brand'
+    Check ((Text '#err-brand_id') -eq 'Choose a brand.') "md: model needs a brand ($(Text '#err-brand_id'))"
+    Nav "$Base/pages/master-data.php?list=models"
+    $thinkpad = MdId 'ThinkPad E14'; $probook = MdId 'ProBook 440'
+    Check ((Text "#mdTable tr[data-row=`"ThinkPad E14`"] td:nth-child(2)") -eq 'Lenovo') 'md: models list shows the brand'
+
+    MdAdd 'units' "f.querySelector('#mdCode').value = 'BNDL'; f.querySelector('#mdName').value = 'Bundle'" 'add unit'
+    Check ((Text '.alert--success span') -eq 'Unit Bundle was added.') "md: unit added ($(Text '.alert span'))"
+    MdAdd 'units' "f.querySelector('#mdCode').value = 'PC'; f.querySelector('#mdName').value = 'Pieces'" 'add duplicate unit code'
+    Check ((Text '#err-code') -eq 'Another unit already uses this code.') "md: duplicate unit code -> field error ($(Text '#err-code'))"
+    Nav "$Base/pages/master-data.php?list=units"
+    Check (Eval "!document.querySelector('#mdTable tr[data-row=Piece] [data-act=delete]') && !!document.querySelector('#mdTable tr[data-row=Bundle] [data-act=delete]')") 'md: used unit PC has no Delete button, unused Bundle has'
+    $r = Eval "fetch('$Base/pages/master-data.php?list=units', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, action: 'delete', id: '1', return: 'master-data.php?list=units'})}).then(r => r.text()).then(t => t.includes('Deactivate it instead') ? 'blocked' : 'not blocked')"
+    Check ($r -eq 'blocked' -and (Sql 'SELECT COUNT(*) FROM units WHERE id = 1') -eq '1') "md: deleting used unit PC is blocked with 'Deactivate it instead' ($r)"
+    Nav "$Base/pages/master-data.php?list=units"
+    Submit "document.querySelector('#mdTable tr[data-row=Bundle] [data-act=toggle]').form.submit()" 'deactivate Bundle'
+    Check ((Text '.alert--success span') -like 'Bundle was deactivated.*' -and (Text '#mdTable tr[data-row=Bundle] .badge') -eq 'Inactive') "md: deactivate works ($(Text '.alert span'))"
+
+    # Supplier with a contact person, code auto-assigned
+    Nav "$Base/pages/supplier-form.php"
+    Check ((Eval "document.querySelector('#supplierForm [name=code]').placeholder") -eq 'SUP-0001') 'supplier code suggestion is SUP-0001'
+    Submit "const f = document.getElementById('supplierForm'); f.querySelector('[name=name]').value = 'Mindanao IT Distributors'; f.querySelector('[name=tin]').value = '222-333-444-000'; f.querySelector('[name=payment_terms]').value = '30 days'; f.querySelector('[name=`"contacts[0][name]`"]').value = 'Rosa Lim'; f.querySelector('[name=`"contacts[0][position]`"]').value = 'Sales Rep'; f.querySelector('[name=`"contacts[0][phone]`"]').value = '0917 000 1111'; f.requestSubmit()" 'add supplier'
+    Check ((Text '.alert--success span') -eq 'Mindanao IT Distributors was added.') "supplier added ($(Text '.alert span'))"
+    Check ((Text '#suppliersTable tr[data-supplier=SUP-0001] .item-cell__name') -eq 'Mindanao IT Distributors' -and (Eval "document.querySelector('#suppliersTable tr[data-supplier=SUP-0001]').textContent.includes('Rosa Lim')")) 'supplier listed as SUP-0001 with contact Rosa Lim'
+    $s = Sql "SELECT CONCAT_WS('|', s.code, s.tin, s.payment_terms, c.name, c.position) FROM suppliers s JOIN supplier_contacts c ON c.supplier_id = s.id"
+    Check ($s -eq 'SUP-0001|222-333-444-000|30 days|Rosa Lim|Sales Rep') "supplier + 1 contact in DB ($s)"
+    Shot '30-suppliers'
+
+    # Product: brand / model / unit / cost / warranty / specs (Laptop, id 1)
+    Nav "$Base/pages/product-form.php?id=1"
+    Check (Eval "document.querySelectorAll('#productUnit option').length >= 8 && ![...document.querySelectorAll('#productUnit option')].some(o => o.textContent.includes('Bundle'))") 'product form: inactive unit Bundle is not offered'
+    Check (Eval "document.body.textContent.includes('Suggested price')") 'product form: price labelled Suggested price'
+    Submit "const f = document.querySelector('[name=unit_cost]').form; const b = document.getElementById('productBrand'); b.value = '$lenovo'; b.dispatchEvent(new Event('change')); document.getElementById('productModel').value = '$thinkpad'; document.getElementById('productUnit').value = '1'; f.unit_cost.value = '21234.56'; f.warranty_days.value = '365'; f.specs.value = 'Core i5, 8GB RAM, 512GB SSD'; f.track_serial.checked = true; f.requestSubmit()" 'save product master fields'
+    Check ((Text '.alert--success span') -eq 'Laptop was updated.') "product saved ($(Text '.alert span'))"
+    $p = Sql "SELECT CONCAT_WS('|', b.name, m.name, u.code, p.unit_cost, p.warranty_days, p.track_serial, p.specs) FROM products p LEFT JOIN brands b ON b.id = p.brand_id LEFT JOIN product_models m ON m.id = p.model_id LEFT JOIN units u ON u.id = p.unit_id WHERE p.id = 1"
+    Check ($p -eq 'Lenovo|ThinkPad E14|PC|21234.56|365|1|Core i5, 8GB RAM, 512GB SSD') "product fields in DB ($p)"
+    Nav "$Base/pages/product-form.php?id=1"
+    Submit "const m = document.getElementById('productModel'); const o = m.querySelector('option[value=`"$probook`"]'); o.disabled = false; o.hidden = false; m.disabled = false; m.value = '$probook'; m.form.requestSubmit()" 'save model of another brand'
+    Check ((Text '#err-model_id') -eq 'Choose a model of the selected brand.' -and (Sql 'SELECT model_id FROM products WHERE id = 1') -eq $thinkpad) "product: model of another brand rejected ($(Text '#err-model_id'))"
+    Nav "$Base/pages/inventory.php?brand=$lenovo"
+    Check ((Eval "[...document.querySelectorAll('#inventoryTable tbody tr')].filter(r => r.querySelector('[data-adjust]')).length") -eq 1 -and (Eval "document.querySelector('#inventoryTable tbody').textContent.includes('ThinkPad E14')")) 'inventory brand filter shows the Lenovo laptop with its model'
+    Check (Eval "[...document.querySelectorAll('#inventoryTable th')].some(t => t.textContent.trim() === 'Unit cost') && document.querySelector('#inventoryTable tbody').textContent.includes('21,234.56')") 'admin (products.cost) sees the unit cost column'
+    Nav "$Base/pages/master-data.php?list=brands"
+    $r = Eval "fetch('$Base/pages/master-data.php?list=brands', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, action: 'delete', id: '$lenovo', return: 'master-data.php?list=brands'})}).then(r => r.text()).then(t => t.includes('Deactivate it instead') ? 'blocked' : 'not blocked')"
+    Check ($r -eq 'blocked' -and (Sql "SELECT COUNT(*) FROM brands WHERE id = $lenovo") -eq '1') "md: deleting brand used by a product is blocked ($r)"
+
+    # Customer with type + TIN + contact (MAR)
+    Nav "$Base/pages/customer-form.php"
+    Submit "const f = document.querySelector('[name=customer_type_id]').form; f.querySelector('[name=name]').value = 'DepEd Bukidnon'; f.querySelector('[name=phone]').value = '0921 555 0101'; f.customer_type_id.value = '2'; f.tin.value = '111-222-333-000'; f.querySelector('[name=`"contacts[0][name]`"]').value = 'Ana Ramos'; f.querySelector('[name=`"contacts[0][position]`"]').value = 'Supply Officer'; f.requestSubmit()" 'add customer'
+    Check ((Text '.alert--success span') -eq 'DepEd Bukidnon was added.') "customer added ($(Text '.alert span'))"
+    $c = Sql "SELECT CONCAT_WS('|', t.name, c.tin, cc.name, cc.position, (SELECT GROUP_CONCAT(branch_id) FROM customer_branches WHERE customer_id = c.id)) FROM customers c JOIN customer_types t ON t.id = c.customer_type_id JOIN customer_contacts cc ON cc.customer_id = c.id WHERE c.name = 'DepEd Bukidnon'"
+    Check ($c -eq 'Government|111-222-333-000|Ana Ramos|Supply Officer|1') "customer type/TIN/contact/branch link in DB ($c)"
+    Nav "$Base/pages/customers.php?type=2"
+    Check ((Eval "[...document.querySelectorAll('#customersTable tbody .item-cell__name')].map(a => a.textContent.trim()).join('|')") -eq 'DepEd Bukidnon') 'customers type filter (Government) lists only DepEd Bukidnon'
+    # Phase 5 follow-up a: editing at a branch keeps/creates the link for that branch
+    Nav "$Base/pages/customer-form.php?id=1"
+    Submit "const f = document.querySelector('[name=customer_type_id]').form; f.customer_type_id.value = '3'; f.requestSubmit()" 'edit customer 1'
+    Check ((Text '.alert--success span') -eq 'Juan Dela Cruz was updated.' -and (Sql 'SELECT GROUP_CONCAT(branch_id ORDER BY branch_id) FROM customer_branches WHERE customer_id = 1') -eq '1') 'edit customer at MAR keeps exactly the MAR link'
+
+    # Responsive (new / changed tables)
+    Size 1024 900
+    foreach ($pgUrl in 'master-data.php?list=models', 'suppliers.php', 'inventory.php', 'customers.php') {
+        Nav "$Base/pages/$pgUrl"
+        Check (Eval 'document.documentElement.scrollWidth <= window.innerWidth') "$pgUrl : no horizontal page scroll at 1024px"
+    }
+    Shot '31-master-data-1024'
+    Size 1536 1024
+
+    # Phase 5 follow-up b: a grant to an inactive branch survives a user save (CDO = 3 made inactive)
+    [void](Sql "UPDATE branches SET is_active = 0 WHERE id = 3; INSERT IGNORE INTO user_branches (user_id, branch_id, granted_by) VALUES ($multiId, 3, 1)")
+    Nav "$Base/pages/user-form.php?id=$multiId"
+    Submit "document.getElementById('userForm').requestSubmit()" 'save davmulti unchanged'
+    Check ((Text '.alert--success span') -like 'Mila Multi was updated.*' -and (Sql "SELECT GROUP_CONCAT(branch_id ORDER BY branch_id) FROM user_branches WHERE user_id = $multiId") -eq '1,3') "user save keeps the inactive-branch grant ($(Text '.alert span'))"
+    [void](Sql 'UPDATE branches SET is_active = 1 WHERE id = 3')
+    Logout
+
+    # Cashier (MAR) and technician (DAV): no master data / suppliers, no unit cost anywhere
+    Login 'cashier' 'cashier123'
+    $st = "$(Status 'pages/master-data.php'),$(Status 'pages/master-data.php?list=brands'),$(Status 'pages/suppliers.php'),$(Status 'pages/supplier-form.php')"
+    Check ($st -eq '403,403,403,403') "cashier: master-data / list / suppliers / supplier-form 403 ($st)"
+    Check (Eval "![...document.querySelectorAll('.sidebar__nav .nav-link span')].some(s => s.textContent.trim() === 'Master Data')") 'cashier menu has no Master Data'
+    Nav "$Base/pages/product-form.php?id=1"
+    Check (Eval "!document.querySelector('[name=unit_cost]') && !document.documentElement.outerHTML.includes('21234.56') && !document.body.textContent.includes('21,234.56')") 'cashier product page: no unit cost field or value'
+    Check (Eval "document.body.textContent.includes('ThinkPad E14')") 'cashier product page still shows brand/model (read-only)'
+    Nav "$Base/pages/inventory.php"
+    Check (Eval "![...document.querySelectorAll('#inventoryTable th')].some(t => t.textContent.trim() === 'Unit cost') && !document.body.textContent.includes('21,234.56')") 'cashier inventory: no unit cost column'
+    $r = Eval "fetch('$Base/api/pos/products.php').then(r => r.text()).then(t => t.includes('unit_cost') || t.includes('21234') ? 'leak' : 'ok')"
+    Check ($r -eq 'ok') "POS products API has no unit cost ($r)"
+    $r = Eval "fetch('$Base/pages/master-data.php?list=brands', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, action: 'save', name: 'Hacked'})}).then(r => r.status)"
+    Check ($r -eq 403 -and (Sql "SELECT COUNT(*) FROM brands WHERE name = 'Hacked'") -eq '0') "cashier POST to master data 403 ($r)"
+    Logout
+    Login 'davtech' $script:pw 'inventory.php'
+    $st = "$(Status 'pages/master-data.php'),$(Status 'pages/master-data.php?list=units'),$(Status 'pages/suppliers.php'),$(Status 'pages/supplier-form.php')"
+    Check ($st -eq '403,403,403,403') "technician: master-data / list / suppliers / supplier-form 403 ($st)"
+    Nav "$Base/pages/product-form.php?id=1"
+    Check (Eval "!document.querySelector('[name=unit_cost]') && !document.documentElement.outerHTML.includes('21234.56')") 'technician product page: no unit cost'
+    Logout
+
+    # Branch admin (DAV): suppliers yes, master-data lists no; has products.cost
+    Login 'davadmin' $script:pw
+    $st = "$(Status 'pages/suppliers.php'),$(Status 'pages/master-data.php?list=brands'),$(Status 'pages/master-data.php?list=categories')"
+    Check ($st -eq '200,403,403') "branch admin: suppliers 200, master-data lists 403 ($st)"
+    Nav "$Base/pages/master-data.php"
+    Check (Eval "location.pathname.endsWith('/pages/suppliers.php') && !!document.querySelector('#suppliersTable tr[data-supplier=SUP-0001]')") 'branch admin: Master Data menu opens Suppliers (company-wide list)'
+    Check (Eval "![...document.querySelectorAll('a')].some(a => a.href.includes('master-data.php?list='))") 'branch admin: no master-data list tabs'
+    Shot '32-branch-admin-suppliers'
+    Nav "$Base/pages/inventory.php"
+    Check (Eval "[...document.querySelectorAll('#inventoryTable th')].some(t => t.textContent.trim() === 'Unit cost')") 'branch admin (products.cost) sees the unit cost column'
+    # Phase 5 follow-up d: tampered role on update is refused
+    $cashId = Sql "SELECT id FROM users WHERE username = 'davcash'"
+    Nav "$Base/pages/user-form.php?id=$cashId"
+    Submit "const f = document.getElementById('userForm'); const r = f.querySelector('[name=role][value=cashier]'); r.value = 'branch_admin'; r.checked = true; f.requestSubmit()" 'tampered role update'
+    Check ((Sql "SELECT role FROM users WHERE id = $cashId") -eq 'cashier' -and (Eval "!document.querySelector('.alert--success')")) "branch admin cannot promote davcash to branch_admin ($(Text '.alert span'))"
+    Logout
+    Login 'admin' 'admin123'
+
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"
     Check ($n -gt 30) "icons.svg valid XML ($n icons)"
@@ -567,13 +726,6 @@ try {
 }
 
 # --- Stock integrity in the test DB (after the browser part) ---
-function Sql([string]$q) {
-    try {
-        $env:MYSQL_PWD = EnvValue 'DB_PASS' ''
-        $o = & 'C:\xampp\mysql\bin\mysql.exe' @mysqlArgs -N -B $testDb -e $q 2>&1
-    } finally { Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue }
-    return (($o | ForEach-Object { "$_" }) -join ' ').Trim()
-}
 try {
     $bad = Sql 'SELECT COUNT(*) FROM products p WHERE p.stock <> (SELECT COALESCE(SUM(b.qty), 0) FROM stock_balances b WHERE b.product_id = p.id) OR p.stock <> (SELECT COALESCE(SUM(m.quantity), 0) FROM stock_movements m WHERE m.product_id = p.id)'
     Check ($bad -eq '0') "integrity: products.stock = SUM(balances) = SUM(movements) for every product (mismatches: $bad)"

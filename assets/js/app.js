@@ -95,6 +95,25 @@
         }
     });
 
+    // ---- Dependent selects: <select data-filter-by="parentId"> shows only the options whose
+    //      data-parent matches the parent's value (e.g. product Model filtered by Brand) ----
+    document.querySelectorAll('select[data-filter-by]').forEach((child) => {
+        const parent = document.getElementById(child.dataset.filterBy);
+        if (!(parent instanceof HTMLSelectElement)) return;
+        const sync = () => {
+            const value = parent.value;
+            child.querySelectorAll('option[data-parent]').forEach((opt) => {
+                const show = value !== '' && opt.dataset.parent === value;
+                opt.hidden = !show;
+                opt.disabled = !show;
+            });
+            if (child.selectedOptions[0]?.disabled) child.value = '';
+            if (!child.hasAttribute('data-locked')) child.disabled = value === '';
+        };
+        parent.addEventListener('change', sync);
+        sync();
+    });
+
     // ---- Live clock in the header --------------------------------------
     const dateEl = document.querySelector('[data-clock-date]');
     const timeEl = document.querySelector('[data-clock-time]');

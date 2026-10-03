@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003) instead.
---  This file = Phase 1-4 schema + migrations 002 and 003.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003 and 004.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -28,11 +28,19 @@ DROP TABLE IF EXISTS stock_movements;
 DROP TABLE IF EXISTS stock_balances;
 DROP TABLE IF EXISTS sale_items;
 DROP TABLE IF EXISTS sales;
+DROP TABLE IF EXISTS customer_contacts;
 DROP TABLE IF EXISTS customer_branches;
 DROP TABLE IF EXISTS customers;
+DROP TABLE IF EXISTS customer_types;
+DROP TABLE IF EXISTS supplier_contacts;
+DROP TABLE IF EXISTS suppliers;
 DROP TABLE IF EXISTS storage_locations;
 DROP TABLE IF EXISTS warehouses;
 DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS product_models;
+DROP TABLE IF EXISTS brands;
+DROP TABLE IF EXISTS units;
+DROP TABLE IF EXISTS lookups;
 DROP TABLE IF EXISTS categories;
 DROP TABLE IF EXISTS user_branches;
 DROP TABLE IF EXISTS login_attempts;
@@ -168,29 +176,103 @@ CREATE TABLE categories (
   UNIQUE KEY uq_categories_slug (slug)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Master data (company-wide, no branch_id). Names are unique case-insensitively
+-- (utf8mb4_unicode_ci); inactive entries stay on old records but aren't offered.
+CREATE TABLE brands (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name        VARCHAR(80)  NOT NULL,
+  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_brands_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- (id, brand_id) is unique so products can reference (model_id, brand_id):
+-- a product's model always belongs to the product's brand.
+CREATE TABLE product_models (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  brand_id    INT UNSIGNED NOT NULL,
+  name        VARCHAR(80)  NOT NULL,
+  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_product_models_brand_name (brand_id, name),
+  UNIQUE KEY uq_product_models_id_brand (id, brand_id),
+  CONSTRAINT fk_product_models_brand FOREIGN KEY (brand_id) REFERENCES brands (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE units (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code        VARCHAR(10)  NOT NULL,
+  name        VARCHAR(40)  NOT NULL,
+  sort_order  INT          NOT NULL DEFAULT 0,
+  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_units_code (code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Generic simple lists; list keys are registered in config/master-data.php.
+CREATE TABLE lookups (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  list        VARCHAR(30)  NOT NULL,
+  name        VARCHAR(80)  NOT NULL,
+  sort_order  INT          NOT NULL DEFAULT 0,
+  is_active   TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_lookups_list_name (list, name),
+  KEY idx_lookups_list_sort (list, is_active, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- price = suggested selling price; unit_cost is only shown with products.cost.
 CREATE TABLE products (
-  id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-  category_id    INT UNSIGNED  NOT NULL,
-  code           VARCHAR(20)   NOT NULL,
-  barcode        VARCHAR(50)   NULL,
-  name           VARCHAR(100)  NOT NULL,
-  description    VARCHAR(255)  NULL,
-  price          DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-  stock          INT           NOT NULL DEFAULT 0,
-  reorder_level  INT           NOT NULL DEFAULT 5,
-  image          VARCHAR(255)  NULL,
-  is_active      TINYINT(1)    NOT NULL DEFAULT 1,
-  created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  id             INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  category_id    INT UNSIGNED      NOT NULL,
+  brand_id       INT UNSIGNED      NULL,
+  model_id       INT UNSIGNED      NULL,
+  unit_id        INT UNSIGNED      NULL,
+  code           VARCHAR(20)       NOT NULL,
+  barcode        VARCHAR(50)       NULL,
+  name           VARCHAR(100)      NOT NULL,
+  description    VARCHAR(255)      NULL,
+  specs          VARCHAR(500)      NULL,
+  price          DECIMAL(10,2)     NOT NULL DEFAULT 0.00,
+  unit_cost      DECIMAL(10,2)     NOT NULL DEFAULT 0.00,
+  stock          INT               NOT NULL DEFAULT 0,
+  reorder_level  INT               NOT NULL DEFAULT 5,
+  track_serial   TINYINT(1)        NOT NULL DEFAULT 0,
+  warranty_days  SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  image          VARCHAR(255)      NULL,
+  is_active      TINYINT(1)        NOT NULL DEFAULT 1,
+  created_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     DATETIME          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_products_code (code),
   UNIQUE KEY uq_products_barcode (barcode),
   KEY idx_products_category (category_id),
   KEY idx_products_name (name),
+  KEY idx_products_brand (brand_id),
+  KEY idx_products_model_brand (model_id, brand_id),
+  KEY idx_products_unit (unit_id),
   CONSTRAINT fk_products_category FOREIGN KEY (category_id) REFERENCES categories (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_products_brand FOREIGN KEY (brand_id) REFERENCES brands (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_products_model FOREIGN KEY (model_id, brand_id) REFERENCES product_models (id, brand_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_products_unit FOREIGN KEY (unit_id) REFERENCES units (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT chk_products_price CHECK (price >= 0),
-  CONSTRAINT chk_products_stock CHECK (stock >= 0)
+  CONSTRAINT chk_products_stock CHECK (stock >= 0),
+  CONSTRAINT chk_products_unit_cost CHECK (unit_cost >= 0),
+  CONSTRAINT chk_products_warranty_days CHECK (warranty_days <= 3650),
+  CONSTRAINT chk_products_model_brand CHECK (model_id IS NULL OR brand_id IS NOT NULL)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -256,21 +338,54 @@ CREATE TABLE stock_balances (
 --   Shared across branches: branch_id = home branch, customer_branches =
 --   every branch where the customer is visible (always incl. home).
 -- ---------------------------------------------------------------------
-CREATE TABLE customers (
+CREATE TABLE customer_types (
   id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  name        VARCHAR(100) NOT NULL,
-  phone       VARCHAR(30)  NULL,
-  email       VARCHAR(120) NULL,
-  address     VARCHAR(255) NULL,
-  branch_id   INT UNSIGNED NOT NULL,
+  name        VARCHAR(60)  NOT NULL,
+  sort_order  INT          NOT NULL DEFAULT 0,
   is_active   TINYINT(1)   NOT NULL DEFAULT 1,
   created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
+  UNIQUE KEY uq_customer_types_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE customers (
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name              VARCHAR(100) NOT NULL,
+  phone             VARCHAR(30)  NULL,
+  email             VARCHAR(120) NULL,
+  address           VARCHAR(255) NULL,
+  customer_type_id  INT UNSIGNED NULL,
+  tin               VARCHAR(20)  NULL,
+  branch_id         INT UNSIGNED NOT NULL,
+  is_active         TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
   KEY idx_customers_name (name),
   KEY idx_customers_branch (branch_id),
+  KEY idx_customers_type (customer_type_id),
   CONSTRAINT fk_customers_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customers_type FOREIGN KEY (customer_type_id) REFERENCES customer_types (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Contact persons (max 5 per customer, enforced in PHP).
+CREATE TABLE customer_contacts (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  customer_id  INT UNSIGNED NOT NULL,
+  name         VARCHAR(100) NOT NULL,
+  position     VARCHAR(60)  NULL,
+  phone        VARCHAR(30)  NULL,
+  email        VARCHAR(120) NULL,
+  sort_order   INT          NOT NULL DEFAULT 0,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_customer_contacts_customer (customer_id, sort_order),
+  CONSTRAINT fk_customer_contacts_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
+    ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE customer_branches (
@@ -282,6 +397,43 @@ CREATE TABLE customer_branches (
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_customer_branches_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Suppliers  (company-wide; contacts max 5 per supplier, enforced in PHP)
+-- ---------------------------------------------------------------------
+CREATE TABLE suppliers (
+  id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code           VARCHAR(20)  NOT NULL,
+  name           VARCHAR(120) NOT NULL,
+  tin            VARCHAR(20)  NULL,
+  address        VARCHAR(255) NULL,
+  phone          VARCHAR(30)  NULL,
+  email          VARCHAR(120) NULL,
+  payment_terms  VARCHAR(60)  NULL,
+  notes          VARCHAR(255) NULL,
+  is_active      TINYINT(1)   NOT NULL DEFAULT 1,
+  created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_suppliers_code (code),
+  KEY idx_suppliers_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE supplier_contacts (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  supplier_id  INT UNSIGNED NOT NULL,
+  name         VARCHAR(100) NOT NULL,
+  position     VARCHAR(60)  NULL,
+  phone        VARCHAR(30)  NULL,
+  email        VARCHAR(120) NULL,
+  sort_order   INT          NOT NULL DEFAULT 0,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_supplier_contacts_supplier (supplier_id, sort_order),
+  CONSTRAINT fk_supplier_contacts_supplier FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+    ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -469,7 +621,11 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (15, 'branches.manage',     'Branches',  'Manage branch details',                                    150),
   (16, 'branches.access_all', 'Branches',  'Access all branches (view and switch)',                    160),
   (17, 'settings.manage',     'Settings',  'Manage company settings',                                  170),
-  (18, 'audit_logs.view',     'Audit Log', 'View the audit log',                                       180);
+  (18, 'audit_logs.view',     'Audit Log', 'View the audit log',                                       180),
+  (19, 'products.cost',       'Inventory', 'See and edit unit cost',                                    95),
+  (20, 'master_data.manage',  'Master Data', 'Manage categories, brands, models, units, customer types and service lists', 96),
+  (21, 'suppliers.view',      'Suppliers', 'View suppliers',                                            97),
+  (22, 'suppliers.manage',    'Suppliers', 'Add, edit and deactivate suppliers',                        98);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -482,11 +638,49 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p
 WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 'sales.cancel', 'customers.view',
          'customers.edit', 'customers.delete', 'inventory.view', 'inventory.adjust', 'reports.view', 'users.view',
-         'users.manage', 'audit_logs.view'))
+         'users.manage', 'audit_logs.view', 'suppliers.view', 'suppliers.manage', 'products.cost'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view'))
 ORDER BY r.id, p.id;
+
+-- Master data seeds (same rows and ids as migrations/004).
+INSERT INTO units (id, code, name, sort_order) VALUES
+  (1, 'PC',   'Piece', 1),
+  (2, 'BOX',  'Box',   2),
+  (3, 'SET',  'Set',   3),
+  (4, 'PACK', 'Pack',  4),
+  (5, 'REAM', 'Ream',  5),
+  (6, 'ROLL', 'Roll',  6),
+  (7, 'M',    'Meter', 7),
+  (8, 'LOT',  'Lot',   8);
+
+INSERT INTO customer_types (id, name, sort_order) VALUES
+  (1, 'Walk-in / Individual', 1),
+  (2, 'Government',           2),
+  (3, 'Private Company',      3),
+  (4, 'Reseller',             4),
+  (5, 'School',               5);
+
+INSERT INTO lookups (id, list, name, sort_order) VALUES
+  ( 1, 'device_type',      'Laptop',                 1),
+  ( 2, 'device_type',      'Desktop',                2),
+  ( 3, 'device_type',      'Printer',                3),
+  ( 4, 'device_type',      'Monitor',                4),
+  ( 5, 'device_type',      'Network Device',         5),
+  ( 6, 'device_type',      'Other',                  6),
+  ( 7, 'job_type',         'Repair',                 1),
+  ( 8, 'job_type',         'Cleaning / Maintenance', 2),
+  ( 9, 'job_type',         'Installation',           3),
+  (10, 'job_type',         'Check-up / Diagnosis',   4),
+  (11, 'service_category', 'Hardware',               1),
+  (12, 'service_category', 'Software',               2),
+  (13, 'service_category', 'Network',                3),
+  (14, 'service_category', 'Printer',                4),
+  (15, 'warranty_type',    'No Warranty',            1),
+  (16, 'warranty_type',    'Store Warranty',         2),
+  (17, 'warranty_type',    'Supplier Warranty',      3),
+  (18, 'warranty_type',    'Manufacturer Warranty',  4);
 
 
 -- =====================================================================
@@ -566,3 +760,6 @@ SELECT id, 1, 1, 1, 1, 'initial', stock, stock, stock, 'Opening stock' FROM prod
 
 -- Sample product illustrations (files in assets/uploads/products/)
 UPDATE products SET image = CONCAT('sample-', LOWER(code), '.png');
+
+-- Every sample product is sold per piece (unit 1 = PC), as migrations/004 backfills.
+UPDATE products SET unit_id = 1;
