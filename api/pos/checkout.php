@@ -2,7 +2,8 @@
 /**
  * POST /api/pos/checkout.php   (JSON, X-CSRF-Token header)
  * {
- *   "items": [{"product_id": 1, "qty": 2}, ...],
+ *   "items": [{"product_id": 1, "qty": 2}, {"product_id": 13, "qty": 1, "serial_ids": [7]}, ...],
+ *                                     // serial_ids: serial-tracked items only, one per unit
  *   "customer_id": 3 | null,          // null = walk-in
  *   "payment_type": "cash"|"gcash"|"card",
  *   "discount_percent": "10",
@@ -25,7 +26,8 @@ if (count($items) > Sales::MAX_LINES) {
     throw new HttpException(422, 'Too many lines in one sale (max ' . Sales::MAX_LINES . ').');
 }
 
-$qtyById = [];
+$qtyById     = [];
+$serialsById = []; // product_id => product_serials ids (serial-tracked items; checked in Sales::complete)
 foreach ($items as $item) {
     $id  = is_array($item) ? input_int($item, 'product_id', 1) : null;
     $qty = is_array($item) ? input_int($item, 'qty', 1, Sales::MAX_QTY) : null;
@@ -35,6 +37,25 @@ foreach ($items as $item) {
     $qtyById[$id] = ($qtyById[$id] ?? 0) + $qty;
     if ($qtyById[$id] > Sales::MAX_QTY) {
         throw new HttpException(422, 'Quantity is too large (max ' . Sales::MAX_QTY . ' per item).');
+    }
+
+    if (array_key_exists('serial_ids', $item) && $item['serial_ids'] !== null) {
+        $raw = $item['serial_ids'];
+        if (!is_array($raw) || !array_is_list($raw) || count($raw) > Sales::MAX_QTY) {
+            throw new HttpException(422, 'The cart has invalid serial numbers.');
+        }
+        foreach ($raw as $sid) {
+            $sid = is_int($sid) || is_string($sid) ? filter_var($sid, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) : false;
+            if ($sid === false) {
+                throw new HttpException(422, 'The cart has invalid serial numbers.');
+            }
+            $serialsById[$id][] = $sid;
+        }
+    }
+}
+foreach ($serialsById as $list) {
+    if (count($list) !== count(array_unique($list))) {
+        throw new HttpException(422, 'The same serial number is in the cart twice.');
     }
 }
 
@@ -66,7 +87,7 @@ if ($paymentType === 'cash') {
     $paidCents = to_cents($paid);
 }
 
-$sale = Sales::complete((int) Auth::id(), $qtyById, $customerId, $paymentType, $discount, $paidCents);
+$sale = Sales::complete((int) Auth::id(), $qtyById, $customerId, $paymentType, $discount, $paidCents, $serialsById);
 
 json_response([
     'ok'           => true,

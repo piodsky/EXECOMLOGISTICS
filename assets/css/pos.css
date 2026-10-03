@@ -476,3 +476,67 @@ body[data-page="pos"] .content { padding: 14px 16px; }
 .pos-branch-notice > .icon { width: 22px; height: 22px; }
 .pos-branch-notice > span { min-width: 220px; }
 .pos-branch-notice .btn { flex-shrink: 0; }
+
+/* ---------- Serial-tracked items (Phase 7a) ---------- */
+.cart-sn { display: flex; flex-wrap: wrap; gap: 4px; margin: 5px 0 0; padding: 0; list-style: none; }
+.cart-sn__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 2px 1px 8px;
+    border: 1px solid #c9dbf6;
+    border-radius: 999px;
+    background: #e6effc;
+    color: var(--primary-700);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 11px;
+}
+.cart-sn__chip { max-width: 100%; white-space: nowrap; }
+.cart-sn__no { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cart-sn__remove {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+}
+.cart-sn__remove:hover, .cart-sn__remove:focus-visible { background: var(--danger); color: #fff; }
+.cart-sn__remove .icon { width: 12px; height: 12px; }
+.cart-table tr.is-serial td { vertical-align: top; }
+.cart-table tr.is-serial .qty input:disabled { background: var(--surface-2); color: var(--text); opacity: 1; }
+
+.modal--serials { width: min(520px, calc(100vw - 32px)); }
+.sn-product { margin-bottom: 12px; }
+.sn-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 6px;
+    max-height: min(46vh, 360px);
+    margin: 12px 0 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+}
+.sn-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    cursor: pointer;
+}
+.sn-option:hover { background: var(--surface-2); }
+.sn-option input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.sn-option:has(input:checked) { border-color: var(--primary-400); background: #e6effc; }
+.sn-option__no { font-family: Consolas, "Courier New", monospace; font-size: 13px; font-weight: 600; word-break: break-all; }
+.sn-state { margin-top: 10px; font-size: 13px; }
+.sn-state:empty { display: none; }
+.sn-count { margin-right: auto; align-self: center; font-size: 13px; }

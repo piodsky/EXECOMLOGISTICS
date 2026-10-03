@@ -118,4 +118,17 @@
             });
         }
     }
+
+    // ---- Product form: serial-tracked items start at 0 (stock comes through Receiving) ----
+    const track = document.getElementById('trackSerial');
+    const opening = document.getElementById('openingStock');
+    if (track && opening) {
+        const hint = document.getElementById('openingStockHint');
+        const sync = () => {
+            opening.readOnly = track.checked;
+            if (track.checked) opening.value = '0';
+            if (hint) hint.hidden = !track.checked;
+        };
+        track.addEventListener('change', sync);
+    }
 })();

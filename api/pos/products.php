@@ -13,7 +13,7 @@ api_guard('GET', 'pos.access');
 $location = Branch::defaultLocation(Branch::forWrite());
 
 $stmt = db()->prepare(
-    'SELECT p.id, p.category_id, p.code, p.barcode, p.name, p.price, COALESCE(sb.qty, 0) AS stock, p.reorder_level, p.image,
+    'SELECT p.id, p.category_id, p.code, p.barcode, p.name, p.price, COALESCE(sb.qty, 0) AS stock, p.reorder_level, p.image, p.track_serial,
             c.icon AS category_icon
        FROM products p
        JOIN categories c ON c.id = p.category_id
@@ -34,6 +34,7 @@ $products = array_map(static fn (array $p): array => [
     'reorder_level' => (int) $p['reorder_level'],
     'category_icon' => $p['category_icon'],
     'image_url'     => ImageUpload::url($p['image']),
+    'track_serial'  => (int) $p['track_serial'] === 1, // POS picks serials via api/pos/serials.php
 ], $stmt->fetchAll());
 
 json_response([

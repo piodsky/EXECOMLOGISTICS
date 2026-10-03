@@ -204,12 +204,12 @@ final class Suppliers
     }
 
     /**
-     * Why the supplier can't be deleted, or null. Nothing references suppliers yet; add the
-     * receiving / purchase tables here when they arrive.
+     * Why the supplier can't be deleted, or null. Add the purchase tables here when they arrive
+     * (receiving_reports.supplier_id is RESTRICT).
      */
     public static function deleteBlocker(int $id): ?string
     {
-        $checks = []; // e.g. 'receivings' => 'it has deliveries'
+        $checks = ['receiving_reports' => 'it has receiving reports']; // fixed table names, never input
         foreach ($checks as $table => $reason) {
             $stmt = db()->prepare("SELECT 1 FROM {$table} WHERE supplier_id = ? LIMIT 1");
             $stmt->execute([$id]);

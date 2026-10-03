@@ -26,6 +26,18 @@ return [
         'url'        => 'pages/inventory.php',
         'permission' => 'inventory.view',
     ],
+    'receiving' => [
+        'label'      => 'Receiving',
+        'icon'       => 'truck',
+        'url'        => 'pages/receiving.php',
+        'permission' => 'receiving.view',
+    ],
+    'serials' => [
+        'label'      => 'Serial Lookup',
+        'icon'       => 'barcode',
+        'url'        => 'pages/serials.php',
+        'permission' => 'serials.view',
+    ],
     'customers' => [
         'label'      => 'Customers',
         'icon'       => 'user',

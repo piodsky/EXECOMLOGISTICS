@@ -37,7 +37,9 @@ final class Products
         $stmt = db()->prepare(
             "SELECT p.*, p.stock AS total_stock, COALESCE(bs.qty, 0) AS stock, c.name AS category_name,
                     br.name AS brand_name, pm.name AS model_name, un.code AS unit_code, un.name AS unit_name,
-                    (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
+                    (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold,
+                    (SELECT COUNT(*) FROM receiving_items ri WHERE ri.product_id = p.id) AS times_received,
+                    (SELECT COUNT(*) FROM product_serials ps WHERE ps.product_id = p.id) AS serial_count
                FROM products p JOIN categories c ON c.id = p.category_id
                LEFT JOIN brands br ON br.id = p.brand_id
                LEFT JOIN product_models pm ON pm.id = p.model_id
@@ -87,7 +89,7 @@ final class Products
         [$where, $params] = self::where($f);
         $cost = Auth::can('products.cost') ? 'p.unit_cost, ' : ''; // cost only with products.cost
         $stmt = db()->prepare(
-            "SELECT p.id, p.code, p.barcode, p.name, p.price, {$cost}COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock,
+            "SELECT p.id, p.code, p.barcode, p.name, p.price, {$cost}COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock, p.track_serial,
                     p.reorder_level, p.image, p.is_active, c.name AS category_name,
                     br.name AS brand_name, pm.name AS model_name, un.code AS unit_code, un.name AS unit_name,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
@@ -239,6 +241,8 @@ final class Products
             $data['stock'] = input_int($in, 'stock', 0, self::MAX_STOCK);
             if ($data['stock'] === null) {
                 $errors['stock'] = 'Enter a whole number from 0 to ' . number_format(self::MAX_STOCK) . '.';
+            } elseif ($data['stock'] > 0 && $data['track_serial'] === 1) {
+                $errors['stock'] = 'Serial-tracked items start at 0: add their stock through Receiving with the serial numbers.';
             } elseif ($data['stock'] > 0 && !Branch::isConcrete()) {
                 $errors['stock'] = 'Choose a branch first (top bar): opening stock is added to that branch.';
             }
@@ -302,6 +306,10 @@ final class Products
 
             // Opening stock goes to the current branch's default location (Stock::move sets products.stock).
             if ($d['stock'] > 0 || Branch::isConcrete()) {
+                if ((int) $d['track_serial'] === 1 && $d['stock'] > 0) {
+                    throw new HttpException(422, 'Serial-tracked items start at 0: add their stock through Receiving.');
+                }
+                Costing::ensure($id, Branch::forWrite()); // branch cost row = default cost
                 Stock::move($id, Branch::defaultLocation(Branch::forWrite()), $d['stock'], 'initial', 'Opening stock', null, $userId);
             }
             Audit::record('products', 'create', 'product', $id, $d['code'], null,
@@ -326,6 +334,25 @@ final class Products
         $pdo = db();
         $pdo->beginTransaction();
         try {
+            // Serial tracking may only change while the product has no stock anywhere (serials = stock).
+            $stmt = $pdo->prepare('SELECT stock, track_serial FROM products WHERE id = ? FOR UPDATE');
+            $stmt->execute([$id]);
+            $locked = $stmt->fetch() ?: throw new HttpException(404, 'Product not found.');
+            if ((int) $locked['track_serial'] !== (int) $d['track_serial']) {
+                $stmt = $pdo->prepare('SELECT COUNT(*) FROM product_serials WHERE product_id = ? AND status = ?');
+                $stmt->execute([$id, 'in_stock']);
+                if ((int) $locked['stock'] > 0 || (int) $stmt->fetchColumn() > 0) {
+                    throw new HttpException(422, 'Serial tracking can only change when the product has no stock in any branch.');
+                }
+                // Turning it off once serials exist (any status) would break voids/cancels of those documents.
+                if ((int) $d['track_serial'] === 0) {
+                    $stmt = $pdo->prepare('SELECT COUNT(*) FROM product_serials WHERE product_id = ?');
+                    $stmt->execute([$id]);
+                    if ((int) $stmt->fetchColumn() > 0) {
+                        throw new HttpException(422, 'Serial tracking can\'t be turned off: this product already has serial numbers on record.');
+                    }
+                }
+            }
             // unit_cost === null (no products.cost): the stored cost is kept.
             $cost = $d['unit_cost'] !== null ? number_format((float) $d['unit_cost'], 2, '.', '') : null;
             $pdo->prepare(
@@ -386,6 +413,9 @@ final class Products
         if ((int) $product['times_sold'] > 0) {
             throw new HttpException(409, "{$product['name']} has sales history, so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
+        if ((int) $product['times_received'] > 0 || (int) $product['serial_count'] > 0) {
+            throw new HttpException(409, "{$product['name']} has receiving history, so it can't be deleted. Deactivate it instead to hide it from the POS.");
+        }
         $pdo = db();
         $pdo->beginTransaction();
         try {
@@ -429,9 +459,12 @@ final class Products
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare('SELECT code, name FROM products WHERE id = ? FOR UPDATE');
+            $stmt = $pdo->prepare('SELECT code, name, track_serial FROM products WHERE id = ? FOR UPDATE');
             $stmt->execute([$id]);
             $product = $stmt->fetch() ?: throw new HttpException(404, 'Product not found.');
+            if ((int) $product['track_serial'] === 1) {
+                throw new HttpException(422, 'Serial-tracked items are added through Receiving.');
+            }
 
             $location = Branch::defaultLocation($branchId);
             $before   = Stock::balance($id, $location['id']);
@@ -443,6 +476,9 @@ final class Products
                 throw new HttpException(422, 'Stock can be at most ' . number_format(self::MAX_STOCK) . '.');
             }
 
+            if ($change > 0) {
+                Costing::ensure($id, $branchId); // stock in without a cost: average unchanged
+            }
             $type = $reason === 'restock' ? 'restock' : 'adjustment';
             Stock::move($id, $location, $change, $type, $label . ($note !== '' ? ' — ' . $note : ''), null, $userId);
             Audit::record('inventory', 'stock_adjust', 'product', $id, $product['code'],
@@ -463,10 +499,11 @@ final class Products
         [$scope, $params] = Branch::scopeSql('m.branch_id');
         $stmt = db()->prepare(
             "SELECT m.type, m.quantity, m.stock_after, m.location_qty_after, m.note, m.created_at, m.sale_id,
-                    u.username, s.sale_no, b.code AS branch_code, b.name AS branch_name
+                    m.receiving_id, r.rr_no, u.username, s.sale_no, b.code AS branch_code, b.name AS branch_name
                FROM stock_movements m
                LEFT JOIN users u ON u.id = m.user_id
                LEFT JOIN sales s ON s.id = m.sale_id
+               LEFT JOIN receiving_reports r ON r.id = m.receiving_id
                LEFT JOIN branches b ON b.id = m.branch_id
               WHERE m.product_id = ? AND {$scope}
               ORDER BY m.id DESC

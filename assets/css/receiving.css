@@ -1,0 +1,88 @@
+/* =====================================================================
+   Receiving (Phase 7a): RR list, draft form, report view + print,
+   Serial Lookup, Stock Integrity. Uses the app.css tokens.
+   ===================================================================== */
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
+/* ---------- List ---------- */
+.rr-no { font-variant-numeric: tabular-nums; }
+.rr-table tr.is-void td { color: var(--text-muted); }
+.rr-table tr.is-void .rr-total { text-decoration: line-through; }
+
+/* ---------- Draft form ---------- */
+.rr-lines th:first-child, .rr-lines td.rr-line__n { width: 36px; }
+.rr-lines td { vertical-align: top; }
+.rr-lines tbody + tbody { border-top: 1px solid var(--border); }
+.rr-lines tbody tr:first-child td { border-bottom: 0; }
+.rr-item-pick { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px; min-width: 320px; }
+.rr-line__qty { width: 110px; }
+.rr-line__cost { width: 150px; }
+.rr-line__qty .form-input, .rr-line__cost .form-input { text-align: right; }
+.rr-line__total { width: 130px; padding-top: 20px !important; }
+.rr-lines .c-act { width: 52px; text-align: center; }
+.rr-serials td { padding-top: 0; background: var(--surface-2); }
+.rr-serials .form-field { margin-top: 10px; }
+.rr-serials__input { min-height: 72px; resize: vertical; text-transform: uppercase; }
+.rr-serials__count { margin-top: 6px; }
+.rr-serials__count.is-warn { color: var(--warning); font-weight: 600; }
+.rr-items-error { padding: 10px 16px 0; }
+.rr-lines__hint { padding: 10px 16px 14px; }
+.rr-side-hint { margin-top: 12px; }
+.rr-delete { margin-right: auto; color: var(--danger); }
+.rr-delete:hover { border-color: var(--danger); background: var(--danger-bg); }
+
+/* ---------- Report view ---------- */
+.inline-form { display: inline-flex; }
+.rr-draft-note { margin-bottom: 16px; }
+.rr-view-table td { vertical-align: top; }
+.rr-warn { display: inline-flex; align-items: center; gap: 4px; color: var(--warning); font-weight: 600; }
+.rr-warn .icon { width: 14px; height: 14px; }
+.rr-notes { display: grid; gap: 4px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--border); font-size: 14px; white-space: pre-line; }
+
+.print-head { display: none; }
+
+/* ---------- Serial Lookup ---------- */
+.serial-cell { font-family: Consolas, "Courier New", monospace; font-weight: 600; }
+.serial-history { margin-top: 16px; }
+.serial-events { display: grid; gap: 0; margin: 0; padding: 0 16px 8px; list-style: none; }
+.serial-events li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.serial-events li:last-child { border-bottom: 0; }
+.serial-events time { min-width: 150px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ---------- Stock Integrity ---------- */
+.integrity-list { display: grid; gap: 12px; }
+.integrity-check .card__head h2 { font-size: 15px; }
+.integrity-check .card__head .icon { color: inherit; }
+.integrity-check.is-ok .card__head h2 { color: var(--success); }
+.integrity-check.is-bad { border-color: #f5c2bf; }
+.integrity-check.is-bad .card__head h2 { color: var(--danger); }
+.integrity-check .table-wrap { border-top: 1px solid var(--border); }
+
+@media (max-width: 1280px) {
+    .rr-form { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 1200px) {
+    .rr-table .col-opt,
+    .serial-table .col-opt { display: none; }
+}
+@media (max-width: 900px) {
+    .rr-item-pick { grid-template-columns: minmax(0, 1fr); min-width: 200px; }
+    .rr-line__total { display: none; }
+    .rr-lines thead th:nth-child(5) { display: none; }
+}
+
+@media print {
+    .page-actions, .back-link, .rr-draft-note, .modal { display: none !important; }
+    .print-head { display: flex; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid var(--text); }
+    .sale-layout { grid-template-columns: minmax(0, 1fr) 260px; }
+    .card { box-shadow: none; border-color: #999; break-inside: avoid; }
+}

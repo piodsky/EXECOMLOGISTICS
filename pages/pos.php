@@ -181,7 +181,7 @@ require ROOT_PATH . '/includes/header.php';
 <template id="cartRowTpl">
     <tr>
         <td class="c-n"></td>
-        <td class="cart-row__name"><strong></strong><small></small></td>
+        <td class="cart-row__name"><strong></strong><small></small><ul class="cart-sn" aria-label="Serial numbers" hidden></ul></td>
         <td class="c-qty">
             <span class="qty">
                 <button type="button" data-act="dec" aria-label="Decrease quantity"><?= icon('minus') ?></button>
@@ -196,6 +196,47 @@ require ROOT_PATH . '/includes/header.php';
         </td>
     </tr>
 </template>
+
+<template id="cartSerialTpl">
+    <li class="cart-sn__chip">
+        <span class="cart-sn__no"></span>
+        <button type="button" class="cart-sn__remove" data-act="sn-remove"><?= icon('x') ?></button>
+    </li>
+</template>
+
+<template id="serialOptionTpl">
+    <li>
+        <label class="sn-option">
+            <input type="checkbox">
+            <span class="sn-option__no"></span>
+        </label>
+    </li>
+</template>
+
+<!-- ============ Serial number picker (serial-tracked items) ============ -->
+<dialog class="modal modal--serials" id="serialDialog" aria-labelledby="serialTitle">
+    <form class="modal__body" id="serialForm" novalidate>
+        <header class="modal__head">
+            <h2 id="serialTitle">Select Serial Numbers</h2>
+            <button type="button" class="modal__close" data-close aria-label="Close"><?= icon('x') ?></button>
+        </header>
+        <p class="sn-product"><strong id="serialProduct"></strong> <small class="muted" id="serialCode"></small></p>
+        <label class="field">
+            <span class="field__label">Scan or filter</span>
+            <span class="field__control field__control--plain">
+                <input id="serialFilter" type="search" maxlength="60" autocomplete="off" spellcheck="false" placeholder="Serial number">
+            </span>
+        </label>
+        <ul class="sn-options" id="serialList" aria-label="Serial numbers in stock"></ul>
+        <p class="sn-state muted" id="serialState" role="status"></p>
+        <p class="pay-error" id="serialError" role="alert" hidden></p>
+        <footer class="modal__foot">
+            <span class="sn-count muted" id="serialCount" aria-live="polite"></span>
+            <button type="button" class="btn btn--light" data-close>Back</button>
+            <button type="submit" class="btn btn--primary" id="serialConfirm">Add to Sale</button>
+        </footer>
+    </form>
+</dialog>
 
 <!-- ============ Payment dialog ============ -->
 <dialog class="modal" id="payDialog" aria-labelledby="payTitle">

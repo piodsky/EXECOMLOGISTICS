@@ -24,15 +24,16 @@ final class Stock
     /**
      * @param array{id:int, warehouse_id:int, branch_id:int, branch_name?:string} $location from Branch::defaultLocation()
      * @param int    $delta  signed change (+ in, - out)
-     * @param string $type   initial | sale | restock | adjustment | void
+     * @param string $type   initial | sale | restock | adjustment | void | receiving
+     * @param ?int   $receivingId receiving_reports.id (type 'receiving': RR post and cancel)
      * @return array{location_qty:int, stock:int} levels after the change
      * @throws HttpException 409 when the location would go below zero
      */
     public static function move(int $productId, array $location, int $delta, string $type, ?string $note,
-                                ?int $saleId = null, ?int $userId = null): array
+                                ?int $saleId = null, ?int $userId = null, ?int $receivingId = null): array
     {
         self::assertTransaction();
-        if (!in_array($type, ['initial', 'sale', 'restock', 'adjustment', 'void'], true)) {
+        if (!in_array($type, ['initial', 'sale', 'restock', 'adjustment', 'void', 'receiving'], true)) {
             throw new LogicException("Unknown stock movement type [{$type}]");
         }
         $pdo = db();
@@ -69,11 +70,11 @@ final class Stock
         $total = (int) $stmt->fetchColumn();
 
         $pdo->prepare(
-            'INSERT INTO stock_movements (product_id, user_id, sale_id, branch_id, warehouse_id, location_id,
-                                          type, quantity, stock_after, location_qty_after, note)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO stock_movements (product_id, user_id, sale_id, receiving_id, branch_id, warehouse_id,
+                                          location_id, type, quantity, stock_after, location_qty_after, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )->execute([
-            $productId, $userId ?? Auth::id(), $saleId,
+            $productId, $userId ?? Auth::id(), $saleId, $receivingId,
             $location['branch_id'], $location['warehouse_id'], $location['id'],
             $type, $delta, $total, $new,
             $note !== null ? mb_substr($note, 0, 255) : null,

@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -211,6 +211,24 @@ function ClickCard([string]$name) {
 }
 function CartQty([string]$name) {
     Eval "(() => { const r = [...document.querySelectorAll('#cartBody tr')].find(tr => tr.querySelector('strong').textContent === '$name'); return r ? Number(r.querySelector('input').value) : 0; })()"
+}
+# Phase 7a: fill the receiving form (lines = JS array of [productId, qty, cost, serials]) and submit with action save|post.
+function RrSubmit([string]$url, [string]$supplier, [string]$lines, [string]$action, [string]$label) {
+    Nav $url
+    [void](Eval "window.__old = true; const f = document.getElementById('rrForm'); f.supplier_id.value = '$supplier'; f.reference_no.value = 'DR-$label'; ($lines).forEach((l, i) => { let t = document.querySelectorAll('#rrLines tbody[data-line]')[i]; if (!t) { document.getElementById('addLine').click(); t = [...document.querySelectorAll('#rrLines tbody[data-line]')].pop(); } const s = t.querySelector('[data-product]'); s.value = String(l[0]); s.dispatchEvent(new Event('change', {bubbles: true})); t.querySelector('[data-qty]').value = String(l[1]); t.querySelector('[data-cost]').value = l[2]; t.querySelector('[data-serials]').value = l[3] || ''; }); const a = document.createElement('input'); a.type = 'hidden'; a.name = 'action'; a.value = '$action'; f.appendChild(a); f.submit()")
+    WaitFor "window.__old === undefined && document.readyState === 'complete' && !!document.querySelector('main')" "rr $label" 20000
+}
+# Expected branch moving average (spec: integers in 1/10000, half-up), as 'N.NNNN'.
+function ExpAvg([long]$qb, [string]$avg, [long]$qty, [string]$cost) {
+    $a = [long][math]::Round([decimal]$avg * 10000, [MidpointRounding]::AwayFromZero)
+    $c = [long][math]::Round([decimal]$cost * 10000, [MidpointRounding]::AwayFromZero)
+    if ($qb -le 0) { $after = $c } else { $after = [long][math]::Floor([decimal](2 * ($qb * $a + $qty * $c) + ($qb + $qty)) / [decimal](2 * ($qb + $qty))) }
+    return ('{0}.{1:D4}' -f [long][math]::Floor([decimal]$after / 10000), ($after % 10000))
+}
+function BranchAvg([string]$pid_) { Sql "SELECT COALESCE((SELECT avg_cost FROM product_branches WHERE product_id = $pid_ AND branch_id = 1), (SELECT unit_cost FROM products WHERE id = $pid_))" }
+function BranchQty([string]$pid_) { Sql "SELECT COALESCE(SUM(qty), 0) FROM stock_balances WHERE product_id = $pid_ AND branch_id = 1" }
+function PostForm([string]$path, [string]$fields) {
+    Eval "fetch('$Base/$path', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, $fields})}).then(r => r.text().then(t => r.status + ':' + t))"
 }
 
 try {
@@ -512,7 +530,8 @@ try {
     # Branch admin (DAV)
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
-    Check ($menu -eq 'POS Sales|Sales History|Inventory|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
+    Check ($menu -eq 'POS Sales|Sales History|Inventory|Receiving|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -625,10 +644,13 @@ try {
     Nav "$Base/pages/product-form.php?id=1"
     Check (Eval "document.querySelectorAll('#productUnit option').length >= 8 && ![...document.querySelectorAll('#productUnit option')].some(o => o.textContent.includes('Bundle'))") 'product form: inactive unit Bundle is not offered'
     Check (Eval "document.body.textContent.includes('Suggested price')") 'product form: price labelled Suggested price'
-    Submit "const f = document.querySelector('[name=unit_cost]').form; const b = document.getElementById('productBrand'); b.value = '$lenovo'; b.dispatchEvent(new Event('change')); document.getElementById('productModel').value = '$thinkpad'; document.getElementById('productUnit').value = '1'; f.unit_cost.value = '21234.56'; f.warranty_days.value = '365'; f.specs.value = 'Core i5, 8GB RAM, 512GB SSD'; f.track_serial.checked = true; f.requestSubmit()" 'save product master fields'
+    Submit "const f = document.querySelector('[name=unit_cost]').form; const b = document.getElementById('productBrand'); b.value = '$lenovo'; b.dispatchEvent(new Event('change')); document.getElementById('productModel').value = '$thinkpad'; document.getElementById('productUnit').value = '1'; f.unit_cost.value = '21234.56'; f.warranty_days.value = '365'; f.specs.value = 'Core i5, 8GB RAM, 512GB SSD'; f.requestSubmit()" 'save product master fields'
     Check ((Text '.alert--success span') -eq 'Laptop was updated.') "product saved ($(Text '.alert span'))"
     $p = Sql "SELECT CONCAT_WS('|', b.name, m.name, u.code, p.unit_cost, p.warranty_days, p.track_serial, p.specs) FROM products p LEFT JOIN brands b ON b.id = p.brand_id LEFT JOIN product_models m ON m.id = p.model_id LEFT JOIN units u ON u.id = p.unit_id WHERE p.id = 1"
-    Check ($p -eq 'Lenovo|ThinkPad E14|PC|21234.56|365|1|Core i5, 8GB RAM, 512GB SSD') "product fields in DB ($p)"
+    # Phase 7a: track_serial can no longer be ticked while the Laptop has stock (checkbox locked), so it stays 0.
+    Check ($p -eq 'Lenovo|ThinkPad E14|PC|21234.56|365|0|Core i5, 8GB RAM, 512GB SSD') "product fields in DB ($p)"
+    Nav "$Base/pages/product-form.php?id=1"
+    Check (Eval "document.getElementById('trackSerial').disabled && document.body.textContent.includes('Serial tracking can only change when the product has no stock')") 'product with stock: Track serial numbers checkbox is locked'
     Nav "$Base/pages/product-form.php?id=1"
     Submit "const m = document.getElementById('productModel'); const o = m.querySelector('option[value=`"$probook`"]'); o.disabled = false; o.hidden = false; m.disabled = false; m.value = '$probook'; m.form.requestSubmit()" 'save model of another brand'
     Check ((Text '#err-model_id') -eq 'Choose a model of the selected brand.' -and (Sql 'SELECT model_id FROM products WHERE id = 1') -eq $thinkpad) "product: model of another brand rejected ($(Text '#err-model_id'))"
@@ -637,7 +659,7 @@ try {
     Check (Eval "[...document.querySelectorAll('#inventoryTable th')].some(t => t.textContent.trim() === 'Unit cost') && document.querySelector('#inventoryTable tbody').textContent.includes('21,234.56')") 'admin (products.cost) sees the unit cost column'
     Nav "$Base/pages/master-data.php?list=brands"
     $r = Eval "fetch('$Base/pages/master-data.php?list=brands', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, action: 'delete', id: '$lenovo', return: 'master-data.php?list=brands'})}).then(r => r.text()).then(t => t.includes('Deactivate it instead') ? 'blocked' : 'not blocked')"
-    Check ($r -eq 'blocked' -and (Sql "SELECT COUNT(*) FROM brands WHERE id = $lenovo") -eq '1') "md: deleting brand used by a product is blocked ($r)"
+    Check ($r -eq 'blocked' -and (Sql "SELECT COUNT(*) FROM brands WHERE id = $lenovo") -eq '1') "md: deleting brand used by a product is blocked ($r, rows $(Sql "SELECT COUNT(*) FROM brands WHERE id = $lenovo"))"
 
     # Customer with type + TIN + contact (MAR)
     Nav "$Base/pages/customer-form.php"
@@ -708,6 +730,182 @@ try {
     Check ((Sql "SELECT role FROM users WHERE id = $cashId") -eq 'cashier' -and (Eval "!document.querySelector('.alert--success')")) "branch admin cannot promote davcash to branch_admin ($(Text '.alert span'))"
     Logout
     Login 'admin' 'admin123'
+
+    # --- Phase 7a: receiving, branch average cost, serials, POS serial picker, integrity (admin at MAR) ---
+    $year = (Get-Date).Year
+    $sup = Sql "SELECT id FROM suppliers WHERE code = 'SUP-0001'"
+    Check ((Sql "SELECT COUNT(*) FROM permissions WHERE perm_key IN ('receiving.view','receiving.manage','receiving.post','receiving.cancel','serials.view','inventory.integrity')") -eq '6') 'permissions table has the 6 Phase 7a keys'
+    # Serial-tracked product: opening stock must be 0
+    Nav "$Base/pages/product-form.php"
+    $fillTp = "const f = document.querySelector('[name=code]').form; f.code.value = 'ITM-9001'; f.querySelector('[name=name]').value = 'ThinkPad X1'; f.category_id.value = '1'; f.price.value = '45000'; f.unit_id.value = '1'; f.track_serial.checked = true; f.track_serial.dispatchEvent(new Event('change', {bubbles: true}));"
+    Submit "$fillTp f.stock.removeAttribute('readonly'); f.stock.value = '5'; f.requestSubmit()" 'track product with opening stock'
+    Check ((Text '#err-stock') -like 'Serial-tracked items start at 0*' -and (Sql "SELECT COUNT(*) FROM products WHERE code = 'ITM-9001'") -eq '0') "track product with opening stock 5 is rejected ($(Text '#err-stock'))"
+    Nav "$Base/pages/product-form.php"
+    Submit "$fillTp f.stock.value = '0'; f.requestSubmit()" 'track product'
+    $tp = Sql "SELECT id FROM products WHERE code = 'ITM-9001' AND track_serial = 1 AND stock = 0"
+    Check ((Text '.alert--success span') -eq 'ThinkPad X1 was added to the inventory.' -and $tp -ne '') "admin creates serial-tracked ThinkPad X1 with stock 0 (id $tp)"
+    $r = PostForm 'pages/inventory.php' "action: 'adjust', id: '$tp', direction: 'add', quantity: '1', reason: 'restock', return: 'inventory.php'"
+    Check ($r -like '*Serial-tracked items are added through Receiving.*' -and (Sql "SELECT stock FROM products WHERE id = $tp") -eq '0') 'adjust stock of a serial-tracked product is refused'
+    Nav "$Base/pages/inventory.php?search=ITM-9001"
+    Check (Eval "!document.querySelector('#inventoryTable [data-adjust]')") 'inventory: no Adjust button for the serial-tracked product'
+
+    # RR-1 draft: Mouse 10 @ 100.00 + ThinkPad 3 @ 30000.00 with only 2 serials (a draft may hold fewer)
+    Nav "$Base/pages/receiving.php"
+    Check (Eval "!!document.getElementById('newRrBtn')") 'admin: Receiving list has New Receiving'
+    $lines1 = "[[2, 10, '100.00', ''], [$tp, 3, '30000.00', 'sn-a1\nSN-A2']]"
+    RrSubmit "$Base/pages/receiving-form.php" $sup $lines1 'save' 'rr1 draft'
+    $rr1 = Sql 'SELECT MAX(id) FROM receiving_reports'
+    Check ((Text '#rrTitle') -eq "Draft #$rr1" -and (Text '#rrStatus') -eq 'Draft' -and (Sql "SELECT CONCAT_WS('|', status, IFNULL(rr_no, 'null')) FROM receiving_reports WHERE id = $rr1") -eq 'draft|null') "RR draft saved without a number ($(Text '#rrTitle'))"
+    Check ((Sql "SELECT GROUP_CONCAT(serial_no ORDER BY serial_no) FROM receiving_item_serials") -eq 'SN-A1,SN-A2') 'draft serials are stored trimmed + upper-case'
+    Nav "$Base/pages/receiving.php"
+    Check ((Text '.rr-table .rr-no') -eq "Draft #$rr1") 'receiving list shows the draft without RR number'
+    $mouseQb = BranchQty 2; $mouseAvg = BranchAvg 2; $mouseStock = Sql 'SELECT stock FROM products WHERE id = 2'
+    Nav "$Base/pages/receiving-view.php?id=$rr1"
+    Submit "document.getElementById('rrPost').form.submit()" 'post rr1 with too few serials'
+    Check ((Text '.alert--error span') -like '*serial*' -and (Sql "SELECT status FROM receiving_reports WHERE id = $rr1") -eq 'draft' -and (Sql "SELECT stock FROM products WHERE id = $tp") -eq '0') "post with serial count != qty is refused ($(Text '.alert span'))"
+    RrSubmit "$Base/pages/receiving-form.php?id=$rr1" $sup "[[2, 10, '100.00', ''], [$tp, 3, '30000.00', 'SN-A1\nSN-A1\nSN-A2\nSN-A3']]" 'save' 'rr1 bad serials'
+    Check ((Eval "location.pathname.endsWith('receiving-form.php')") -and (Eval "!!document.querySelector('[name=`"items[1][serials]`"][aria-invalid=true], .rr-serials .form-error')")) "duplicate / too many serials in a line -> field error ($(Text '.rr-serials .form-error'))"
+    RrSubmit "$Base/pages/receiving-form.php?id=$rr1" $sup "[[2, 10, '100.00', ''], [$tp, 3, '30000.00', 'SN-A1\nSN-A2\nSN-A3']]" 'post' 'rr1 post'
+    $rrNo1 = "RR-MAR-$year-000001"
+    Check ((Text '#rrTitle') -eq $rrNo1 -and (Text '#rrStatus') -eq 'Posted') "RR posted through the form as $(Text '#rrTitle') ($(Text '.alert span'))"
+    $st = Sql "SELECT CONCAT_WS('|', (SELECT stock FROM products WHERE id = 2), (SELECT stock FROM products WHERE id = $tp), (SELECT COUNT(*) FROM stock_movements WHERE type = 'receiving' AND receiving_id = $rr1), (SELECT COUNT(*) FROM product_serials WHERE product_id = $tp AND status = 'in_stock' AND branch_id = 1))"
+    Check ($st -eq "$([int]$mouseStock + 10)|3|2|3") "post: Mouse +10, ThinkPad 3, 2 receiving movements with receiving_id, 3 serials in stock ($st)"
+    $exp = ExpAvg $mouseQb $mouseAvg 10 '100.00'
+    $avg = BranchAvg 2
+    Check ($avg -eq $exp) "Mouse branch average = $exp (qty $mouseQb @ $mouseAvg + 10 @ 100.00) -> $avg"
+    Check ((BranchAvg $tp) -eq '30000.0000') "ThinkPad branch average = 30000.0000 ($(BranchAvg $tp))"
+    $r = PostForm 'pages/inventory.php' "action: 'delete', id: '$tp', return: 'inventory.php'"
+    Check ($r -like '*has receiving history*' -and (Sql "SELECT COUNT(*) FROM products WHERE id = $tp") -eq '1') 'deleting a received (never sold) product is blocked: receiving history'
+    # Duplicate serial on a later RR -> 409 on post, number not consumed
+    RrSubmit "$Base/pages/receiving-form.php" $sup "[[$tp, 1, '29000.00', 'SN-A1']]" 'post' 'rr dup serial'
+    $rrDup = Sql 'SELECT MAX(id) FROM receiving_reports'
+    Check ((Text '.alert--error span') -like '*SN-A1*' -and (Sql "SELECT status FROM receiving_reports WHERE id = $rrDup") -eq 'draft') "already registered serial -> post refused ($(Text '.alert span'))"
+    Submit "document.getElementById('rrDeleteForm').submit()" 'delete dup draft'
+    Check ((Text '.alert--success span') -eq "Draft #$rrDup was deleted." -and (Sql "SELECT COUNT(*) FROM receiving_reports WHERE id = $rrDup") -eq '0') "draft deleted ($(Text '.alert span'))"
+    Shot '33-receiving-view'
+
+    # POS: picker, serial scan, stale serial, no cost in POS JSON / localStorage
+    Nav "$Base/pages/pos.php"
+    WaitFor "document.querySelectorAll('.product-card').length === 13" 'POS shows 13 products'
+    $j = Eval "fetch('$Base/api/pos/products.php').then(r => r.text())"
+    Check ($j -match '"track_serial":true' -and $j -notmatch '(?i)cost') 'POS products API: track_serial flag, no cost key'
+    $j = Eval "fetch('$Base/api/pos/serials.php?product_id=$tp').then(r => r.text())"
+    Check ($j -like '*SN-A1*' -and $j -notmatch '(?i)cost') "POS serials API lists serials, no cost ($($j.Length) chars)"
+    ClickCard 'ThinkPad X1'
+    WaitFor "document.getElementById('serialDialog').open && document.querySelectorAll('#serialList input').length === 3" 'serial picker'
+    Check $true 'clicking a serial-tracked card opens the picker with 3 serials'
+    Shot '34-serial-picker'
+    [void](Eval "const b = document.querySelectorAll('#serialList input'); b[0].click(); b[1].click(); document.getElementById('serialForm').requestSubmit()")
+    Check ((CartQty 'ThinkPad X1') -eq 2 -and (Eval "document.querySelectorAll('#cartBody .cart-sn__chip').length") -eq 2) 'picking 2 serials -> qty 2 with 2 S/N chips'
+    $ls = Eval 'JSON.stringify(localStorage)'
+    Check ($ls -like '*serial_no*' -and $ls -notmatch '(?i)cost') 'localStorage cart keeps serials, no cost'
+    [void](Eval "document.activeElement.blur(); document.getElementById('btnSave').click()")
+    [void](Eval "(() => { const a = document.getElementById('payAmount'); a.value = '100800'; a.dispatchEvent(new Event('input', {bubbles: true})); document.getElementById('payForm').requestSubmit(); })()")
+    WaitFor "document.getElementById('doneDialog').open" 'serial sale done'
+    $saleTp = Sql 'SELECT MAX(id) FROM sales'
+    $st = Sql "SELECT CONCAT_WS('|', si.quantity, si.unit_cost, s.cost_total, (SELECT GROUP_CONCAT(ps.serial_no ORDER BY ps.serial_no) FROM sale_item_serials x JOIN product_serials ps ON ps.id = x.serial_id WHERE x.sale_item_id = si.id AND ps.status = 'sold')) FROM sales s JOIN sale_items si ON si.sale_id = s.id WHERE s.id = $saleTp"
+    Check ($st -eq '2|30000.0000|60000.00|SN-A1,SN-A2') "serial sale: qty 2, unit_cost = avg, cost_total, serials sold ($st)"
+    [void](Eval "document.getElementById('doneNew').click()")
+
+    # Receipt + sale view (admin sees cost)
+    Nav "$Base/pages/receipt.php?id=$saleTp"
+    Check (Eval "document.body.textContent.includes('S/N: SN-A1, SN-A2') && !/cost/i.test(document.body.textContent)") 'receipt shows the S/N, no cost'
+    Nav "$Base/pages/sale-view.php?id=$saleTp"
+    Check ((Eval "[...document.querySelectorAll('th')].some(t => t.textContent.trim() === 'Cost') && document.body.textContent.includes('S/N SN-A1')") -and (Text '#saleCost') -eq ([string][char]0x20B1 + ' 60,000.00')) "admin sale view: S/N, Cost column, cost of items $(Text '#saleCost')"
+    # Void the serial sale -> serials back in stock, average re-computed
+    Nav "$Base/pages/sale-view.php?id=$saleTp"
+    Submit "document.getElementById('voidBtn').click(); document.getElementById('voidReason').value = 'Serial test void'; document.querySelector('#voidDialog form').submit()" 'void serial sale'
+    $st = Sql "SELECT CONCAT_WS('|', (SELECT status FROM sales WHERE id = $saleTp), (SELECT GROUP_CONCAT(CONCAT(serial_no, ':', status) ORDER BY serial_no) FROM product_serials WHERE product_id = $tp), (SELECT stock FROM products WHERE id = $tp))"
+    Check ($st -eq 'cancelled|SN-A1:in_stock,SN-A2:in_stock,SN-A3:in_stock|3') "void: SN-A1/A2 back in stock, stock 3 ($st)"
+    Check ((BranchAvg $tp) -eq '30000.0000') "void re-averages the ThinkPad at its sold cost ($(BranchAvg $tp))"
+    # Exact serial scan, then a stale serial (sold elsewhere while in this cart) -> 409, dropped from the cart
+    Nav "$Base/pages/pos.php"
+    WaitFor "document.querySelectorAll('.product-card').length === 13" 'POS again'
+    Key 'F2' 113
+    TypeText 'sn-a3'; Key 'Enter' 13
+    WaitFor "document.querySelectorAll('#cartBody .cart-sn__chip').length === 1" 'scanned serial added'
+    Check ((CartQty 'ThinkPad X1') -eq 1 -and (Text '#cartBody .cart-sn__no') -eq 'SN-A3') 'scanning an exact serial adds that unit'
+    $sid3 = Sql "SELECT id FROM product_serials WHERE serial_no = 'SN-A3'"
+    $r = Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: $tp, qty: 1, serial_ids: [$sid3]}], customer_id: null, payment_type: 'cash', discount_percent: '0', amount_paid: '99999.00'}}).then(d => 'ok:' + d.sale.sale_no, e => e.status + ':' + e.message)"
+    Check ($r -like 'ok:*') "SN-A3 sold elsewhere through the API ($r)"
+    $r = Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: $tp, qty: 1, serial_ids: [$sid3]}], customer_id: null, payment_type: 'cash', discount_percent: '0', amount_paid: '99999.00'}}).then(d => 'ok', e => e.status + ':' + e.message + ':' + JSON.stringify((e.data || {}).problems || []))"
+    Check ($r -like '409:*SN-A3*' -and $r -like "*`"serial_id`":$sid3*") "sold serial -> 409 with problems[].serial_id ($r)"
+    $sales = Sql 'SELECT COUNT(*) FROM sales'
+    [void](Eval "document.activeElement.blur(); document.getElementById('btnSave').click()")
+    [void](Eval "(() => { const a = document.getElementById('payAmount'); a.value = '99999'; a.dispatchEvent(new Event('input', {bubbles: true})); document.getElementById('payForm').requestSubmit(); })()")
+    WaitFor "document.querySelectorAll('#cartBody .cart-sn__chip').length === 0" 'stale serial dropped'
+    Check ((CartQty 'ThinkPad X1') -eq 0 -and (Sql 'SELECT COUNT(*) FROM sales') -eq $sales) 'stale serial in the cart: checkout 409, serial dropped from the cart, no sale'
+    [void](Eval "document.querySelectorAll('dialog[open]').forEach(d => d.close())")
+    # Cancel RR-1 after later sales -> 409
+    Nav "$Base/pages/receiving-view.php?id=$rr1"
+    Submit "document.getElementById('cancelReason').value = 'Wrong delivery'; document.getElementById('cancelReason').form.submit()" 'cancel touched rr1'
+    Check ((Text '.alert--error span') -like '*cannot be cancelled*' -and (Sql "SELECT status FROM receiving_reports WHERE id = $rr1") -eq 'posted') "cancel RR after a later sale is blocked ($(Text '.alert span'))"
+    # Track flag locked while in stock
+    Nav "$Base/pages/product-form.php?id=$tp"
+    $r = Eval "(() => { const f = document.querySelector('[name=code]').form; const d = new FormData(f); d.delete('track_serial'); return fetch(f.action, {method: 'POST', body: d}).then(r => r.status); })()"
+    Check ($r -eq 422 -and (Sql "SELECT track_serial FROM products WHERE id = $tp") -eq '1') "unticking track_serial while serials are in stock -> $r"
+
+    # RR-2 (Mouse 5 @ 123.4567 + ThinkPad 1 SN-B1), then cancel it untouched -> stock, average and serial restored
+    $mouseQb = BranchQty 2; $mouseAvg = BranchAvg 2; $mouseStock = Sql 'SELECT stock FROM products WHERE id = 2'; $tpAvg = BranchAvg $tp
+    RrSubmit "$Base/pages/receiving-form.php" $sup "[[2, 5, '123.4567', ''], [$tp, 1, '31000.00', 'SN-B1']]" 'post' 'rr2 post'
+    $rr2 = Sql 'SELECT MAX(id) FROM receiving_reports'
+    Check ((Text '#rrTitle') -eq "RR-MAR-$year-000002") "second RR numbered $(Text '#rrTitle')"
+    $exp = ExpAvg $mouseQb $mouseAvg 5 '123.4567'; $exp2 = ExpAvg 2 $tpAvg 1 '31000.00'
+    Check ((BranchAvg 2) -eq $exp -and (BranchAvg $tp) -eq $exp2) "RR-2 averages: Mouse $(BranchAvg 2) (exp $exp), ThinkPad $(BranchAvg $tp) (exp $exp2)"
+    Submit "document.getElementById('cancelReason').value = 'Entered twice'; document.getElementById('cancelReason').form.submit()" 'cancel rr2'
+    $st = Sql "SELECT CONCAT_WS('|', (SELECT status FROM receiving_reports WHERE id = $rr2), (SELECT stock FROM products WHERE id = 2), (SELECT stock FROM products WHERE id = $tp), (SELECT COUNT(*) FROM product_serials WHERE serial_no = 'SN-B1'))"
+    Check ($st -eq "cancelled|$mouseStock|2|0" -and (Text '#rrStatus') -eq 'Cancelled') "cancel untouched RR: stock back, SN-B1 removed ($st; $(Text '.alert span'))"
+    Check ((BranchAvg 2) -eq $mouseAvg -and (BranchAvg $tp) -eq $tpAvg) "cancel restores averages (Mouse $(BranchAvg 2), ThinkPad $(BranchAvg $tp))"
+    Logout
+
+    # Cashier (MAR): no receiving, serial lookup only, no cost anywhere
+    Login 'cashier' 'cashier123'
+    $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
+    Check ($menu -like '*Serial Lookup*' -and $menu -notlike '*Receiving*') "cashier menu: Serial Lookup, no Receiving ($menu)"
+    $st = "$(Status 'pages/receiving.php'),$(Status 'pages/receiving-form.php'),$(Status "pages/receiving-view.php?id=$rr1"),$(Status 'pages/stock-integrity.php'),$(Status 'pages/serials.php')"
+    Check ($st -eq '403,403,403,403,200') "cashier: receiving list/form/view, integrity 403, serials 200 ($st)"
+    $r = PostForm "pages/receiving-form.php" "action: 'save', supplier_id: '$sup'"
+    Check ($r -like '403:*' -and (Sql 'SELECT COUNT(*) FROM receiving_reports') -eq '2') "cashier POST receiving draft 403 ($($r.Substring(0, 3)))"
+    Nav "$Base/pages/sale-view.php?id=$saleTp"
+    Check (Eval "![...document.querySelectorAll('th')].some(t => /cost|margin/i.test(t.textContent)) && !document.getElementById('saleCost') && document.body.textContent.includes('S/N SN-A1')") 'cashier sale view: S/N shown, no Cost / Margin'
+    Nav "$Base/pages/pos.php"
+    WaitFor "document.querySelectorAll('.product-card').length === 13" 'cashier POS'
+    $j = Eval "Promise.all([fetch('$Base/api/pos/products.php').then(r => r.text()), fetch('$Base/api/pos/serials.php?product_id=$tp').then(r => r.text()), fetch('$Base/api/pos/serials.php?serial=SN-A1').then(r => r.text())]).then(a => a.join(' '))"
+    Check ($j -like '*SN-A1*' -and $j -notmatch '(?i)cost') 'cashier: POS products / serials / scan JSON have no cost'
+    ClickCard 'ThinkPad X1'
+    WaitFor "document.querySelectorAll('#serialList input').length === 2" 'cashier picker'
+    [void](Eval "document.querySelector('#serialList input').click(); document.getElementById('serialForm').requestSubmit()")
+    $ls = Eval 'JSON.stringify(localStorage)'
+    Check ((CartQty 'ThinkPad X1') -eq 1 -and $ls -like '*serial_no*' -and $ls -notmatch '(?i)cost') 'cashier picks a serial; localStorage has no cost'
+    Logout
+
+    # DAV branch admin: MAR receiving + serials invisible
+    Login 'davadmin' $script:pw
+    $st = "$(Status "pages/receiving-view.php?id=$rr1"),$(Status "pages/receiving-form.php?id=$rr1"),$(Eval "BB.api('pos/serials.php?serial=SN-A1').then(() => 200, e => e.status)")"
+    Check ($st -eq '404,404,404') "DAV admin: MAR RR view/form 404, MAR serial scan 404 ($st)"
+    Nav "$Base/pages/serials.php?search=SN-A"
+    Check (Eval "!document.body.textContent.includes('SN-A1')") 'DAV admin: serial lookup does not find MAR serials'
+    Nav "$Base/pages/receiving.php"
+    Check (Eval "!document.body.textContent.includes('RR-MAR-')") 'DAV admin: receiving list has no MAR reports'
+    Logout
+    Login 'admin' 'admin123'
+    Nav "$Base/pages/serials.php?search=SN-A1"
+    Check (Eval "document.body.textContent.includes('SN-A1') && document.body.textContent.includes('$rrNo1')") 'admin serial lookup finds SN-A1 with its RR'
+    SwitchBranch 0
+    RrSubmit "$Base/pages/receiving-form.php" $sup "[[2, 1, '100.00', '']]" 'save' 'rr all branches'
+    Check ((Eval "document.body.textContent.includes('Choose a branch first')") -and (Sql 'SELECT COUNT(*) FROM receiving_reports') -eq '2') 'All branches: saving an RR -> Choose a branch first'
+    Nav "$Base/pages/inventory.php"
+    Nav (Eval "document.getElementById('integrityLink').href")
+    Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity (All branches): $(Text '#integritySummary span')"
+    Shot '35-stock-integrity'
+    Size 1024 900
+    foreach ($pgUrl in 'receiving.php', "receiving-view.php?id=$rr1", 'serials.php?search=SN', 'stock-integrity.php') {
+        Nav "$Base/pages/$pgUrl"
+        $wide = Eval "[...document.querySelectorAll('main *')].filter(e => e.getBoundingClientRect().right > window.innerWidth + 1).slice(-3).map(e => e.tagName + '.' + e.className + '#' + e.id + ':' + Math.round(e.getBoundingClientRect().right)).join(' ')"
+        Check (Eval 'document.documentElement.scrollWidth <= window.innerWidth') "$pgUrl : no horizontal page scroll at 1024px (scrollWidth $(Eval 'document.documentElement.scrollWidth') $wide)"
+    }
+    Size 1536 1024
+    SwitchBranch 1
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

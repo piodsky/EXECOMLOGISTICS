@@ -89,3 +89,24 @@
     .sales-table th, .sales-table td { padding-left: 10px; padding-right: 10px; }
     .sales-table .sale-time { display: block; }
 }
+
+/* Cost / margin (products.cost only) */
+.sale-totals__cost dt, .sale-totals__cost dd { color: var(--text-muted); font-size: 14px; }
+.sale-totals__grand + .sale-totals__cost { margin-top: 6px; }
+.cost-cell { color: var(--text-muted); }
+
+/* Serial numbers under an item (RR view, sale view) */
+.sn-list { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; padding: 0; list-style: none; }
+.sn-list li {
+    padding: 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 12px;
+}
+
+@media print {
+    .sn-list li { border-color: #999; background: none; }
+}

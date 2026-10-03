@@ -31,7 +31,35 @@ Read this first; open only the files a task needs.
 - [x] Phase 6 (= v2 phase 3): master data (categories, brands, models, units, customer types, service lists),
       suppliers + contacts, product brand/model/unit/cost/serial/warranty/specs, customer type/TIN/contacts.
       Migration `migrations/004_master_data.sql`. Payment methods / discount types wait for POS pricing (v2 phase 6).
+- [x] Phase 7a (= v2 phase 4, part 1): Receiving Reports, branch moving-average cost, serial numbers (receiving + POS),
+      serial lookup, stock integrity page. Migration `migrations/005_receiving_cost_serials.sql`. 7b next: issuance,
+      damaged stock, counts with approval, same-branch warehouse transfers (decisions saved in memory).
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## Receiving, cost & serials (Phase 7a)
+- Classes: `Receiving` (RR draft/post/cancel), `Costing` (branch average), `Serials`, `Integrity`. Pages
+  `receiving.php`, `receiving-form.php`, `receiving-view.php`, `serials.php` (menu "Serial Lookup"),
+  `stock-integrity.php` (non-menu, `inventory.integrity`, linked from Inventory). API `api/pos/serials.php`.
+- Permissions: `receiving.view/manage/post/cancel`, `inventory.integrity` (branch_admin), `serials.view` (also cashier +
+  technician). Posting also needs `products.cost`. Audit module `receiving` (branch-scoped).
+- RR: draft (no number, editable, deletable) → post (`RR-<BRANCH>-<posting year>-NNNNNN` from a locked
+  `document_sequences` row; supplier required; every line needs a cost; serial count = qty for tracked products) →
+  cancel (reason 3–255; only when untouched: no later movement of its products at that branch, average unchanged, its
+  serials still in stock at the RR location; restores the previous average). Acting on an existing RR needs the
+  current branch = the RR branch (other branch → 404, All → 422 "Switch to branch …"). Costs accept "1,234.50".
+- Cost: `products.unit_cost` = "Default cost" (seeds a branch average, prices opening stock; receiving never writes
+  it). Branch average in `product_branches.avg_cost` (DECIMAL 12,4, integer 1/10000 math, half-up): re-averaged by
+  receiving and void (at the line snapshot; NULL snapshot = unchanged); stock in without a cost leaves it unchanged.
+  `sale_items.unit_cost` + `sales.cost_total` are snapshots (NULL for pre-7a sales). Read cost only via
+  `Sales::costs()` / `Receiving::find()` (gated by `products.cost`); `Sales::find()` stays cost-free.
+- Lock order everywhere: RR → sequence → products (ORDER BY id) → stock_balances → product_branches → serials (ORDER BY id).
+- Serials (`products.track_serial`): unique per product, status in_stock/sold/removed, `sale_item_serials` kept after
+  void. Tracked products: opening stock must be 0, adjustStock → 422 (Adjust hidden), stock only via RR. Tracking can't
+  change while stock > 0 and can't be switched off once any serial exists; a void whose serial-ness no longer matches
+  the product → 409. POS: picker dialog (qty = serials picked), scanning a serial adds it, checkout
+  `items[].serial_ids`, 409 drops sold serials from the cart; cart/localStorage keep only `{id, serial_no}`.
+  Receipt and sale-view list S/N; sale-view Cost/Margin columns only with `products.cost`.
+- `Stock::move(..., ?int $receivingId)` with type `receiving`. `Suppliers::deleteBlocker` checks receiving_reports.
 
 ## Master data & suppliers (Phase 6)
 - Permissions: `master_data.manage` (super admin only), `suppliers.view` / `suppliers.manage` / `products.cost`
@@ -95,7 +123,17 @@ Read this first; open only the files a task needs.
 ## Agent workflow (`.claude/agents/`)
 The user asked for this workflow, so use these subagents without asking again. Subagents can't launch subagents:
 the main session runs each step with the agent named in project-manager's plan.
-- Non-trivial / multi-file / cross-module task: **project-manager** first (plan + workflow), then the steps:
+**Token-efficient rule (user, 2026-10-03): never use agents just because they exist.**
+- Simple (text/label/button rename, spacing, small CSS, typo, small isolated PHP bug): NO agents. Understand →
+  modify → verify (lint + a quick check) directly.
+- Medium (one area): only the matching specialist (backend → backend-developer, DB → database-specialist,
+  UI → frontend-uiux, auth → security-reviewer). No project-manager, no unrelated reviewers.
+- Complex (new workflow, major DB change, several modules, auth/permissions, inventory/PO/receiving flows): the full
+  chain below.
+- Don't have several agents inspect the same files unless their expertise differs; pass on earlier findings
+  instead of re-analysing. Give each agent only the files/context it needs and ask for short reports (changed
+  files, what changed, test result, issues).
+- Complex task: **project-manager** first (plan + workflow), then the steps:
   - Simple: system-analyst → backend-developer or frontend-uiux → qa-tester → code-reviewer
   - Database-heavy: system-analyst → database-specialist → backend-developer → security-reviewer → qa-tester → code-reviewer
   - UI: system-analyst → frontend-uiux → backend-developer (if needed) → qa-tester → code-reviewer
@@ -157,8 +195,8 @@ the main session runs each step with the agent named in project-manager's plan.
   (user-form.php uses `$target`).
 
 ## Inventory / Customers behaviour
-- Stock changes ONLY via sales or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
-  every change writes `stock_movements` (type initial/sale/restock/adjustment/void, signed qty, stock_after).
+- Stock changes ONLY via sales, receiving (RR post/cancel) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
+  every change writes `stock_movements` (type initial/sale/restock/adjustment/void/receiving, signed qty, stock_after).
   The product edit form never edits stock; opening stock is set on create only.
 - Delete is allowed only if never sold / never bought; otherwise deactivate (`is_active=0` hides from POS).
 - Customers: `customers.edit` adds/edits; `customers.delete` deactivates/deletes. Duplicate phone numbers are rejected.
@@ -202,8 +240,8 @@ the main session runs each step with the agent named in project-manager's plan.
 
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
-- **Node.js is NOT installed on this PC.** Use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (174 checks incl. master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+- Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
+  (229 checks incl. receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

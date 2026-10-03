@@ -79,6 +79,9 @@ $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at'])
                     <span><?= (int) $item['quantity'] ?> x <?= e(number_format((float) $item['unit_price'], 2)) ?></span>
                     <span><?= e(number_format((float) $item['line_total'], 2)) ?></span>
                 </div>
+                <?php if (!empty($item['serials'])): ?>
+                    <div class="item__sn">S/N: <?= e(implode(', ', $item['serials'])) ?></div>
+                <?php endif; ?>
             </div>
         <?php endforeach; ?>
     </div>

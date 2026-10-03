@@ -95,8 +95,11 @@ $models     = MasterData::options('models', $cur('model_id'));
 $units      = MasterData::options('units', $cur('unit_id'));
 $unitValue  = $val('unit_id', (string) ($product ? '' : (Products::defaultUnitId() ?? '')));
 $inactive   = static fn (array $o): string => (int) $o['is_active'] === 1 ? '' : ' (inactive)';
-$typeLabels = ['initial' => 'Opening stock', 'sale' => 'Sale', 'restock' => 'Restock', 'adjustment' => 'Adjustment', 'void' => 'Void'];
+$typeLabels = ['initial' => 'Opening stock', 'sale' => 'Sale', 'restock' => 'Restock', 'adjustment' => 'Adjustment', 'void' => 'Void', 'receiving' => 'Receiving'];
 
+// Serial tracking can only change while the product has no stock in any branch (Products::update).
+$serialLocked = $product !== null && (int) $product['total_stock'] > 0;
+$isSerial     = (int) ($product['track_serial'] ?? 0) === 1;
 $stockReturn = $self;
 $pageScripts = ['js/inventory.js'];
 
@@ -149,11 +152,11 @@ require ROOT_PATH . '/includes/header.php';
 
             <?php if ($canCost): ?>
                 <label class="form-field">
-                    <span class="form-label">Unit cost (<?= e(config('app.currency')) ?>)</span>
+                    <span class="form-label">Default cost (<?= e(config('app.currency')) ?>)</span>
                     <input class="form-input" name="unit_cost" inputmode="decimal" maxlength="10" placeholder="0.00"
                            value="<?= e($val('unit_cost', '0.00')) ?>"<?= invalid('unit_cost') ?><?= $ro ?>>
                     <?= field_error('unit_cost') ?>
-                    <p class="form-hint">What one unit costs you. Not shown on the POS or receipts.</p>
+                    <p class="form-hint">Starting cost for opening stock and a branch's first average cost; Receiving sets the branch average. Not shown on the POS or receipts.</p>
                 </label>
             <?php endif; ?>
 
@@ -225,9 +228,14 @@ require ROOT_PATH . '/includes/header.php';
             </label>
 
             <label class="check form-field--full">
-                <input type="checkbox" name="track_serial" value="1"<?= $tracksSerial ? ' checked' : '' ?><?= $ro ?>>
-                <span><strong>Track serial numbers</strong><small class="muted block">For items with a serial number per unit (laptops, printers, routers)</small></span>
+                <input type="checkbox" name="track_serial" value="1" id="trackSerial"<?= $tracksSerial ? ' checked' : '' ?><?= $serialLocked ? ' disabled' : $ro ?>>
+                <span><strong>Track serial numbers</strong><small class="muted block">For items with a serial number per unit (laptops, printers, routers).
+                    Their stock comes in through Receiving with one serial per unit.</small></span>
             </label>
+            <?php if ($serialLocked): ?>
+                <?php if ($isSerial): ?><input type="hidden" name="track_serial" value="1"><?php endif; ?>
+                <p class="form-hint form-field--full"><?= icon('lock') ?> Serial tracking can only change when the product has no stock in any branch.</p>
+            <?php endif; ?>
         </div>
     </section>
 
@@ -261,7 +269,7 @@ require ROOT_PATH . '/includes/header.php';
                         <span class="form-label">In stock</span>
                         <div class="stock-now">
                             <strong><?= (int) $product['stock'] ?></strong>
-                            <?php if ($canAdjust): ?>
+                            <?php if ($canAdjust && !$isSerial): ?>
                                 <button type="button" class="btn btn--light btn--sm" data-adjust
                                         data-id="<?= (int) $product['id'] ?>" data-name="<?= e($product['name']) ?>"
                                         data-code="<?= e($product['code']) ?>" data-stock="<?= (int) $product['stock'] ?>">
@@ -270,13 +278,15 @@ require ROOT_PATH . '/includes/header.php';
                             <?php endif; ?>
                         </div>
                         <p class="form-hint">At <?= e(Branch::label()) ?><?= Branch::isConcrete() && Branch::canSeeAll() ? ' · company total ' . (int) $product['total_stock'] : '' ?></p>
+                        <?php if ($isSerial): ?><p class="form-hint">Serial-tracked: stock changes through Receiving and sales.</p><?php endif; ?>
                     </div>
                 <?php else: ?>
-                    <label class="form-field">
+                    <label class="form-field" id="openingStockField">
                         <span class="form-label">Opening stock at <?= e(Branch::label()) ?> *</span>
-                        <input class="form-input" type="number" name="stock" min="0" max="<?= Products::MAX_STOCK ?>" step="1"
-                               value="<?= e(old('stock', '0')) ?>"<?= invalid('stock') ?>>
+                        <input class="form-input" type="number" name="stock" id="openingStock" min="0" max="<?= Products::MAX_STOCK ?>" step="1"
+                               value="<?= e($tracksSerial ? '0' : old('stock', '0')) ?>"<?= invalid('stock') ?><?= $tracksSerial ? ' readonly' : '' ?>>
                         <?= field_error('stock') ?>
+                        <p class="form-hint" id="openingStockHint"<?= $tracksSerial ? '' : ' hidden' ?>>Serial-tracked items start at 0: receive them through Receiving with their serial numbers.</p>
                     </label>
                 <?php endif; ?>
                 <label class="form-field">
@@ -320,6 +330,8 @@ require ROOT_PATH . '/includes/header.php';
                         <td>
                             <?php if ($m['sale_no'] && Auth::can('sales.view')): ?>
                                 <a href="<?= e(url('pages/sale-view.php?id=' . (int) $m['sale_id'])) ?>"><?= e($m['type'] === 'void' ? ($m['note'] ?? 'Voided sale No. ' . $m['sale_no']) : 'Sale No. ' . $m['sale_no']) ?></a>
+                            <?php elseif ($m['rr_no'] !== null && Auth::can('receiving.view')): ?>
+                                <a href="<?= e(url('pages/receiving-view.php?id=' . (int) $m['receiving_id'])) ?>"><?= e($m['note'] !== null && $m['note'] !== $m['rr_no'] ? $m['note'] : $m['rr_no']) ?></a>
                             <?php elseif ($m['sale_no']): ?>
                                 <?= e($m['type'] === 'void' ? ($m['note'] ?? 'Voided sale No. ' . $m['sale_no']) : 'Sale No. ' . $m['sale_no']) ?>
                             <?php else: ?>

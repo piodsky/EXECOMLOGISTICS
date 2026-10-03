@@ -33,7 +33,9 @@ final class Sales
      *
      * @param array<int,int> $qtyById    product_id => quantity
      * @param int|null       $paidCents  cash received (required for cash, ignored otherwise)
-     * @throws HttpException 409 when stock is insufficient, 422 on invalid data / no branch chosen
+     * @param array<int, list<int>> $serialsById product_id => product_serials ids (track_serial products only;
+     *                                           their count must equal the quantity)
+     * @throws HttpException 409 when stock / a serial is not available, 422 on invalid data / no branch chosen
      */
     public static function complete(
         int $userId,
@@ -42,6 +44,7 @@ final class Sales
         string $paymentType,
         float $discountPercent,
         ?int $paidCents,
+        array $serialsById = [],
     ): array {
         $branchId = Branch::forWrite();
         $location = Branch::defaultLocation($branchId);
@@ -67,7 +70,7 @@ final class Sales
             $ids  = array_keys($qtyById);
             $in   = implode(',', array_fill(0, count($ids), '?'));
             $stmt = $pdo->prepare(
-                "SELECT id, code, name, price, is_active FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE"
+                "SELECT id, code, name, price, is_active, track_serial FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE"
             );
             $stmt->execute($ids);
             $products = [];
@@ -83,9 +86,33 @@ final class Sales
                 $products[(int) $hiddenId]['is_active'] = 0;
             }
 
+            // Serial numbers: only for track_serial products, exactly one per unit, no repeats.
+            foreach ($serialsById as $id => $list) {
+                if (!isset($qtyById[$id])) {
+                    throw new HttpException(422, 'The cart has serial numbers for an item that is not in it.');
+                }
+            }
+            foreach ($qtyById as $id => $qty) {
+                $p = $products[$id] ?? null;
+                if ($p === null || (int) $p['is_active'] !== 1) {
+                    continue; // reported as unavailable below
+                }
+                $list = $serialsById[$id] ?? [];
+                if ((int) $p['track_serial'] === 1) {
+                    if (count($list) !== $qty || count(array_unique($list)) !== count($list)) {
+                        throw new HttpException(422, sprintf('Choose one serial number for each unit of %s.', $p['name']));
+                    }
+                } elseif ($list !== []) {
+                    throw new HttpException(422, sprintf('%s does not use serial numbers.', $p['name']));
+                }
+            }
+
             $lines    = [];
             $problems = [];
             $subtotal = 0;
+            $costTotal = 0;
+            $stockById = [];
+            $sellSerials = []; // product_id => serial ids, for lines without a stock problem
             foreach ($qtyById as $id => $qty) {
                 $p = $products[$id] ?? null;
                 if ($p === null || (int) $p['is_active'] !== 1) {
@@ -103,9 +130,26 @@ final class Sales
                     ];
                     continue;
                 }
-                $price     = to_cents($p['price']);
-                $lines[]   = ['id' => $id, 'code' => $p['code'], 'name' => $p['name'], 'price' => $price, 'qty' => $qty];
-                $subtotal += $price * $qty;
+                // Cost snapshot = the branch moving average (locks product_branches after stock_balances).
+                $cost       = Costing::avg($id, $branchId);
+                $costTotal += Costing::lineCents($qty, $cost);
+                $price      = to_cents($p['price']);
+                $lines[]    = ['id' => $id, 'code' => $p['code'], 'name' => $p['name'], 'price' => $price, 'qty' => $qty,
+                               'cost' => $cost, 'serials' => (int) $p['track_serial'] === 1 ? $serialsById[$id] : []];
+                $subtotal  += $price * $qty;
+                if ((int) $p['track_serial'] === 1) {
+                    $sellSerials[$id] = $serialsById[$id];
+                }
+                $stockById[$id] = $available;
+            }
+
+            // Serials last in the lock order (products -> stock_balances -> product_branches -> product_serials).
+            if ($sellSerials) {
+                $checked = Serials::lockForSale($sellSerials, $location['id']);
+                foreach ($checked['problems'] as $sp) {
+                    $problems[] = ['product_id' => $sp['product_id'], 'serial_id' => $sp['serial_id'],
+                                   'stock' => $stockById[$sp['product_id']] ?? 0, 'message' => $sp['message']];
+                }
             }
 
             if ($problems) {
@@ -133,9 +177,9 @@ final class Sales
 
             $pdo->prepare(
                 'INSERT INTO sales (sale_no, branch_id, user_id, customer_id, payment_type, status, subtotal, discount_percent,
-                                    discount_amount, vat_rate, vat_amount, total, amount_paid, change_amount,
+                                    discount_amount, vat_rate, vat_amount, total, cost_total, amount_paid, change_amount,
                                     created_at, completed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
             )->execute([
                 'TMP' . bin2hex(random_bytes(8)), // replaced with the padded ID below
                 $branchId,
@@ -149,6 +193,7 @@ final class Sales
                 number_format($vatRate, 2, '.', ''),
                 from_cents($vat),
                 from_cents($total),
+                from_cents($costTotal),
                 from_cents($paidCents),
                 from_cents($change),
             ]);
@@ -157,14 +202,17 @@ final class Sales
             $pdo->prepare('UPDATE sales SET sale_no = ? WHERE id = ?')->execute([$saleNo, $saleId]);
 
             $insertItem = $pdo->prepare(
-                'INSERT INTO sale_items (sale_id, product_id, product_code, product_name, unit_price, quantity, line_total)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO sale_items (sale_id, product_id, product_code, product_name, unit_price, unit_cost, quantity, line_total)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
             );
             foreach ($lines as $line) {
                 $insertItem->execute([
                     $saleId, $line['id'], $line['code'], $line['name'],
-                    from_cents($line['price']), $line['qty'], from_cents($line['price'] * $line['qty']),
+                    from_cents($line['price']), $line['cost'], $line['qty'], from_cents($line['price'] * $line['qty']),
                 ]);
+                if ($line['serials']) {
+                    Serials::markSold((int) $pdo->lastInsertId(), $line['serials']);
+                }
                 // Deducts the branch location + company total and writes the ledger row (409 if short).
                 Stock::move($line['id'], $location, -$line['qty'], 'sale', null, $saleId, $userId);
             }
@@ -209,15 +257,45 @@ final class Sales
         if (!$sale) {
             return null;
         }
+        unset($sale['cost_total']); // receipts / sale view never carry cost: see costs()
 
         $stmt = db()->prepare(
-            'SELECT product_id, product_code, product_name, unit_price, quantity, line_total
+            'SELECT id, product_id, product_code, product_name, unit_price, quantity, line_total
                FROM sale_items WHERE sale_id = ? ORDER BY id'
         );
         $stmt->execute([$id]);
-        $sale['items'] = $stmt->fetchAll();
+        $serials = Serials::forSale($id);
+        $sale['items'] = array_map(
+            static fn (array $item): array => $item + ['serials' => $serials[(int) $item['id']] ?? []],
+            $stmt->fetchAll()
+        );
 
         return $sale;
+    }
+
+    /**
+     * Cost of a sale (products.cost only): cost_total and the unit_cost snapshot per sale_items.id.
+     * Null values = sold before costing existed. Null when the sale is not found / outside the branch scope.
+     * @return array{cost_total:?string, items:array<int,?string>}|null
+     */
+    public static function costs(int $saleId): ?array
+    {
+        if (!Auth::can('products.cost')) {
+            throw new HttpException(403, 'You do not have permission to see costs.');
+        }
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
+        $stmt = db()->prepare("SELECT s.cost_total FROM sales s WHERE s.id = ? AND {$scope}");
+        $stmt->execute([$saleId, ...$params]);
+        $sale = $stmt->fetch();
+        if (!$sale) {
+            return null;
+        }
+        $stmt = db()->prepare('SELECT id, unit_cost FROM sale_items WHERE sale_id = ? ORDER BY id');
+        $stmt->execute([$saleId]);
+        return [
+            'cost_total' => $sale['cost_total'],
+            'items'      => array_map(static fn ($c) => $c === null ? null : (string) $c, $stmt->fetchAll(PDO::FETCH_KEY_PAIR)),
+        ];
     }
 
     // ------------------------------------------------------------------
@@ -350,29 +428,57 @@ final class Sales
                 throw new HttpException(409, 'Only completed sales can be voided.');
             }
 
-            // Units to return per product (products deleted since then have product_id NULL).
+            // Units to return per product (products deleted since then have product_id NULL),
+            // with the cost snapshots (NULL = sold before costing existed).
             $stmt = $pdo->prepare(
-                'SELECT product_id, SUM(quantity) AS qty FROM sale_items
-                  WHERE sale_id = ? AND product_id IS NOT NULL GROUP BY product_id ORDER BY product_id'
+                'SELECT si.product_id, si.product_name, si.quantity, si.unit_cost,
+                        EXISTS (SELECT 1 FROM sale_item_serials sis WHERE sis.sale_item_id = si.id) AS has_serials
+                   FROM sale_items si
+                  WHERE si.sale_id = ? AND si.product_id IS NOT NULL ORDER BY si.product_id, si.id'
             );
             $stmt->execute([$id]);
             $returns = [];
+            $costs   = []; // product_id => list of {qty, cost}, or null when any snapshot is missing
+            $lines   = []; // product_id => list of {name, has_serials} (serial-tracking check)
             foreach ($stmt->fetchAll() as $row) {
-                $returns[(int) $row['product_id']] = (int) $row['qty'];
+                $pid = (int) $row['product_id'];
+                $returns[$pid] = ($returns[$pid] ?? 0) + (int) $row['quantity'];
+                $lines[$pid][] = ['name' => (string) $row['product_name'], 'has_serials' => (bool) $row['has_serials']];
+                if (!array_key_exists($pid, $costs) || $costs[$pid] !== null) {
+                    $costs[$pid] = $row['unit_cost'] === null
+                        ? null
+                        : [...($costs[$pid] ?? []), ['qty' => (int) $row['quantity'], 'cost' => (string) $row['unit_cost']]];
+                }
             }
 
-            $units = 0;
+            $units   = 0;
+            $serials = [];
             if ($returns) {
                 $location = Branch::defaultLocation((int) $sale['branch_id']);
                 $in   = implode(',', array_fill(0, count($returns), '?'));
-                $stmt = $pdo->prepare("SELECT id FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE");
+                $stmt = $pdo->prepare("SELECT id, track_serial FROM products WHERE id IN ({$in}) ORDER BY id FOR UPDATE");
                 $stmt->execute(array_keys($returns));
-                foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $productId) {
-                    $qty = $returns[(int) $productId];
-                    Stock::move((int) $productId, $location, $qty, 'void',
+                $tracked = $stmt->fetchAll(PDO::FETCH_KEY_PAIR); // id => track_serial
+                // Refuse before any write when serial tracking no longer matches how the line was sold.
+                foreach ($tracked as $productId => $track) {
+                    foreach ($lines[(int) $productId] as $line) {
+                        if ((bool) (int) $track !== $line['has_serials']) {
+                            throw new HttpException(409, $line['name'] . ': serial tracking changed since this sale, '
+                                . "so it can't be voided automatically. Ask an administrator.");
+                        }
+                    }
+                }
+                foreach (array_keys($tracked) as $productId) {
+                    $productId = (int) $productId;
+                    $qty = $returns[$productId];
+                    // Re-average with the sale's cost snapshot before the stock comes back.
+                    Costing::applyReturn($productId, (int) $sale['branch_id'], $qty,
+                        $costs[$productId] === null ? null : Costing::weighted($costs[$productId]));
+                    Stock::move($productId, $location, $qty, 'void',
                         "Voided sale No. {$sale['sale_no']}: {$reason}", $id, $userId);
                     $units += $qty;
                 }
+                $serials = Serials::restore($id, $location); // last in the lock order
             }
 
             $pdo->prepare(
@@ -381,7 +487,8 @@ final class Sales
 
             Audit::record('sales', 'void', 'sale', $id, $sale['sale_no'],
                 ['status' => 'completed', 'total' => $sale['total']],
-                ['status' => 'cancelled', 'reason' => $reason, 'units_returned' => $units],
+                ['status' => 'cancelled', 'reason' => $reason, 'units_returned' => $units]
+                    + ($serials ? ['serials_returned' => $serials] : []),
                 (int) $sale['branch_id']);
 
             $pdo->commit();

@@ -45,6 +45,14 @@ $discLabel = rtrim(rtrim((string) $sale['discount_percent'], '0'), '.');
 $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at']);
 $printUrl  = url('pages/receipt.php?id=' . $id . '&autoprint=1');
 
+// Cost / margin only with products.cost (Sales::find never carries cost). Null cost = sold before costing.
+$costs    = Auth::can('products.cost') ? Sales::costs($id) : null;
+$showCost = $costs !== null;
+$lineCost = static function (array $item) use ($costs): ?int { // cents
+    $unit = $costs['items'][(int) $item['id']] ?? null;
+    return $unit === null ? null : Costing::lineCents((int) $item['quantity'], $unit);
+};
+
 $pageStyles = ['css/sales.css'];
 require ROOT_PATH . '/includes/header.php';
 ?>
@@ -93,7 +101,8 @@ require ROOT_PATH . '/includes/header.php';
         <div class="table-wrap">
             <table class="table">
                 <thead>
-                <tr><th>#</th><th>Item</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Total</th></tr>
+                <tr><th>#</th><th>Item</th><th class="num">Unit Price</th><th class="num">Qty</th><th class="num">Total</th>
+                    <?php if ($showCost): ?><th class="num">Cost</th><th class="num" title="Line total minus cost, before discount and VAT">Margin</th><?php endif; ?></tr>
                 </thead>
                 <tbody>
                 <?php foreach ($sale['items'] as $i => $item): ?>
@@ -102,10 +111,20 @@ require ROOT_PATH . '/includes/header.php';
                         <td>
                             <strong class="block"><?= e($item['product_name']) ?></strong>
                             <small class="muted"><?= e($item['product_code']) ?></small>
+                            <?php if (!empty($item['serials'])): ?>
+                                <ul class="sn-list" aria-label="Serial numbers">
+                                    <?php foreach ($item['serials'] as $sn): ?><li>S/N <?= e($sn) ?></li><?php endforeach; ?>
+                                </ul>
+                            <?php endif; ?>
                         </td>
                         <td class="num"><?= e(money($item['unit_price'])) ?></td>
                         <td class="num"><?= (int) $item['quantity'] ?></td>
                         <td class="num"><?= e(money($item['line_total'])) ?></td>
+                        <?php if ($showCost): ?>
+                            <?php $c = $lineCost($item); ?>
+                            <td class="num cost-cell"><?= $c === null ? '—' : e(money(from_cents($c))) ?></td>
+                            <td class="num cost-cell"><?= $c === null ? '—' : e(money(from_cents(to_cents($item['line_total']) - $c))) ?></td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -119,6 +138,12 @@ require ROOT_PATH . '/includes/header.php';
             <?php endif; ?>
             <div><dt>VAT (<?= e($vatLabel) ?>%)</dt><dd><?= e(money($sale['vat_amount'])) ?></dd></div>
             <div class="sale-totals__grand"><dt>Total Amount</dt><dd id="saleTotal"><?= e(money($sale['total'])) ?></dd></div>
+            <?php if ($showCost): ?>
+                <?php $costTotal = $costs['cost_total']; ?>
+                <div class="sale-totals__cost"><dt>Cost of items</dt><dd id="saleCost"><?= $costTotal === null ? '—' : e(money($costTotal)) ?></dd></div>
+                <div class="sale-totals__cost"><dt>Gross margin <small>(after discount, before VAT)</small></dt>
+                    <dd><?= $costTotal === null ? '—' : e(money(from_cents(to_cents($sale['subtotal']) - to_cents($sale['discount_amount']) - to_cents($costTotal)))) ?></dd></div>
+            <?php endif; ?>
         </dl>
     </section>
 

@@ -1,7 +1,7 @@
 <?php
 /**
  * Permission registry: key => [module, label].
- * Must match the `permissions` table seed (database.sql / migrations/003, 004). Roles get permissions
+ * Must match the `permissions` table seed (database.sql / migrations/003, 004, 005). Roles get permissions
  * through `role_permissions`; a role with roles.is_super = 1 holds every key (also future ones).
  * Check with Auth::can('key'); an unknown key is a programming error.
  */
@@ -16,6 +16,12 @@ return [
     'customers.delete'    => ['Customers', 'Deactivate and delete customers'],
     'inventory.view'      => ['Inventory', 'View products and stock (read-only)'],
     'inventory.adjust'    => ['Inventory', 'Adjust stock'],
+    'receiving.view'      => ['Receiving', 'View receiving reports'],
+    'receiving.manage'    => ['Receiving', 'Create and edit receiving drafts'],
+    'receiving.post'      => ['Receiving', 'Post receiving reports - adds stock and sets cost'],
+    'receiving.cancel'    => ['Receiving', 'Cancel posted receiving reports'],
+    'serials.view'        => ['Inventory', 'Look up serial numbers'],
+    'inventory.integrity' => ['Inventory', 'Run stock integrity checks'],
     'products.manage'     => ['Inventory', 'Add, edit, deactivate and delete products'],
     'products.cost'       => ['Inventory', 'See and edit unit cost'],
     'master_data.manage'  => ['Master Data', 'Manage categories, brands, models, units, customer types and service lists'],

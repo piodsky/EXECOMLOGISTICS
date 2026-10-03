@@ -39,6 +39,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 3 → 4 | nothing: Settings and Users use the existing tables (just copy the files) |
 | Phase 4 → 5 | `migrations\003_branches_permissions.sql` (branches, branch stock, roles & permissions, audit log) |
 | Phase 5 → 6 | `migrations\004_master_data.sql` (brands, models, units, suppliers, customer types, contacts, lists) |
+| Phase 6 → 7a | `migrations\005_receiving_cost_serials.sql` (receiving reports, branch average cost, serial numbers) |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql

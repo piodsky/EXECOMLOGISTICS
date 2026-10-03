@@ -88,11 +88,16 @@ require ROOT_PATH . '/includes/header.php';
         <h1>Inventory</h1>
         <p class="muted">Products, prices, stock levels and images · stock at <strong id="stockScope"><?= e(Branch::label()) ?></strong>.</p>
     </div>
-    <?php if ($canManage): ?>
-        <a class="btn btn--primary" href="<?= e(url('pages/product-form.php?return=' . rawurlencode($returnTo))) ?>">
-            <?= icon('plus') ?> Add Product
-        </a>
-    <?php endif; ?>
+    <div class="page-actions">
+        <?php if (Auth::can('inventory.integrity')): ?>
+            <a class="btn btn--light" href="<?= e(url('pages/stock-integrity.php')) ?>" id="integrityLink"><?= icon('shield') ?> Stock Integrity</a>
+        <?php endif; ?>
+        <?php if ($canManage): ?>
+            <a class="btn btn--primary" href="<?= e(url('pages/product-form.php?return=' . rawurlencode($returnTo))) ?>">
+                <?= icon('plus') ?> Add Product
+            </a>
+        <?php endif; ?>
+    </div>
 </div>
 <?php if (Auth::can('inventory.adjust') && !Branch::isConcrete()): ?>
     <div class="alert alert--info" role="status">
@@ -204,7 +209,7 @@ require ROOT_PATH . '/includes/header.php';
                     </td>
                     <td class="actions-col">
                         <div class="row-actions">
-                            <?php if ($canAdjust): ?>
+                            <?php if ($canAdjust && (int) $p['track_serial'] !== 1): ?>
                                 <button type="button" class="icon-btn" title="Adjust stock" aria-label="Adjust stock of <?= e($p['name']) ?>"
                                         data-adjust data-id="<?= (int) $p['id'] ?>" data-name="<?= e($p['name']) ?>"
                                         data-code="<?= e($p['code']) ?>" data-stock="<?= $stock ?>">
