@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -542,7 +542,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'POS Sales|Sales History|Inventory|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'POS Sales|Sales History|Job Orders|Inventory|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -565,8 +565,8 @@ try {
     Logout
 
     # Technician
-    Login 'davtech' $script:pw 'inventory.php'
-    Check $true 'technician lands on Inventory'
+    Login 'davtech' $script:pw 'job-orders.php'
+    Check $true 'technician lands on Job Orders'
     $st = "$(Status 'pages/pos.php'),$(Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: 11, qty: 1}], payment_type: 'cash', amount_paid: '99999'}}).then(() => 200, e => e.status)"),$(Status 'pages/account.php')"
     Check ($st -eq '403,403,200') "technician: pos.php / checkout API / account ($st)"
     Logout
@@ -717,7 +717,7 @@ try {
     $r = Eval "fetch('$Base/pages/master-data.php?list=brands', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, action: 'save', name: 'Hacked'})}).then(r => r.status)"
     Check ($r -eq 403 -and (Sql "SELECT COUNT(*) FROM brands WHERE name = 'Hacked'") -eq '0') "cashier POST to master data 403 ($r)"
     Logout
-    Login 'davtech' $script:pw 'inventory.php'
+    Login 'davtech' $script:pw 'job-orders.php'
     $st = "$(Status 'pages/master-data.php'),$(Status 'pages/master-data.php?list=units'),$(Status 'pages/suppliers.php'),$(Status 'pages/supplier-form.php')"
     Check ($st -eq '403,403,403,403') "technician: master-data / list / suppliers / supplier-form 403 ($st)"
     Nav "$Base/pages/product-form.php?id=1"
@@ -936,7 +936,7 @@ try {
 
     # Cashier / technician: no stock operations, no warehouses, API 403
     $denied = "pages/stock-docs.php|pages/stock-doc-form.php?type=transfer|pages/stock-doc-form.php?type=issue|pages/stock-doc-form.php?type=writeoff|pages/stock-doc-view.php?id=1|pages/warehouses.php|pages/serial-register.php?id=8|api/inventory/serials.php?product_id=2&location_id=1"
-    foreach ($u in @(@('cashier', 'cashier123', 'pos.php'), @('martech', $script:pw, 'inventory.php'))) {
+    foreach ($u in @(@('cashier', 'cashier123', 'pos.php'), @('martech', $script:pw, 'job-orders.php'))) {
         Login $u[0] $u[1] $u[2]
         $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
         Check ($menu -notlike '*Stock Operations*') "$($u[0]) menu: no Stock Operations ($menu)"
@@ -1120,7 +1120,7 @@ try {
 
     # Technician granted inventory.issue (no products.cost): can issue, sees no cost
     [void](Sql "INSERT INTO role_permissions (role_id, permission_id) SELECT r.id, p.id FROM roles r JOIN permissions p ON p.perm_key = 'inventory.issue' WHERE r.code = 'technician'")
-    Login 'martech' $script:pw 'inventory.php'
+    Login 'martech' $script:pw 'job-orders.php'
     DocPost 'type=issue' '1' '' 'Office keyboard' '[[3, 1, null]]' 'tech issue'
     $issT = Sql 'SELECT MAX(id) FROM inventory_docs'
     Check ((Text '#docTitle') -eq "ISS-MAR-$year-000002" -and (Sql "SELECT total_cost IS NOT NULL FROM inventory_docs WHERE id = $issT") -eq '1') "technician with inventory.issue posts $(Text '#docTitle')"
@@ -1332,6 +1332,91 @@ try {
     Nav "$Base/pages/receipt.php?id=$sale9"
     Check (Eval "!document.body.textContent.includes('Bulk order') && !document.querySelector('.price-was')") 'receipt shows the actual price only'
     Nav "$Base/pages/pos.php"
+    Logout
+    Login 'admin' 'admin123'
+
+    # ---- Phase 10a: job orders ----
+    $jPerm = Sql "SELECT GROUP_CONCAT(CONCAT(r.code, ':', p.perm_key) ORDER BY r.code, p.perm_key) FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id WHERE p.perm_key LIKE 'job_orders.%'"
+    Check ($jPerm -eq 'branch_admin:job_orders.assign,branch_admin:job_orders.create,branch_admin:job_orders.update,branch_admin:job_orders.view,cashier:job_orders.create,cashier:job_orders.view,technician:job_orders.create,technician:job_orders.update') "job order permissions per role ($jPerm)"
+    Nav "$Base/pages/settings.php"
+    Submit "const f = document.getElementById('settingsForm'); f.job_quote_threshold.value = 'abc'; f.requestSubmit()" 'bad threshold'
+    Check ((Eval "document.querySelector('[name=job_quote_threshold]').getAttribute('aria-invalid')") -eq 'true') 'settings: bad quotation threshold -> field error'
+    Submit "const f = document.getElementById('settingsForm'); f.job_quote_threshold.value = '2,000'; f.requestSubmit()" 'threshold 2000'
+    Check ((Sql "SELECT setting_value FROM settings WHERE setting_key = 'job_quote_threshold'") -eq '2000.00') 'settings: quotation threshold saved (2000.00)'
+    Logout
+
+    Login 'cashier' 'cashier123'
+    Nav "$Base/pages/job-orders.php"
+    Check (Eval "!!document.getElementById('newJobBtn') && [...document.querySelectorAll('.sidebar__nav .nav-link span')].some(s => s.textContent.trim() === 'Job Orders')") 'cashier: Job Orders menu + New Job Order'
+    Nav "$Base/pages/job-form.php"
+    Submit "document.getElementById('jobForm').requestSubmit()" 'empty job form'
+    Check (Eval "['customer_name', 'customer_phone', 'problem', 'device_type_id'].every(n => document.querySelector('[name=' + n + ']').getAttribute('aria-invalid') === 'true') && !document.querySelector('[name=technician_id]')") 'empty intake: name / phone / problem / device type errors; cashier cannot assign'
+    $dev = Sql "SELECT id FROM lookups WHERE list = 'device_type' AND name = 'Laptop'"
+    Submit "const f = document.getElementById('jobForm'); f.customer_name.value = 'Pedro Penduko'; f.customer_phone.value = '0917 555 0101'; f.device_type_id.value = '$dev'; f.brand.value = 'Acer'; f.model.value = 'Aspire 5'; f.serial_no.value = 'ACR-77'; f.accessories.value = 'Charger'; f.problem.value = 'Will not boot'; f.priority.value = 'high'; f.requestSubmit()" 'create job'
+    $jo = "JO-MAR-$year-000001"
+    $job1 = Sql "SELECT id FROM job_orders WHERE job_no = '$jo'"
+    Check ((Text '#jobTitle') -eq $jo -and (Text '#jobStatus') -eq 'New' -and $job1 -ne '') "cashier created $jo (New)"
+    Check (Eval "!document.getElementById('takeJobBtn') && !document.getElementById('assignForm') && !!document.getElementById('editJobBtn') && !!document.getElementById('noteForm')") 'cashier: no Take / Assign; Edit and notes'
+    Check (Eval "getComputedStyle(document.querySelector('.jo-ticket')).display === 'none' && document.querySelector('.jo-ticket').textContent.includes('CLAIM STUB') && document.querySelector('.jo-ticket').textContent.includes('ACR-77')") 'ticket + claim stub rendered, hidden on screen'
+    [void](Cdp 'Emulation.setEmulatedMedia' @{ media = 'print' })
+    Check (Eval "getComputedStyle(document.querySelector('.jo-ticket')).display === 'block' && getComputedStyle(document.querySelector('.jo-screen')).display === 'none'") 'print: only the ticket + claim stub'
+    Shot '41-job-ticket-print'
+    [void](Cdp 'Emulation.setEmulatedMedia' @{ media = '' })
+    Logout
+
+    Login 'davtech' $script:pw 'job-orders.php'
+    Check ((Status "pages/job-view.php?id=$job1") -eq 404) 'DAV technician: MAR job 404'
+    Logout
+
+    Login 'martech' $script:pw 'job-orders.php'
+    Check ((Text '[data-work=unassigned]') -eq '1' -and (Eval "!!document.getElementById('newJobBtn')")) 'technician lands on Job Orders: 1 unassigned job'
+    Nav "$Base/pages/job-view.php?id=$job1"
+    Submit "document.getElementById('takeJobBtn').click()" 'take job'
+    Check ((Text '#jobStatus') -eq 'Assigned' -and (Text '#jobTechnician') -like 'Marco Tech*') 'technician took the job'
+    Submit "document.getElementById('startBtn').click()" 'start diagnosis'
+    Submit "const f = document.getElementById('diagnoseForm'); f.diagnosis.value = 'Failed SSD'; f.estimate.value = '2,500'; f.requestSubmit()" 'diagnose'
+    Check ((Text '#jobStatus') -eq 'For Approval' -and (Text '#jobEstimate') -like '*2,500.00') "estimate 2,500 above the 2,000 threshold -> For Approval ($(Text '#jobStatus'))"
+    Logout
+
+    Login 'cashier' 'cashier123'
+    Nav "$Base/pages/job-view.php?id=$job1"
+    Submit "const f = document.getElementById('decisionForm'); f.querySelector('[value=approve]').checked = true; f.requestSubmit()" 'decision without method'
+    Check ((Eval "document.querySelector('#decisionForm [name=method]').getAttribute('aria-invalid')") -eq 'true') 'decision without "how" -> field error'
+    Submit "const f = document.getElementById('decisionForm'); f.querySelector('[value=approve]').checked = true; f.method.value = 'phone'; f.requestSubmit()" 'approve quotation'
+    Check ((Text '#jobStatus') -eq 'In Repair' -and (Text '#jobApproval') -like 'Approved*Pedro Penduko*phone call*') "front desk recorded the customer's approval ($(Text '#jobApproval'))"
+    Check (Eval "!document.getElementById('toTestingBtn') && !document.getElementById('waitPartsBtn')") 'cashier cannot move the repair along'
+    [void](PostForm "pages/job-view.php?id=$job1" "action: 'to_testing'")
+    Check ((Sql "SELECT status FROM job_orders WHERE id = $job1") -eq 'in_repair') 'cashier POST to_testing refused (status unchanged)'
+    Logout
+
+    Login 'martech' $script:pw 'job-orders.php'
+    Nav "$Base/pages/job-view.php?id=$job1"
+    Submit "document.getElementById('waitPartsBtn').click(); const f = document.querySelector('#partsDialog form'); f.note.value = 'SSD 512GB from the warehouse'; f.requestSubmit()" 'waiting for parts'
+    Check ((Text '#jobStatus') -eq 'Waiting for Parts') 'waiting for parts (with the parts needed)'
+    Submit "document.getElementById('resumeBtn').click()" 'resume'
+    Submit "document.getElementById('toTestingBtn').click()" 'to testing'
+    Submit "document.getElementById('completeBtn').click(); document.getElementById('resolutionInput').value = 'ok'; document.getElementById('resolutionInput').form.requestSubmit()" 'complete too short'
+    Check (Eval "document.getElementById('completeDialog').open && document.getElementById('resolutionInput').getAttribute('aria-invalid') === 'true'") 'complete without the work done -> dialog reopens with the error'
+    Submit "document.getElementById('resolutionInput').value = 'Replaced the SSD, reinstalled the OS'; document.getElementById('resolutionInput').form.requestSubmit()" 'complete'
+    Check ((Text '#jobStatus') -eq 'Completed' -and (Text '#resolutionCard') -like '*Replaced the SSD*') 'job completed with the work done'
+    $n = Eval "document.querySelectorAll('#jobTimeline li').length"
+    Check ($n -eq 9) "timeline: create, take, start, diagnose, decision, parts, resume, testing, complete ($n)"
+    Shot '40-job-view'
+    Logout
+
+    Login 'maradmin' $script:pw
+    $tech = Sql "SELECT id FROM users WHERE username = 'martech'"
+    $mara = Sql "SELECT id FROM users WHERE username = 'maradmin'"
+    Nav "$Base/pages/job-form.php"
+    Submit "const f = document.getElementById('jobForm'); f.customer_id.value = '2'; f.customer_id.dispatchEvent(new Event('change')); f.device_type_id.value = '$dev'; f.problem.value = 'Printer jams'; f.technician_id.value = '$tech'; f.requestSubmit()" 'create assigned job'
+    $job2 = Sql 'SELECT MAX(id) FROM job_orders'
+    Check ((Text '#jobStatus') -eq 'Assigned' -and (Text '#jobTechnician') -like 'Marco Tech*' -and (Text '#jobCustomer') -eq 'Maria Santos') 'branch admin: job for a customer record, assigned at intake'
+    Submit "const f = document.getElementById('assignForm'); f.technician_id.value = '$mara'; f.requestSubmit()" 'reassign'
+    Check ((Text '#jobTechnician') -like 'Mara Admin*') 'branch admin reassigned the job'
+    Submit "window.confirm = () => true; document.getElementById('cancelJobBtn').click(); document.getElementById('cancelReason').value = 'Customer changed their mind'; document.getElementById('cancelReason').form.requestSubmit()" 'cancel job'
+    Check ((Text '#jobStatus') -eq 'Cancelled' -and (Sql "SELECT cancel_reason FROM job_orders WHERE id = $job2") -eq 'Customer changed their mind') 'branch admin cancelled the job with a reason'
+    $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'job_orders'"
+    Check ([int]$a -ge 12) "job order actions are in the audit log ($a)"
     Logout
     Login 'admin' 'admin123'
 

@@ -98,6 +98,17 @@ require ROOT_PATH . '/includes/header.php';
             </label>
         </div>
 
+        <h2 class="card__title card__title--spaced">Job Orders</h2>
+        <div class="form-grid">
+            <label class="form-field">
+                <span class="form-label">Quotation approval above (₱) *</span>
+                <input class="form-input" name="job_quote_threshold" inputmode="decimal" maxlength="12" required
+                       value="<?= e($val('job_quote_threshold')) ?>"<?= invalid('job_quote_threshold') ?>>
+                <?= field_error('job_quote_threshold') ?>
+                <p class="form-hint">A repair estimate above this amount needs the customer's approval before work starts. 0 = ask for every repair with a charge.</p>
+            </label>
+        </div>
+
         <div class="form-actions form-actions--inline">
             <button type="submit" class="btn btn--primary"><?= icon('save') ?> Save Settings</button>
         </div>

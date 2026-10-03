@@ -20,6 +20,13 @@ return [
         'url'        => 'pages/sales-history.php',
         'permission' => 'sales.view',
     ],
+    // Job orders (= JobOrders::VIEW_PERMISSIONS); technicians land here (first page they can open).
+    'job-orders' => [
+        'label'      => 'Job Orders',
+        'icon'       => 'wrench',
+        'url'        => 'pages/job-orders.php',
+        'permission' => ['job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign'],
+    ],
     'inventory' => [
         'label'      => 'Inventory',
         'icon'       => 'box',

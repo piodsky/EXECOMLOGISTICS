@@ -1,0 +1,73 @@
+/* Job Orders (job-orders.php, job-form.php, job-view.php). Builds on sales/receiving/stock-docs/transfers.css. */
+
+/* List */
+.jo-problem { display: -webkit-box; max-width: 280px; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.jo-prio { margin-left: 4px; vertical-align: 1px; }
+
+/* Form */
+.jo-hint { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+.jo-hint svg { flex-shrink: 0; width: 16px; height: 16px; }
+.jo-checklist { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+
+/* View */
+.jo-memo { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.jo-details { margin-bottom: 12px; }
+.jo-step { border-left: 4px solid var(--primary); }
+.jo-step__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.jo-step__row p { margin: 0; }
+.jo-step__buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+.jo-step__buttons form { margin: 0; }
+.jo-step form + form, .jo-step form + .jo-step__buttons { margin-top: 14px; }
+.jo-quote { margin: 0 0 12px; }
+.jo-check { flex-direction: row; align-items: center; gap: 8px; align-self: end; padding-bottom: 10px; }
+.jo-radios { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
+.jo-radios label { display: flex; align-items: center; gap: 8px; }
+.jo-assign { display: grid; gap: 8px; margin-top: 12px; }
+.jo-assign .form-field { margin: 0; }
+.jo-assign .btn { justify-self: start; }
+
+/* Timeline */
+.jo-note-form { display: grid; gap: 8px; margin-bottom: 16px; }
+.jo-note-form .form-field { margin: 0; }
+.jo-note-form .btn { justify-self: start; }
+.jo-timeline { margin: 0; padding: 0; list-style: none; }
+.jo-event { position: relative; padding: 0 0 14px 20px; border-left: 2px solid var(--border); }
+.jo-event:last-child { padding-bottom: 0; border-left-color: transparent; }
+.jo-event::before {
+    content: ""; position: absolute; top: 4px; left: -6px; width: 10px; height: 10px;
+    border: 2px solid var(--primary); border-radius: 50%; background: var(--surface);
+}
+.jo-event--note::before { border-color: var(--text-muted); }
+.jo-event--cancel::before, .jo-event--test_failed::before { border-color: var(--danger); }
+.jo-event--complete::before { border-color: var(--success); background: var(--success); }
+.jo-event__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.jo-event__head small { flex-basis: 100%; }
+.jo-event .jo-memo { margin-top: 4px; font-size: 13px; }
+
+/* Printed ticket + claim stub: hidden on screen */
+.jo-ticket { display: none; }
+
+@media (max-width: 1200px) {
+    .jo-table .col-opt { display: none; }
+}
+
+@media print {
+    .jo-screen { display: none !important; }
+    .jo-ticket { display: block; color: #000; font-size: 12px; }
+    .jo-ticket__head, .jo-stub { display: flex; justify-content: space-between; gap: 16px; }
+    .jo-ticket__head > div, .jo-stub > div { display: flex; flex-direction: column; gap: 2px; }
+    .jo-ticket__head strong { font-size: 16px; }
+    .jo-ticket__no { align-items: flex-end; text-align: right; }
+    .jo-ticket__no strong { font-family: Consolas, "Courier New", monospace; font-size: 15px; }
+    .jo-ticket__grid { width: 100%; margin: 12px 0; border-collapse: collapse; }
+    .jo-ticket__grid th, .jo-ticket__grid td { padding: 5px 6px; border: 1px solid #999; text-align: left; vertical-align: top; }
+    .jo-ticket__grid th { width: 14%; background: #f2f2f2; font-weight: 600; }
+    .jo-ticket__terms { margin: 6px 0; font-size: 11px; }
+    .jo-ticket__signs { display: flex; gap: 32px; margin-top: 28px; }
+    .jo-ticket__signs div { flex: 1; height: 36px; border-bottom: 1px solid #000; }
+    .jo-ticket__signs span { display: block; margin-top: 40px; font-size: 11px; }
+    .jo-ticket__cut { margin: 36px 0 14px; border-top: 1px dashed #000; text-align: center; }
+    .jo-ticket__cut span { position: relative; top: -8px; padding: 0 8px; background: #fff; font-size: 10px; }
+    .jo-stub { flex-wrap: wrap; padding: 8px 10px; border: 1px solid #000; }
+    .jo-stub p { flex-basis: 100%; margin: 4px 0 0; }
+}

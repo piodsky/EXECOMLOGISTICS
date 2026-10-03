@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007 and 008.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008 and 009.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,8 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS job_order_events;
+DROP TABLE IF EXISTS job_orders;
 DROP TABLE IF EXISTS stock_transfer_serials;
 DROP TABLE IF EXISTS stock_transfer_lines;
 DROP TABLE IF EXISTS stock_transfers;
@@ -958,6 +960,116 @@ CREATE TABLE stock_transfer_serials (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
+-- Job orders (migration 009)
+--   new -> assigned -> diagnosing -> (for_approval ->) in_repair
+--   in_repair <-> waiting_parts, in_repair -> for_testing -> completed
+--   for_testing -> in_repair (test failed); for_approval -> completed
+--   (customer declined); new / assigned -> cancelled.
+--   released / closed are used from Phase 10b.
+--   customer_name / customer_phone are snapshots (walk-ins have no
+--   customer_id). serial_id + warranty_until: the device was sold by us.
+-- ---------------------------------------------------------------------
+CREATE TABLE job_orders (
+  id                   INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  job_no               VARCHAR(30)   NOT NULL,
+  branch_id            INT UNSIGNED  NOT NULL,
+  status               ENUM('new','assigned','diagnosing','for_approval','in_repair','waiting_parts','for_testing',
+                            'completed','released','closed','cancelled') NOT NULL DEFAULT 'new',
+  priority             ENUM('low','normal','high','urgent') NOT NULL DEFAULT 'normal',
+  service_location     ENUM('in_shop','on_site') NOT NULL DEFAULT 'in_shop',
+  customer_id          INT UNSIGNED  NULL,
+  customer_name        VARCHAR(100)  NOT NULL,
+  customer_phone       VARCHAR(30)   NOT NULL,
+  contact_person       VARCHAR(100)  NULL,
+  job_type_id          INT UNSIGNED  NULL,
+  device_type_id       INT UNSIGNED  NULL,
+  brand                VARCHAR(80)   NULL,
+  model                VARCHAR(80)   NULL,
+  serial_no            VARCHAR(80)   NULL,
+  serial_id            INT UNSIGNED  NULL,
+  warranty_until       DATE          NULL,
+  accessories          VARCHAR(255)  NULL,
+  device_condition     VARCHAR(255)  NULL,
+  problem              VARCHAR(1000) NOT NULL,
+  remarks              VARCHAR(500)  NULL,
+  expected_at          DATE          NULL,
+  technician_id        INT UNSIGNED  NULL,
+  assigned_at          DATETIME      NULL,
+  diagnosis            VARCHAR(2000) NULL,
+  estimate             DECIMAL(12,2) NULL,
+  diagnosed_at         DATETIME      NULL,
+  approval             ENUM('not_needed','pending','approved','declined') NULL,
+  approval_method      VARCHAR(20)   NULL,
+  approval_by_name     VARCHAR(100)  NULL,
+  approval_note        VARCHAR(255)  NULL,
+  approval_recorded_by INT UNSIGNED  NULL,
+  approval_at          DATETIME      NULL,
+  resolution           VARCHAR(2000) NULL,
+  completed_by         INT UNSIGNED  NULL,
+  completed_at         DATETIME      NULL,
+  cancelled_by         INT UNSIGNED  NULL,
+  cancelled_at         DATETIME      NULL,
+  cancel_reason        VARCHAR(255)  NULL,
+  created_by           INT UNSIGNED  NOT NULL,
+  created_at           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_job_orders_no (job_no),
+  KEY idx_job_orders_branch_status (branch_id, status, priority),
+  KEY idx_job_orders_technician (technician_id, status),
+  KEY idx_job_orders_customer (customer_id),
+  KEY idx_job_orders_serial_no (serial_no),
+  KEY idx_job_orders_serial (serial_id),
+  KEY idx_job_orders_job_type (job_type_id),
+  KEY idx_job_orders_device_type (device_type_id),
+  KEY idx_job_orders_created_by (created_by),
+  KEY idx_job_orders_approval_by (approval_recorded_by),
+  KEY idx_job_orders_completed_by (completed_by),
+  KEY idx_job_orders_cancelled_by (cancelled_by),
+  CONSTRAINT fk_job_orders_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_job_type FOREIGN KEY (job_type_id) REFERENCES lookups (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_device_type FOREIGN KEY (device_type_id) REFERENCES lookups (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_technician FOREIGN KEY (technician_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_orders_approval_by FOREIGN KEY (approval_recorded_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_job_orders_completed_by FOREIGN KEY (completed_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_job_orders_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT chk_job_orders_estimate CHECK (estimate IS NULL OR estimate >= 0),
+  CONSTRAINT chk_job_orders_assigned CHECK (status IN ('new','cancelled') OR technician_id IS NOT NULL)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Timeline: every status change (from_status -> to_status) and note.
+CREATE TABLE job_order_events (
+  id           INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  job_order_id INT UNSIGNED  NOT NULL,
+  user_id      INT UNSIGNED  NOT NULL,
+  action       VARCHAR(30)   NOT NULL,
+  from_status  VARCHAR(20)   NULL,
+  to_status    VARCHAR(20)   NULL,
+  note         VARCHAR(2000) NULL,
+  created_at   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_job_events_job (job_order_id, id),
+  KEY idx_job_events_user (user_id),
+  CONSTRAINT fk_job_events_job FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_job_events_user FOREIGN KEY (user_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
 --   the change; location_qty_after is the level at (branch, warehouse, location).
@@ -1125,14 +1237,18 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (39, 'pos.change_price',    'POS',       'Change the selling price within the role limit (reason when lower)', 11),
   (40, 'pos.discount',        'POS',       'Give a sale discount within the role limit',                12),
   (41, 'pos.price_override',  'POS',       'Approve prices / discounts beyond the limits or below cost', 13),
-  (42, 'pos.view_cost',       'POS',       'Show unit cost and margin on the POS (toggle)',             14);
+  (42, 'pos.view_cost',       'POS',       'Show unit cost and margin on the POS (toggle)',             14),
+  (43, 'job_orders.view',     'Job Orders', 'View all job orders of the branch',                       105),
+  (44, 'job_orders.create',   'Job Orders', 'Take in devices (new job orders) and edit intake details', 106),
+  (45, 'job_orders.update',   'Job Orders', 'Work on assigned jobs: diagnosis, quotation, repair status, notes', 107),
+  (46, 'job_orders.assign',   'Job Orders', 'Assign technicians, act on any job of the branch, cancel jobs', 108);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
   (1, 'super_admin',  'Super Administrator',  'Full access to every module and every branch.', 1, 1),
   (2, 'branch_admin', 'Branch Administrator', 'Runs a branch: sales and voids, customers, stock adjustments, reports and branch users.', 1, 0),
   (3, 'cashier',      'Cashier',              'Sells at the POS and looks after customers.', 1, 0),
-  (4, 'technician',   'Technician',           'Looks up customers and stock.', 1, 0);
+  (4, 'technician',   'Technician',           'Repairs devices: job orders assigned to them and the branch''s new jobs; looks up customers and stock.', 1, 0);
 
 -- POS limits (percent): price below suggested / sale discount without approval (super admin: unlimited).
 UPDATE roles SET max_price_drop = 20.00, max_discount = 20.00 WHERE code = 'branch_admin';
@@ -1146,10 +1262,12 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'receiving.view', 'receiving.manage', 'receiving.post', 'receiving.cancel', 'serials.view',
          'inventory.integrity', 'inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create',
          'counts.approve', 'warehouses.manage', 'transfers.request', 'transfers.approve', 'transfers.release',
-         'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost'))
+         'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost',
+         'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
-         'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount'))
-   OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view'))
+         'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create'))
+   OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view', 'job_orders.create',
+         'job_orders.update'))
 ORDER BY r.id, p.id;
 
 -- Master data seeds (same rows and ids as migrations/004).
@@ -1208,7 +1326,8 @@ INSERT INTO settings (setting_key, setting_value) VALUES
   ('shop_phone',     '(000) 000-0000'),
   ('shop_tin',       ''),
   ('vat_rate',       '12.00'),
-  ('receipt_footer', 'Thank you for choosing EXECOM Logistics! Keep this receipt for warranty claims.');
+  ('receipt_footer', 'Thank you for choosing EXECOM Logistics! Keep this receipt for warranty claims.'),
+  ('job_quote_threshold', '1000.00');
 
 INSERT INTO categories (id, name, slug, icon, sort_order) VALUES
   (1, 'Laptops & Computers', 'laptops-computers', 'laptop',    1),

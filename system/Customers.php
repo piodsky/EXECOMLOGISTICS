@@ -319,6 +319,11 @@ final class Customers
         if ((int) $stmt->fetchColumn() > 0) {
             throw new HttpException(409, "{$customer['name']} has purchase history, so they can't be deleted. Deactivate them instead to hide them from the POS.");
         }
+        $stmt = db()->prepare('SELECT COUNT(*) FROM job_orders WHERE customer_id = ?');
+        $stmt->execute([$id]);
+        if ((int) $stmt->fetchColumn() > 0) {
+            throw new HttpException(409, "{$customer['name']} has job orders, so they can't be deleted. Deactivate them instead.");
+        }
         $pdo = db();
         $pdo->beginTransaction();
         try {

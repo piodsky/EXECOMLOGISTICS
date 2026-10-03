@@ -28,6 +28,8 @@ final class MasterData
         'models'         => [['products', 'model_id', 'products use it']],
         'units'          => [['products', 'unit_id', 'products use it']],
         'customer-types' => [['customers', 'customer_type_id', 'customers use it']],
+        'device-types'   => [['job_orders', 'device_type_id', 'job orders use it']],
+        'job-types'      => [['job_orders', 'job_type_id', 'job orders use it']],
     ];
 
     public const MAX_SORT = 9999;

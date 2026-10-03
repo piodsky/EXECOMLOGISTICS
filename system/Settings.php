@@ -23,6 +23,7 @@ final class Settings
             'shop_tin'       => setting('shop_tin'),
             'vat_rate'       => setting('vat_rate', '12.00'),
             'receipt_footer' => setting('receipt_footer'),
+            'job_quote_threshold' => JobOrders::quoteThreshold(),
         ];
     }
 
@@ -70,6 +71,19 @@ final class Settings
             $errors['vat_rate'] = 'Enter a VAT rate from 0 to 100 (e.g. 12).';
         } else {
             $data['vat_rate'] = number_format($vat, 2, '.', '');
+        }
+
+        // Missing from older forms / scripts: keep the saved value.
+        if (!array_key_exists('job_quote_threshold', $input)) {
+            $data['job_quote_threshold'] = JobOrders::quoteThreshold();
+        } else {
+            $raw = is_string($input['job_quote_threshold']) ? str_replace(',', '', trim($input['job_quote_threshold'])) : '';
+            $min = input_decimal(['v' => $raw], 'v', 0, 9999999.99, 2);
+            if ($min === null) {
+                $errors['job_quote_threshold'] = 'Enter an amount from 0 (e.g. 1,000.00).';
+            } else {
+                $data['job_quote_threshold'] = number_format($min, 2, '.', '');
+            }
         }
 
         return [$data, $errors];

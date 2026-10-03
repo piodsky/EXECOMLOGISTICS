@@ -41,8 +41,36 @@ Read this first; open only the files a task needs.
       (user request).
 - [x] Phase 9 (= v2 phase 6): POS pricing — actual vs suggested price, per-role price / discount limits, admin
       approval at the till, cost toggle. Migration `migrations/008_pos_pricing.sql`. Built without agents.
-      Next (v2 phase 7): job orders & technicians.
+- [x] Phase 10a (= v2 phase 7, part 1): job orders & technicians — intake, assign / take, diagnosis + estimate,
+      quotation approval, repair statuses, timeline + notes, ticket + claim stub print, technician work lists.
+      Migration `migrations/009_job_orders.sql`. Built without agents.
+      Next: 10b = parts request / issue / use / return (job custody), billing via the POS (no second deduction),
+      release with payment (or warranty), back-jobs.
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## Job orders (Phase 10a) — user decisions
+- Class `JobOrders` (`job_orders` + `job_order_events` timeline), menu "Job Orders" (`job-orders`, icon `wrench`, after
+  Sales History, so technicians land there): `job-orders.php` (list, work tiles My Jobs / Unassigned / For Approval /
+  Waiting for Parts / Completed; default filter = open jobs, `status=all` for every status), `job-form.php` (intake;
+  `?id=` edits intake details of an open job), `job-view.php` (next step, details, timeline + notes, assign, cancel,
+  print = ticket + claim stub via `@media print`). JS `assets/js/jobs.js`, CSS `assets/css/jobs.css`. Audit module `job_orders`.
+- Permissions: `job_orders.view` (all branch jobs), `.create` (intake + edit intake), `.update` (work on own jobs, take
+  unassigned new jobs), `.assign` (assign/reassign, act on any job, cancel). Defaults: branch_admin all; cashier
+  view + create; technician create + update. Without view/assign a user sees own jobs, jobs they took in and the
+  branch's unassigned new jobs (`JobOrders::visibleSql`); anything else → 404.
+- Flow (`JobOrders::act()`, row locked, session must work in the job's branch, All → 422): new → assigned (take /
+  assign) → diagnosing (start) → diagnose (diagnosis 3–2000 + estimate): estimate > setting `job_quote_threshold`
+  (Settings → Company, default 1000.00) or "ask the customer anyway" → for_approval, else in_repair →
+  decision (worker or front desk; approve → in_repair, decline → completed; method + who answered recorded) →
+  in_repair ⇄ waiting_parts (note required) → for_testing → completed (work done required) | test_failed → in_repair.
+  Cancel (reason) only new/assigned: supervisor, or the creator (job_orders.create) while new. Notes on open +
+  completed jobs. released/closed exist in the ENUM for 10b.
+- Intake: walk-in (name + phone snapshot) or a customer record (fills name/phone); device type required (lookup
+  `device_type`), job type optional (`job_type`), brand/model/serial free text. A serial we sold (product_serials
+  sold + completed sale) links `serial_id` + `warranty_until` = sale date + product warranty_days. Never store
+  device passwords. Numbers `JO-<BRANCH>-<YEAR>-NNNNNN` (document_sequences 'JO').
+- Guards: customers / device or job types / branches with job orders can't be deleted. `setting()` is cached per
+  request (tests: read the DB).
 
 ## POS pricing (Phase 9) — user decisions
 - Prices are VAT-exclusive (VAT added on top as before). `products.price` = suggested; `sale_items.unit_price` = actual,
@@ -314,7 +342,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (356 checks incl. POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (381 checks incl. job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

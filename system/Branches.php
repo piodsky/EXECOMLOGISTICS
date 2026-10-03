@@ -199,6 +199,7 @@ final class Branches
             'stock_balances'    => 'it has stock records',
             'stock_movements'   => 'it has stock history',
             'inventory_docs'    => 'it has stock documents',
+            'job_orders'        => 'it has job orders',
         ];
         $stmt = db()->prepare('SELECT 1 FROM stock_transfers WHERE from_branch_id = ? OR to_branch_id = ? LIMIT 1');
         $stmt->execute([$id, $id]);
