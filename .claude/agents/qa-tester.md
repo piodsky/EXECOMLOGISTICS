@@ -24,12 +24,15 @@ files under `tests/`; report application bugs instead of fixing them.
 - DB checks: `C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db -e "SELECT ..."`.
 
 ## Data safety
-- The e2e suite creates sales, voids, users and settings changes. It expects the sample dataset
-  (next sale No. 0000005). Before running, check `SELECT MAX(id) FROM sales`:
-  - 4 → sample data only, safe to run.
-  - > 4 → the DB has real or earlier test data. Do NOT re-import `database.sql` (it drops every table) unless
-    the user confirms; report that the suite needs a fresh sample DB.
-- Reset (only when allowed): `C:\xampp\mysql\bin\mysql.exe -u root < database.sql`.
+- `e2e-smoke.ps1` runs on an isolated copy: it copies the app to `htdocs\EXECOMLOGISTICS-e2e` with its own
+  `.env` and imports fresh sample data into `execomlogistics_e2e` every run, so it is always safe to run and
+  never touches the live app or `execomlogistics_db`. After failures the copy is kept (logs in its
+  `storage\logs`); `-Keep` keeps it after a pass too. Inspect results in `execomlogistics_e2e`.
+  Only one run at a time (a second one exits with SETUP ERROR): never start it in parallel with another agent's run.
+  A kept copy is reachable from the LAN with the sample passwords: delete it when you're done.
+- Your own curl/manual tests that WRITE data: run them against the test copy
+  (`-Keep`, then http://localhost/EXECOMLOGISTICS-e2e), not the live app.
+- Never re-import `database.sql` into the live DB (it drops every table) unless the user confirms.
 
 ## What to test for each task
 normal workflow · invalid input · empty input · duplicate records (product code/barcode, customer phone,

@@ -2,16 +2,96 @@
 #   powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [output-dir]
 # Signs in as cashier, sells the mockup cart, checks totals/stock/receipt and Sales History; then as admin
 # checks inventory, voids the sale (stock returned, audit log, VOID receipt), checks Reports, then Settings, Users and My Account.
-# NOTE: it creates a real sale and lowers stock. Re-import database.sql afterwards (sample data only!).
-param([string]$Out = (Join-Path $env:TEMP "execom-e2e"))
+# Runs against an ISOLATED copy: the app is copied to htdocs\<app>-e2e with its own .env (test DB
+# execomlogistics_e2e, own session cookie) and database.sql is imported into that test DB, so every run starts
+# from the sample data and the live app + live database are never touched. The copy is removed after a
+# passing run (kept after failures for its logs; -Keep always keeps it). The test DB stays for inspection.
+param([string]$Out = (Join-Path $env:TEMP "execom-e2e"), [switch]$Keep)
 $ErrorActionPreference = "Stop"
-$Base = 'http://localhost/EXECOMLOGISTICS'
+# Absolute path (relative -Out resolves against $PWD), without expanding 8.3 short names like PIODOS~1.
+$Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
 New-Item -ItemType Directory -Force $Out | Out-Null
+
+# One run at a time (runs share the copy, the test DB and the Edge port). Windows drops the lock on exit.
+try { $lock = [IO.File]::Open((Join-Path $Out '.e2e-lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+catch { Write-Output 'SETUP ERROR another e2e-smoke run is in progress (wait for it to finish).'; exit 1 }
+
+# --- Isolated test copy + test database ---
+$root   = Split-Path $PSScriptRoot -Parent
+$appDir = Split-Path $root -Leaf
+$e2eDir = Join-Path (Split-Path $root -Parent) "$appDir-e2e"
+$marker = Join-Path $e2eDir '.e2e-copy'
+$testDb = 'execomlogistics_e2e'
+$Base   = "http://localhost/$appDir-e2e"
+
+function Remove-TestCopy {
+    if (-not (Test-Path $e2eDir)) { return }
+    # Only ever delete a folder this script created.
+    if (-not (Test-Path $marker)) { throw "$e2eDir exists but is not an e2e copy (no .e2e-copy marker); remove or rename it yourself." }
+    # Marker goes last, so a half-finished delete (locked file) can still be cleaned up by the next run.
+    Get-ChildItem -Force $e2eDir | Where-Object { $_.Name -ne '.e2e-copy' } | Remove-Item -Recurse -Force
+    Remove-Item -Recurse -Force $e2eDir
+}
+
+try {
+    $envFile = Join-Path $root '.env'
+    if (-not (Test-Path $envFile)) { throw "Missing $envFile (copy .env.example to .env first)." }
+    $envLines = [IO.File]::ReadAllLines($envFile, [Text.Encoding]::UTF8)
+    # Same rules as system/Env.php: the last line wins, only a matching pair of quotes is stripped.
+    function EnvValue([string]$key, [string]$default) {
+        $value = $default
+        foreach ($l in $envLines) {
+            if ($l -match "^\s*$key\s*=(.*)$") {
+                $value = $Matches[1].Trim()
+                if ($value.Length -ge 2 -and ($value[0] -eq '"' -or $value[0] -eq "'") -and $value[-1] -eq $value[0]) {
+                    $value = $value.Substring(1, $value.Length - 2)
+                }
+            }
+        }
+        return $value
+    }
+    if ((EnvValue 'DB_NAME' 'execomlogistics_db') -eq $testDb) { throw "The live .env already uses $testDb; refusing to reset it." }
+
+    Remove-TestCopy
+    # Marker first: if the copy fails or is interrupted, the next run may still delete the folder.
+    New-Item -ItemType Directory -Force $e2eDir | Out-Null
+    New-Item -ItemType File -Force $marker | Out-Null
+    $null = & robocopy $root $e2eDir /E /XD (Join-Path $root '.git') (Join-Path $root '.claude') (Join-Path $root 'assets\uploads\products') (Join-Path $root 'storage\logs') /XF .env /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }
+    New-Item -ItemType Directory -Force (Join-Path $e2eDir 'storage\logs'), (Join-Path $e2eDir 'assets\uploads\products') | Out-Null
+    Copy-Item (Join-Path $root 'assets\uploads\products\sample-*.png') (Join-Path $e2eDir 'assets\uploads\products')
+
+    # Env.php lets later lines win, so appending the overrides is enough. UTF-8 without BOM (APP_CURRENCY).
+    $utf8 = New-Object Text.UTF8Encoding $false
+    $testEnv = $envLines + @('', '# e2e overrides', "APP_URL=$Base", "DB_NAME=$testDb", 'SESSION_NAME=EXECOM_E2E_SID')
+    [IO.File]::WriteAllLines((Join-Path $e2eDir '.env'), $testEnv, $utf8)
+
+    # Import the sample schema + data into the test DB only (never the live one).
+    $sql = [IO.File]::ReadAllText((Join-Path $root 'database.sql'), [Text.Encoding]::UTF8) -replace '\bexecomlogistics_db\b', $testDb
+    if ($sql -notmatch "USE $testDb;" -or $sql -match 'execomlogistics_db') { throw 'database.sql rewrite failed; not importing.' }
+    $sqlFile = Join-Path $Out 'e2e-database.sql'
+    [IO.File]::WriteAllText($sqlFile, $sql, $utf8)
+    $mysqlArgs = @('-h', (EnvValue 'DB_HOST' '127.0.0.1'), '-P', (EnvValue 'DB_PORT' '3306'), '-u', (EnvValue 'DB_USER' 'root'), '--default-character-set=utf8mb4')
+    try {
+        $env:MYSQL_PWD = EnvValue 'DB_PASS' ''
+        $import = Start-Process 'C:\xampp\mysql\bin\mysql.exe' -ArgumentList $mysqlArgs -RedirectStandardInput $sqlFile `
+            -RedirectStandardError (Join-Path $Out 'e2e-import.err') -NoNewWindow -Wait -PassThru
+    } finally {
+        Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
+    }
+    if ($import.ExitCode -ne 0) { throw "Importing database.sql into $testDb failed: $(Get-Content (Join-Path $Out 'e2e-import.err') -Raw)" }
+    Write-Output "Test copy: $e2eDir  ->  $Base  (DB $testDb)"
+} catch {
+    Write-Output "SETUP ERROR $($_.Exception.Message)"
+    try { if (-not $Keep) { Remove-TestCopy } } catch {}
+    exit 1
+}
+
 $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $port = 9444
 $prof = Join-Path $Out 'edge-profile'
 if (Test-Path $prof) { Remove-Item -Recurse -Force $prof }
-$proc = Start-Process $edge -ArgumentList @('--headless=new', "--remote-debugging-port=$port", "--user-data-dir=$prof", '--no-first-run', '--disable-gpu', '--hide-scrollbars', 'about:blank') -PassThru -WindowStyle Hidden
+$proc = Start-Process $edge -ArgumentList @('--headless=new', "--remote-debugging-port=$port", "--user-data-dir=`"$prof`"", '--no-first-run', '--disable-gpu', '--hide-scrollbars', 'about:blank') -PassThru -WindowStyle Hidden
 
 $target = $null
 for ($i = 0; $i -lt 50 -and -not $target; $i++) {
@@ -273,7 +353,9 @@ try {
     Check ((Text '#lowStockTable tbody td') -like 'Every product is above*') 'reorder list is empty with the sample stock'
     $csv = Eval "fetch(document.getElementById('exportCsv').href).then(r => r.ok && r.headers.get('content-type').startsWith('text/csv') ? r.text() : 'bad').then(t => t.includes('Net sales') && t.includes('Monitor 24') ? 'ok' : t.slice(0, 80))"
     Check ($csv -eq 'ok') "Export CSV downloads the report ($csv)"
-    Nav "$Base/pages/reports.php?from=2026-01-01&to=2026-09-29"
+    # Sample sales are dated relative to NOW(), so the 9-month range must end today.
+    $monthsFrom = (Get-Date -Day 1).AddMonths(-8).ToString('yyyy-MM-dd')
+    Nav "$Base/pages/reports.php?from=$monthsFrom&to=$((Get-Date).ToString('yyyy-MM-dd'))"
     WaitFor "document.querySelector('#salesChart svg') !== null" 'monthly chart'
     Check ((Eval "document.querySelector('.report-card .card__head h2').textContent.trim()") -eq 'Monthly Net Sales' -and (Eval "document.querySelectorAll('#seriesTable tbody tr').length") -eq 9) 'long ranges group by month (9 months)'
     Nav "$Base/pages/reports.php?from=2020-01-01&to=2020-01-31"
@@ -339,5 +421,11 @@ try {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -like "*$prof*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
+if ($script:fails -or $Keep) {
+    Write-Output "Test copy kept: $e2eDir  ($Base, DB $testDb)"
+} else {
+    try { Remove-TestCopy } catch { Write-Output "Could not remove ${e2eDir}: $($_.Exception.Message)" }
+}
 Write-Output "FAILS: $script:fails  (screenshots: $Out)"
+$lock.Dispose()
 if ($script:fails) { exit 1 }

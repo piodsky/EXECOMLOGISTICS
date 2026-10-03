@@ -155,8 +155,15 @@ the main session runs each step with the agent named in project-manager's plan.
   (PowerShell 5.1 reads BOM-less files as ANSI): build ₱ with `[char]0x20B1`, use -like for dashes.
   `tests/e2e-pos.mjs` / `tests/e2e-admin.mjs` (+ `tests/lib/browser.mjs`) are the Node versions, updated for the
   EXECOM data but not runnable here.
-- Tests change data, so check `SELECT MAX(id) FROM sales` is 4 (sample only) before re-importing
-  `C:\xampp\mysql\bin\mysql.exe -u root < database.sql` (drops tables!). If the user has real data, don't re-import.
+- e2e-smoke.ps1 is **isolated**: it copies the app to `htdocs\EXECOMLOGISTICS-e2e` (robocopy, no .git/.claude/
+  uploads/logs, `.e2e-copy` marker) with its own `.env` (live .env + appended APP_URL / `DB_NAME=execomlogistics_e2e` /
+  SESSION_NAME), imports database.sql into `execomlogistics_e2e` (name rewritten, guarded), runs there, and deletes
+  the copy after a passing run (kept after failures or with `-Keep`; the test DB always stays). The live app and
+  `execomlogistics_db` are never touched, so it can run any time. Needs the live `.env` (reads DB_* from it).
+  One run at a time (lock file in the output dir; a second run exits with SETUP ERROR). A kept copy is reachable
+  from the LAN with the sample passwords (test DB only): delete `htdocs\EXECOMLOGISTICS-e2e` when done with it.
+  Date-dependent checks must use dates relative to today (sample sales are `NOW() - INTERVAL …`).
+- Never re-import `database.sql` into the live DB once it has real data (`SELECT MAX(id) FROM sales` > 4): it drops tables.
 - Sample product images: SVGs rendered by `msedge --headless=new --default-background-color=00000000
   --window-size=400,600 --screenshot=...`, then cropped to 400x400 (headless window size includes chrome).
 - File uploads in tests: `DOM.setFileInputFiles` with an objectId (see e2e-admin.mjs). With curl, use Windows paths.
