@@ -34,6 +34,22 @@ Read this first; open only the files a task needs.
   `--navy-*`, `--primary`, `--primary-700/400`, `--accent`, `--surface`, `--surface-2`, `--bg`, `--border`.
 - Company address/phone/TIN in `settings` are placeholders until the user gives real ones (don't invent them).
 - Keep folders clean (`config/ system/ includes/ pages/ api/ assets/ storage/ tests/`, `.env`).
+- **Use the agent workflow** (user request) for every non-trivial task, see below.
+
+## Agent workflow (`.claude/agents/`)
+The user asked for this workflow, so use these subagents without asking again. Subagents can't launch subagents:
+the main session runs each step with the agent named in project-manager's plan.
+- Non-trivial / multi-file / cross-module task: **project-manager** first (plan + workflow), then the steps:
+  - Simple: system-analyst → backend-developer or frontend-uiux → qa-tester → code-reviewer
+  - Database-heavy: system-analyst → database-specialist → backend-developer → security-reviewer → qa-tester → code-reviewer
+  - UI: system-analyst → frontend-uiux → backend-developer (if needed) → qa-tester → code-reviewer
+  - Security-sensitive (auth, sessions, roles, CSRF, uploads, money, void, users): system-analyst →
+    backend-developer → security-reviewer → qa-tester → code-reviewer
+- One-line fixes and questions/explanations: do them directly, but still lint + test behaviour changes.
+- UNDERSTAND → PLAN → IMPLEMENT → TEST → SECURITY REVIEW → CODE REVIEW → FINAL VERIFICATION. The existing
+  system is the source of truth; smallest safe change; no rewrites of working modules.
+- Done = lint clean + real qa-tester results + code-reviewer APPROVED (+ security-reviewer for sensitive work).
+  If a reviewer says CHANGES REQUIRED, fix and re-run QA + review.
 
 ## POS behaviour
 - Buttons: **Save** = payment dialog → complete sale (deduct stock). **Print** = same + auto-print; with an empty
