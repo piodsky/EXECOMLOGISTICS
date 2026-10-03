@@ -39,6 +39,13 @@ return [
         'url'        => 'pages/stock-docs.php',
         'permission' => ['inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create', 'counts.approve'],
     ],
+    // Branch-to-branch transfers (= Transfers::VIEW_PERMISSIONS).
+    'transfers' => [
+        'label'      => 'Branch Transfers',
+        'icon'       => 'network',
+        'url'        => 'pages/transfers.php',
+        'permission' => ['transfers.request', 'transfers.approve', 'transfers.release', 'transfers.receive'],
+    ],
     'serials' => [
         'label'      => 'Serial Lookup',
         'icon'       => 'barcode',

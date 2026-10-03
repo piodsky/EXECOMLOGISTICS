@@ -344,6 +344,15 @@ final class Products
                 if ((int) $locked['stock'] > 0 || (int) $stmt->fetchColumn() > 0) {
                     throw new HttpException(422, 'Serial tracking can only change when the product has no stock in any branch.');
                 }
+                // Units in transit between branches are in no branch's stock, but they are still stock.
+                $stmt = $pdo->prepare(
+                    "SELECT 1 FROM stock_transfer_lines tl JOIN stock_transfers t ON t.id = tl.transfer_id
+                      WHERE tl.product_id = ? AND t.status = 'released' AND tl.qty_released > 0 LIMIT 1"
+                );
+                $stmt->execute([$id]);
+                if ($stmt->fetchColumn()) {
+                    throw new HttpException(422, 'Serial tracking can only change when no units of this product are in transit between branches.');
+                }
                 // Turning it off once serials exist (any status) would break voids/cancels of those documents.
                 if ((int) $d['track_serial'] === 0) {
                     $stmt = $pdo->prepare('SELECT COUNT(*) FROM product_serials WHERE product_id = ?');
@@ -416,10 +425,11 @@ final class Products
         if ((int) $product['times_received'] > 0 || (int) $product['serial_count'] > 0) {
             throw new HttpException(409, "{$product['name']} has receiving history, so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
-        $stmt = db()->prepare('SELECT 1 FROM inventory_doc_lines WHERE product_id = ? LIMIT 1');
-        $stmt->execute([$id]);
+        $stmt = db()->prepare('SELECT 1 FROM inventory_doc_lines WHERE product_id = ?
+                               UNION ALL SELECT 1 FROM stock_transfer_lines WHERE product_id = ? LIMIT 1');
+        $stmt->execute([$id, $id]);
         if ($stmt->fetchColumn()) {
-            throw new HttpException(409, "{$product['name']} has stock documents (transfers, counts, write-offs), so it can't be deleted. Deactivate it instead to hide it from the POS.");
+            throw new HttpException(409, "{$product['name']} has stock documents (transfers, counts, write-offs or branch transfers), so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
         $pdo = db();
         $pdo->beginTransaction();

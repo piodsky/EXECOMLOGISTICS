@@ -128,7 +128,7 @@ final class Integrity
                 AND {scope}
               ORDER BY x.doc_id", 'x.branch_id');
 
-        $add('removed_serials', 'Removed serial without a posted issue, write-off or count',
+        $add('removed_serials', 'Removed serial without a posted issue, write-off or count, or a transfer that arrived without it',
             "SELECT ps.id AS serial_id, ps.serial_no, ps.product_id, ps.branch_id, ps.location_id
                FROM product_serials ps
               WHERE ps.status = 'removed'
@@ -137,6 +137,10 @@ final class Integrity
                                   JOIN inventory_docs d ON d.id = dl.doc_id
                                  WHERE ds.serial_id = ps.id AND d.status = 'posted'
                                    AND (d.doc_type IN ('issue', 'writeoff') OR (d.doc_type = 'count' AND ds.found = 0)))
+                AND NOT EXISTS (SELECT 1 FROM stock_transfer_serials ts
+                                  JOIN stock_transfer_lines tl ON tl.id = ts.line_id
+                                  JOIN stock_transfers t ON t.id = tl.transfer_id
+                                 WHERE ts.serial_id = ps.id AND ts.received = 0 AND t.status = 'received')
                 AND {scope}
               ORDER BY ps.id", 'ps.branch_id');
 
@@ -165,6 +169,33 @@ final class Integrity
                                    AND l.is_default = 1 AND l.is_sellable = 1 AND l.is_active = 1)
              ) x WHERE {scope}
               ORDER BY x.branch_id, x.warehouse_id", 'x.branch_id');
+
+        // Branch transfers: released qty = transfer_out movements, received qty = transfer_in movements.
+        $add('transfer_movements', 'Branch transfer quantities differ from their stock movements',
+            "SELECT x.transfer_no, x.branch_id, x.product_id, x.direction, x.qty, x.movements FROM (
+                 SELECT t.transfer_no, t.from_branch_id AS branch_id, tl.product_id, 'out' AS direction, tl.qty_released AS qty,
+                        -COALESCE((SELECT SUM(m.quantity) FROM stock_movements m WHERE m.stock_transfer_id = t.id
+                                     AND m.product_id = tl.product_id AND m.type = 'transfer_out'), 0) AS movements
+                   FROM stock_transfers t JOIN stock_transfer_lines tl ON tl.transfer_id = t.id
+                  WHERE t.status IN ('released', 'received')
+                 UNION ALL
+                 SELECT t.transfer_no, t.to_branch_id, tl.product_id, 'in', tl.qty_received,
+                        COALESCE((SELECT SUM(m.quantity) FROM stock_movements m WHERE m.stock_transfer_id = t.id
+                                    AND m.product_id = tl.product_id AND m.type = 'transfer_in'), 0)
+                   FROM stock_transfers t JOIN stock_transfer_lines tl ON tl.transfer_id = t.id
+                  WHERE t.status = 'received'
+             ) x WHERE COALESCE(x.qty, 0) <> x.movements AND {scope} ORDER BY x.transfer_no, x.product_id", 'x.branch_id');
+
+        // A serial is in transit exactly while its transfer is released (not yet received).
+        $add('transit_serials', 'Serial in transit without an open branch transfer (or the reverse)',
+            "SELECT ps.id AS serial_id, ps.serial_no, ps.product_id, ps.branch_id, ps.status, t.transfer_no, t.status AS transfer_status
+               FROM product_serials ps
+               LEFT JOIN stock_transfer_serials ts ON ts.serial_id = ps.id AND ts.received IS NULL
+               LEFT JOIN stock_transfer_lines tl ON tl.id = ts.line_id
+               LEFT JOIN stock_transfers t ON t.id = tl.transfer_id AND t.status = 'released'
+              WHERE ((ps.status = 'in_transit') <> (t.id IS NOT NULL)) AND (ps.status = 'in_transit' OR ts.serial_id IS NOT NULL)
+                AND {scope}
+              ORDER BY ps.id", 'ps.branch_id');
 
         return $checks;
     }

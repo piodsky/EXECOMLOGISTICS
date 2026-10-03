@@ -1,0 +1,36 @@
+/* Branch Transfers (transfers.php, transfer-form.php, transfer-view.php). Builds on sales/receiving/stock-docs.css. */
+
+/* Work lists */
+.bt-tiles { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.bt-count {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px;
+    margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--text-muted);
+    font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.op-tile.has-work { border-color: var(--primary-400); }
+.op-tile.has-work .bt-count { background: var(--primary); color: #fff; }
+
+/* Lines */
+.bt-lines td { vertical-align: top; }
+.bt-qty { width: 96px; margin-left: auto; text-align: right; }
+[data-pick-count].is-warn { color: var(--warning); font-weight: 600; }
+
+/* Action bar under the lines */
+.bt-actions { flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 14px 16px; border-top: 1px solid var(--border); }
+.bt-note { flex: 1 1 320px; margin: 0; }
+
+/* Signature lines: only on the printed slip */
+.bt-signatures { display: none; }
+.bt-sign { display: flex; align-items: flex-end; height: 44px; margin-top: 8px; border-bottom: 1px solid var(--text); font-size: 12px; }
+.bt-sign span { margin-bottom: -18px; color: var(--text-muted); }
+
+@media (max-width: 1200px) {
+    .bt-table .col-opt { display: none; }
+}
+
+@media print {
+    .bt-tiles, .bt-actions, .doc-note { display: none !important; }
+    .bt-signatures { display: block; margin-top: 16px; padding-bottom: 24px; }
+    .bt-qty { border: 0; background: none; }
+    .sn-check { border-color: #999; background: none; }
+}

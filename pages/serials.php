@@ -24,8 +24,8 @@ $stmt = db()->prepare('SELECT id, code, name, is_active FROM products WHERE trac
 $stmt->execute([1]);
 $products = $stmt->fetchAll();
 
-$statusLabel = ['in_stock' => 'In stock', 'sold' => 'Sold', 'removed' => 'Removed'];
-$statusBadge = ['in_stock' => 'badge--success', 'sold' => 'badge--info', 'removed' => 'badge--danger'];
+$statusLabel = ['in_stock' => 'In stock', 'sold' => 'Sold', 'removed' => 'Removed', 'in_transit' => 'In transit'];
+$statusBadge = ['in_stock' => 'badge--success', 'sold' => 'badge--info', 'removed' => 'badge--danger', 'in_transit' => 'badge--warning'];
 $showBranch  = Branch::current() === Branch::ALL;
 $listQuery   = array_filter(['search' => $search, 'product' => $productId], static fn ($v) => $v !== '' && $v !== null);
 $selfUrl     = static fn (array $extra = []): string => url('pages/serials.php') . (($listQuery + $extra) ? '?' . http_build_query($listQuery + $extra) : '');

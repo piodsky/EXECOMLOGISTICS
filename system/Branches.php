@@ -200,6 +200,11 @@ final class Branches
             'stock_movements'   => 'it has stock history',
             'inventory_docs'    => 'it has stock documents',
         ];
+        $stmt = db()->prepare('SELECT 1 FROM stock_transfers WHERE from_branch_id = ? OR to_branch_id = ? LIMIT 1');
+        $stmt->execute([$id, $id]);
+        if ($stmt->fetchColumn()) {
+            return 'it has branch transfers';
+        }
         foreach ($checks as $table => $reason) {
             // $table comes from the whitelist above, never from input.
             $stmt = db()->prepare("SELECT 1 FROM {$table} WHERE branch_id = ? LIMIT 1");

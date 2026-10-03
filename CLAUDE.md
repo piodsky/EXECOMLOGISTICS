@@ -35,8 +35,32 @@ Read this first; open only the files a task needs.
       serial lookup, stock integrity page. Migration `migrations/005_receiving_cost_serials.sql`.
 - [x] Phase 7b (= v2 phase 4, part 2): warehouses & locations, stock operations (transfer / damage / display /
       restore, internal-use issue, write-off), stock counts with approval, serial registration for stock on hand.
-      Migration `migrations/006_warehouse_ops.sql`. Next (v2 phase 5): branch-to-branch transfers.
+      Migration `migrations/006_warehouse_ops.sql`.
+- [x] Phase 8 (= v2 phase 5): branch-to-branch transfers (request → approve → release/in transit → receive, cancel
+      before release). Migration `migrations/007_branch_transfers.sql`. Built in the main session without agents
+      (user request). Next (v2 phase 6): POS pricing.
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## Branch transfers (Phase 8)
+- Class `Transfers` (`stock_transfers` + lines + serials), menu "Branch Transfers" (`transfers`): pages
+  `transfers.php` (list + work lists To Approve / To Release / Incoming), `transfer-form.php` (request),
+  `transfer-view.php` (approve / release / receive forms per `Transfers::actions()`, cancel dialog, printable slip).
+  Permissions `transfers.request/approve/release/receive` (branch_admin all four). Audit module `transfers`.
+- Flow: the receiving branch requests (working in it) → the sending branch approves (qty 0..requested, never the
+  requester, super admin included) → releases (stock out of its POS location, type `transfer_out`, cost = its branch
+  average snapshot on the line; serial lines need exactly the approved serials → `in_transit`) → the receiving branch
+  receives (never the releaser; qty 0..released, serials ticked as arrived; any shortage needs a note; stock into its
+  POS location, type `transfer_in`, `Costing::inbound` at the sender's cost; missing serials → `removed`).
+  Cancel (reason 3–255) only while requested/approved, by the requesting side (`transfers.request`) or the sending
+  side (`transfers.approve`). Approval does NOT reserve stock; release checks availability under locks.
+- In transit = in neither branch: `products.stock` (company total) drops at release and comes back at receipt, so
+  products.stock = Σ balances = Σ movements still holds. Numbers `BT-<SENDING BRANCH>-<YEAR>-NNNNNN`.
+- Visible when either branch is in scope; actions need the session in the acting branch (other → 403, All → 422).
+  Source availability ("in stock here") is shown to the sending side only. Cost only with `products.cost`.
+- Guards: serial tracking can't change and `Serials::register` is refused while units of the product are in transit;
+  products/branches with transfers can't be deleted. `Stock::move(..., ?int $transferId)` (last parameter).
+  Integrity checks `transfer_movements` + `transit_serials` (14 in "All branches"); `removed_serials` accepts
+  serials missing on a received transfer.
 
 ## Warehouses & stock operations (Phase 7b)
 - Locations have `kind` stock/damaged/display. Every warehouse gets GENERAL (stock) + DAMAGED + DISPLAY (system,
@@ -57,7 +81,7 @@ Read this first; open only the files a task needs.
 - `Serials::register` (super admin / `products.manage`): serials = qty at every location (switch to All branches if
   the item is at several branches), then tracking turns on with no stock movement; refused while on an open count.
 - `Stock::move(..., ?int $receivingId, ?int $docId)`; movement types + transfer/issue/write_off/count. Any later
-  movement (incl. transfers/counts) blocks an RR cancel. Integrity has 12 checks.
+  movement (incl. transfers/counts) blocks an RR cancel.
 - Follow-ups (code review nits): stock-doc-view approval "Est. value" duplicates `Costing::avg` in the page (add a
   read-only helper) and overstates serial lines whose serial was sold during the count; serials.php history says
   "removed from stock" for every not-found serial; a `counted_by` column would be sturdier than the audit-based
@@ -268,7 +292,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (317 checks incl. warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (339 checks incl. branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

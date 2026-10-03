@@ -1,7 +1,7 @@
 <?php
 /**
  * Permission registry: key => [module, label].
- * Must match the `permissions` table seed (database.sql / migrations/003, 004, 005, 006). Roles get permissions
+ * Must match the `permissions` table seed (database.sql / migrations/003-007). Roles get permissions
  * through `role_permissions`; a role with roles.is_super = 1 holds every key (also future ones).
  * Check with Auth::can('key'); an unknown key is a programming error.
  */
@@ -33,6 +33,10 @@ return [
     'suppliers.view'      => ['Suppliers', 'View suppliers'],
     'suppliers.manage'    => ['Suppliers', 'Add, edit and deactivate suppliers'],
     'reports.view'        => ['Reports',   'View reports and export CSV'],
+    'transfers.request'   => ['Transfers', 'Request stock from another branch'],
+    'transfers.approve'   => ['Transfers', "Approve or cancel requests for this branch's stock"],
+    'transfers.release'   => ['Transfers', 'Release approved transfers (stock leaves the branch)'],
+    'transfers.receive'   => ['Transfers', 'Receive incoming transfers (stock enters the branch)'],
     'users.view'          => ['Users',     'View users'],
     'users.manage'        => ['Users',     'Add and edit users, reset passwords, activate/deactivate'],
     'users.delete'        => ['Users',     'Delete users'],

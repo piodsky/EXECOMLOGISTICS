@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -542,7 +542,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'POS Sales|Sales History|Inventory|Receiving|Stock Operations|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'POS Sales|Sales History|Inventory|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -954,7 +954,7 @@ try {
     # MAR branch admin: warehouses + locations
     Login 'maradmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
-    Check ($menu -like '*Receiving|Stock Operations|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
+    Check ($menu -like '*Receiving|Stock Operations|Branch Transfers|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
     Nav "$Base/pages/warehouses.php"
     Check ((Eval "[...document.querySelectorAll('.wh-card[data-warehouse=MAIN] tr[data-location]')].map(r => r.dataset.location).sort().join(',')") -eq 'DAMAGED,DISPLAY,GENERAL') 'warehouses tab: MAIN with GENERAL / DAMAGED / DISPLAY'
     $r = Eval "fetch('$Base/pages/warehouses.php', {method: 'POST', body: new URLSearchParams({action: 'save_warehouse', code: 'NOCSRF', name: 'No token'})}).then(r => r.status)"
@@ -1179,6 +1179,89 @@ try {
         Check (Eval 'document.documentElement.scrollWidth <= window.innerWidth') "$pgUrl : no horizontal page scroll at 1024px (scrollWidth $(Eval 'document.documentElement.scrollWidth') $wide)"
     }
     Size 1536 1024
+
+    # --- Phase 8: branch-to-branch transfers (DAV requests from MAR; MAR approves + releases; DAV receives) ---
+    $p8 = "'transfers.request','transfers.approve','transfers.release','transfers.receive'"
+    Check ((Sql "SELECT COUNT(*) FROM permissions WHERE perm_key IN ($p8)") -eq '4' -and (Sql "SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id WHERE p.perm_key IN ($p8) AND r.code = 'branch_admin'") -eq '4') 'permissions: 4 transfer keys, granted to branch_admin'
+    Logout
+    Login 'cashier' 'cashier123'
+    $st = "$(Status 'pages/transfers.php'),$(Status 'pages/transfer-form.php'),$(Status 'pages/transfer-view.php?id=1')"
+    Check ($st -eq '403,403,403' -and (Eval "!document.body.textContent.includes('Branch Transfers')")) "cashier: transfer pages 403, no menu item ($st)"
+    Logout
+
+    # DAV requests Mouse x3 + Printer (serials) x2 from MAR
+    Login 'davadmin' $script:pw
+    Nav "$Base/pages/transfer-form.php"
+    Submit "window.confirm = () => true; const f = document.getElementById('transferForm'); f.from_branch_id.value = '1'; f.notes.value = 'E2E transfer'; const pick = (t, p, q) => { const s = t.querySelector('[data-product]'); s.value = p; s.dispatchEvent(new Event('change')); t.querySelector('[data-qty]').value = q; }; pick(document.querySelector('#transferLines tbody[data-line]'), '2', '3'); document.getElementById('addLine').click(); pick([...document.querySelectorAll('#transferLines tbody[data-line]')].pop(), '8', '2'); f.requestSubmit()" 'request transfer'
+    $bt = Sql 'SELECT id FROM stock_transfers ORDER BY id DESC LIMIT 1'
+    $btNo = Sql "SELECT transfer_no FROM stock_transfers WHERE id = $bt"
+    $lm = Sql "SELECT id FROM stock_transfer_lines WHERE transfer_id = $bt AND product_id = 2"
+    Check ($btNo -like 'BT-MAR-*-000001' -and (Text '#transferTitle') -eq $btNo -and (Sql "SELECT CONCAT_WS('|', status, from_branch_id, to_branch_id, total_qty) FROM stock_transfers WHERE id = $bt") -eq 'requested|1|4|5') "DAV requests $btNo from MAR ($(Text '.alert span'))"
+    $r = PostForm 'pages/transfer-form.php' "from_branch_id: '4', 'items[0][product_id]': '2', 'items[0][quantity]': '1'"
+    Check ($r -like '*Choose the branch to request from*' -and (Sql 'SELECT COUNT(*) FROM stock_transfers') -eq '1') 'request from own branch refused'
+    $r = PostForm "pages/transfer-view.php?id=$bt" "action: 'approve'"
+    Check ($r -like '*Only the sending branch can do this*' -and (Sql "SELECT status FROM stock_transfers WHERE id = $bt") -eq 'requested') 'requesting branch cannot approve'
+    Logout
+
+    # MAR admin approves Mouse 2 of 3
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/transfer-view.php?id=$bt"
+    Check (Eval "document.querySelector('#transferActionForm [name=action]')?.value === 'approve' && document.body.textContent.includes('in stock here')") 'MAR admin: approve form with stock on hand'
+    Submit "const f = document.getElementById('transferActionForm'); f.querySelector('[name=`"qty[$lm]`"]').value = '2'; f.requestSubmit()" 'approve transfer'
+    Check ((Sql "SELECT CONCAT_WS('|', status, total_qty, (SELECT qty_approved FROM stock_transfer_lines WHERE id = $lm)) FROM stock_transfers WHERE id = $bt") -eq 'approved|4|2') "MAR approves 2 of 3 mice + 2 printers ($(Text '.alert span'))"
+    Logout
+
+    # Super admin releases from MAR: serial count enforced, then 2 printers + 2 mice leave MAR
+    Login 'admin' 'admin123'
+    $m0 = [int](LocQty 2 1); $p0 = [int](LocQty 8 1); $s0 = [int](PStock 2); $avgM = BranchAvg 2
+    Nav "$Base/pages/transfer-view.php?id=$bt"
+    $tick = "[...document.querySelectorAll('fieldset[data-pick] label')].forEach(lb => { const c = lb.querySelector('input'); if (['PRN-1', 'PRN-2'].slice(0, window.__n).includes(lb.textContent.trim()) && !c.checked) c.click(); });"
+    Submit "window.__n = 1; $tick document.getElementById('transferActionForm').requestSubmit()" 'release with 1 serial'
+    Check ((Text '.alert--error span') -like '*choose exactly 2 serial*' -and (Sql "SELECT status FROM stock_transfers WHERE id = $bt") -eq 'approved') "release with 1 of 2 serials refused ($(Text '.alert span'))"
+    Submit "window.__n = 2; $tick document.getElementById('transferActionForm').requestSubmit()" 'release transfer'
+    $st = Sql "SELECT CONCAT_WS('|', status, total_qty, total_cost IS NOT NULL, (SELECT SUM(quantity) FROM stock_movements WHERE stock_transfer_id = $bt AND type = 'transfer_out'), (SELECT GROUP_CONCAT(status ORDER BY serial_no) FROM product_serials WHERE serial_no IN ('PRN-1', 'PRN-2'))) FROM stock_transfers WHERE id = $bt"
+    Check ($st -eq 'released|4|1|-4|in_transit,in_transit') "released: stock out of MAR, serials in transit ($st; $(Text '.alert span'))"
+    Check ([int](LocQty 2 1) -eq ($m0 - 2) -and [int](LocQty 8 1) -eq ($p0 - 2) -and [int](PStock 2) -eq ($s0 - 2) -and (BranchAvg 2) -eq $avgM) "MAR mouse $m0 -> $(LocQty 2 1), printer $p0 -> $(LocQty 8 1), company mouse total $s0 -> $(PStock 2) (in transit), MAR average unchanged"
+    Check ((Sql "SELECT unit_cost FROM stock_transfer_lines WHERE id = $lm") -eq $avgM -and (Eval "!!document.getElementById('transferTotalCost')")) "line cost = MAR average ($avgM), value shown to admin"
+    $r = PostForm "pages/transfer-view.php?id=$bt" "action: 'cancel', reason: 'Too late'"
+    Check ($r -like '*already released*' -and (Sql "SELECT status FROM stock_transfers WHERE id = $bt") -eq 'released') 'cancel after release refused'
+    Logout
+
+    # DAV receives: 1 of 2 mice, PRN-2 missing; a note is required
+    Login 'davadmin' $script:pw
+    $d0 = [int](LocQty 2 4)
+    Nav "$Base/pages/transfer-view.php?id=$bt"
+    Check ((Text '#transferStatus') -eq 'In Transit' -and (Eval "document.querySelector('#transferActionForm [name=action]')?.value === 'receive'")) 'DAV: transfer in transit, receive form'
+    $recv = "const f = document.getElementById('transferActionForm'); f.querySelector('[name=`"qty[$lm]`"]').value = '1'; [...f.querySelectorAll('[name=`"arrived[]`"]')].forEach(c => { if (c.closest('label').textContent.trim() === 'PRN-2' && c.checked) c.click(); });"
+    Submit "$recv f.requestSubmit()" 'receive short without note'
+    Check ((Text '.alert--error span') -like '*short*' -and (Sql "SELECT status FROM stock_transfers WHERE id = $bt") -eq 'released') "short receipt without a note refused ($(Text '.alert span'))"
+    Submit "$recv f.receive_note.value = 'One mouse and PRN-2 missing on arrival'; f.requestSubmit()" 'receive transfer'
+    $st = Sql "SELECT CONCAT_WS('|', status, (SELECT SUM(quantity) FROM stock_movements WHERE stock_transfer_id = $bt AND type = 'transfer_in'), (SELECT CONCAT(status, '@', location_id) FROM product_serials WHERE serial_no = 'PRN-1'), (SELECT status FROM product_serials WHERE serial_no = 'PRN-2'), receive_note IS NOT NULL) FROM stock_transfers WHERE id = $bt"
+    Check ($st -eq 'received|2|in_stock@4|removed|1') "received: 1 mouse + PRN-1 into DAV, PRN-2 removed ($st; $(Text '.alert span'))"
+    Check ([int](LocQty 2 4) -eq ($d0 + 1) -and (Eval "document.body.textContent.includes('1 short')")) "DAV mouse $d0 -> $(LocQty 2 4), view shows the shortage"
+    # Request + cancel by the requester
+    $r = PostForm 'pages/transfer-form.php' "from_branch_id: '1', 'items[0][product_id]': '3', 'items[0][quantity]': '1'"
+    $bt2 = Sql 'SELECT id FROM stock_transfers ORDER BY id DESC LIMIT 1'
+    Nav "$Base/pages/transfer-view.php?id=$bt2"
+    Submit "window.confirm = () => true; document.getElementById('cancelReason').value = 'Ordered from the supplier'; document.getElementById('cancelReason').form.submit()" 'cancel transfer'
+    Check ((Sql "SELECT CONCAT_WS('|', status, cancel_reason) FROM stock_transfers WHERE id = $bt2") -eq 'cancelled|Ordered from the supplier') "requester cancels $(Sql "SELECT transfer_no FROM stock_transfers WHERE id = $bt2") ($(Text '.alert span'))"
+    Nav "$Base/pages/transfers.php?direction=incoming"
+    Check ((Eval "document.querySelectorAll('#transferTable tbody tr[data-transfer]').length") -eq 2) 'DAV incoming list: 2 transfers'
+    Logout
+
+    # Integrity (All branches) + layout at 1024px
+    Login 'admin' 'admin123'
+    SwitchBranch 0
+    Nav "$Base/pages/stock-integrity.php"
+    Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after transfers (All branches): $(Text '#integritySummary span')"
+    SwitchBranch 1
+    Size 1024 900
+    foreach ($pgUrl in 'transfers.php', "transfer-view.php?id=$bt", 'transfer-form.php') {
+        Nav "$Base/pages/$pgUrl"
+        Check (Eval 'document.documentElement.scrollWidth <= window.innerWidth') "$pgUrl : no horizontal page scroll at 1024px (scrollWidth $(Eval 'document.documentElement.scrollWidth'))"
+    }
+    Size 1536 1024
+    Shot '39-transfer-view'
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

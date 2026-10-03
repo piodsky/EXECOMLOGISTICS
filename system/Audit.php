@@ -30,6 +30,7 @@ final class Audit
         'suppliers'   => 'Suppliers',
         'receiving'   => 'Receiving',
         'warehouses'  => 'Warehouses',
+        'transfers'   => 'Transfers',
     ];
 
     /**

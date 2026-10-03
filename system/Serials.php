@@ -225,6 +225,14 @@ final class Serials
             if ($countNo = $stmt->fetchColumn()) {
                 throw new HttpException(409, "{$p['name']} is on stock count {$countNo}. Finish or cancel that count first.");
             }
+            $stmt = $pdo->prepare(
+                "SELECT t.transfer_no FROM stock_transfer_lines tl JOIN stock_transfers t ON t.id = tl.transfer_id
+                  WHERE tl.product_id = ? AND t.status = 'released' AND tl.qty_released > 0 LIMIT 1"
+            );
+            $stmt->execute([$productId]);
+            if ($transferNo = $stmt->fetchColumn()) {
+                throw new HttpException(409, "{$p['name']} is in transit on {$transferNo}. Receive it first.");
+            }
 
             $stmt = $pdo->prepare(
                 'SELECT location_id, warehouse_id, branch_id, qty FROM stock_balances WHERE product_id = ? ORDER BY location_id FOR UPDATE'

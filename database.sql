@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005 and 006.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006 and 007.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,9 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS stock_transfer_serials;
+DROP TABLE IF EXISTS stock_transfer_lines;
+DROP TABLE IF EXISTS stock_transfers;
 DROP TABLE IF EXISTS inventory_doc_serials;
 DROP TABLE IF EXISTS inventory_doc_lines;
 DROP TABLE IF EXISTS inventory_docs;
@@ -647,7 +650,7 @@ CREATE TABLE product_serials (
   branch_id          INT UNSIGNED NOT NULL,
   warehouse_id       INT UNSIGNED NOT NULL,
   location_id        INT UNSIGNED NOT NULL,
-  status             ENUM('in_stock','sold','removed') NOT NULL DEFAULT 'in_stock',
+  status             ENUM('in_stock','sold','removed','in_transit') NOT NULL DEFAULT 'in_stock',
   receiving_item_id  INT UNSIGNED NULL,
   created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -792,6 +795,118 @@ CREATE TABLE inventory_doc_serials (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
+-- Branch-to-branch transfers (migration 007)
+--   requested -> approved -> released (in transit) -> received
+--   requested / approved -> cancelled
+--   from_* location: the sending branch's POS location, set at release.
+--   to_*   location: the receiving branch's POS location, set at receive.
+-- ---------------------------------------------------------------------
+CREATE TABLE stock_transfers (
+  id                INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  transfer_no       VARCHAR(30)   NOT NULL,
+  from_branch_id    INT UNSIGNED  NOT NULL,
+  to_branch_id      INT UNSIGNED  NOT NULL,
+  status            ENUM('requested','approved','released','received','cancelled') NOT NULL DEFAULT 'requested',
+  notes             VARCHAR(255)  NULL,
+  from_warehouse_id INT UNSIGNED  NULL,
+  from_location_id  INT UNSIGNED  NULL,
+  to_warehouse_id   INT UNSIGNED  NULL,
+  to_location_id    INT UNSIGNED  NULL,
+  total_qty         INT           NOT NULL DEFAULT 0,
+  total_cost        DECIMAL(12,2) NULL,
+  receive_note      VARCHAR(255)  NULL,
+  requested_by      INT UNSIGNED  NOT NULL,
+  requested_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_by       INT UNSIGNED  NULL,
+  approved_at       DATETIME      NULL,
+  released_by       INT UNSIGNED  NULL,
+  released_at       DATETIME      NULL,
+  received_by       INT UNSIGNED  NULL,
+  received_at       DATETIME      NULL,
+  cancelled_by      INT UNSIGNED  NULL,
+  cancelled_at      DATETIME      NULL,
+  cancel_reason     VARCHAR(255)  NULL,
+  updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_transfers_no (transfer_no),
+  KEY idx_transfers_from_status (from_branch_id, status),
+  KEY idx_transfers_to_status (to_branch_id, status),
+  KEY idx_transfers_from_location (from_location_id, from_warehouse_id, from_branch_id),
+  KEY idx_transfers_to_location (to_location_id, to_warehouse_id, to_branch_id),
+  KEY idx_transfers_requested_by (requested_by),
+  KEY idx_transfers_approved_by (approved_by),
+  KEY idx_transfers_released_by (released_by),
+  KEY idx_transfers_received_by (received_by),
+  KEY idx_transfers_cancelled_by (cancelled_by),
+  CONSTRAINT fk_transfers_from_branch FOREIGN KEY (from_branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_transfers_to_branch FOREIGN KEY (to_branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_transfers_from_location FOREIGN KEY (from_location_id, from_warehouse_id, from_branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_transfers_to_location FOREIGN KEY (to_location_id, to_warehouse_id, to_branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id) ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_transfers_requested_by FOREIGN KEY (requested_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_transfers_approved_by FOREIGN KEY (approved_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_transfers_released_by FOREIGN KEY (released_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_transfers_received_by FOREIGN KEY (received_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_transfers_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT chk_transfers_branches CHECK (from_branch_id <> to_branch_id),
+  CONSTRAINT chk_transfers_from_pair CHECK ((from_location_id IS NULL) = (from_warehouse_id IS NULL)),
+  CONSTRAINT chk_transfers_to_pair CHECK ((to_location_id IS NULL) = (to_warehouse_id IS NULL)),
+  CONSTRAINT chk_transfers_released CHECK (status IN ('requested','approved','cancelled') OR from_location_id IS NOT NULL),
+  CONSTRAINT chk_transfers_received CHECK (status <> 'received' OR to_location_id IS NOT NULL),
+  CONSTRAINT chk_transfers_total_qty CHECK (total_qty >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- qty_requested by the receiving branch; qty_approved by the sending branch
+-- (0 = not sent); qty_released = qty_approved at release; qty_received at
+-- receive (short = released - received, explained in receive_note).
+-- unit_cost = the sending branch's average cost at release.
+CREATE TABLE stock_transfer_lines (
+  id             INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  transfer_id    INT UNSIGNED      NOT NULL,
+  product_id     INT UNSIGNED      NOT NULL,
+  qty_requested  INT               NOT NULL,
+  qty_approved   INT               NULL,
+  qty_released   INT               NULL,
+  qty_received   INT               NULL,
+  unit_cost      DECIMAL(12,4)     NULL,
+  sort_order     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_transfer_lines_product (transfer_id, product_id),
+  KEY idx_transfer_lines_product (product_id),
+  CONSTRAINT fk_transfer_lines_transfer FOREIGN KEY (transfer_id) REFERENCES stock_transfers (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_transfer_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_transfer_lines_requested CHECK (qty_requested > 0),
+  CONSTRAINT chk_transfer_lines_approved CHECK (qty_approved IS NULL OR qty_approved BETWEEN 0 AND qty_requested),
+  CONSTRAINT chk_transfer_lines_released CHECK (qty_released IS NULL OR qty_released >= 0),
+  CONSTRAINT chk_transfer_lines_received CHECK (qty_received IS NULL OR qty_received BETWEEN 0 AND qty_released),
+  CONSTRAINT chk_transfer_lines_cost CHECK (unit_cost IS NULL OR unit_cost >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Serials released on a line (fixed at release). received: NULL = in
+-- transit, 1 = arrived, 0 = missing on arrival (serial -> 'removed').
+CREATE TABLE stock_transfer_serials (
+  line_id    INT UNSIGNED NOT NULL,
+  serial_id  INT UNSIGNED NOT NULL,
+  received   TINYINT(1)   NULL,
+  PRIMARY KEY (line_id, serial_id),
+  KEY idx_transfer_serials_serial (serial_id),
+  CONSTRAINT fk_transfer_serials_line FOREIGN KEY (line_id) REFERENCES stock_transfer_lines (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_transfer_serials_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
 --   the change; location_qty_after is the level at (branch, warehouse, location).
@@ -803,10 +918,11 @@ CREATE TABLE stock_movements (
   sale_id             INT UNSIGNED    NULL,
   receiving_id        INT UNSIGNED    NULL,
   inventory_doc_id    INT UNSIGNED    NULL,
+  stock_transfer_id   INT UNSIGNED    NULL,
   branch_id           INT UNSIGNED    NOT NULL,
   warehouse_id        INT UNSIGNED    NOT NULL,
   location_id         INT UNSIGNED    NOT NULL,
-  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count') NOT NULL,
+  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count','transfer_out','transfer_in') NOT NULL,
   quantity            INT             NOT NULL,
   stock_after         INT             NOT NULL,
   location_qty_after  INT             NULL,
@@ -820,6 +936,7 @@ CREATE TABLE stock_movements (
   KEY idx_movements_location (location_id, warehouse_id, branch_id),
   KEY idx_movements_receiving (receiving_id),
   KEY idx_movements_inventory_doc (inventory_doc_id),
+  KEY idx_movements_stock_transfer (stock_transfer_id),
   CONSTRAINT fk_movements_location FOREIGN KEY (location_id, warehouse_id, branch_id)
     REFERENCES storage_locations (id, warehouse_id, branch_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -832,6 +949,8 @@ CREATE TABLE stock_movements (
   CONSTRAINT fk_movements_receiving FOREIGN KEY (receiving_id) REFERENCES receiving_reports (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_movements_inventory_doc FOREIGN KEY (inventory_doc_id) REFERENCES inventory_docs (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_movements_stock_transfer FOREIGN KEY (stock_transfer_id) REFERENCES stock_transfers (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -947,7 +1066,11 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (31, 'inventory.issue',     'Inventory', 'Issue stock for internal use and display units',           91),
   (32, 'counts.create',       'Inventory', 'Create stock counts and enter counted quantities',          92),
   (33, 'counts.approve',      'Inventory', 'Approve or cancel stock counts',                            93),
-  (34, 'warehouses.manage',   'Branches',  'Manage warehouses and storage locations',                  155);
+  (34, 'warehouses.manage',   'Branches',  'Manage warehouses and storage locations',                  155),
+  (35, 'transfers.request',   'Transfers', 'Request stock from another branch',                        101),
+  (36, 'transfers.approve',   'Transfers', 'Approve or cancel requests for this branch''s stock',       102),
+  (37, 'transfers.release',   'Transfers', 'Release approved transfers (stock leaves the branch)',     103),
+  (38, 'transfers.receive',   'Transfers', 'Receive incoming transfers (stock enters the branch)',     104);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -963,7 +1086,8 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'users.manage', 'audit_logs.view', 'suppliers.view', 'suppliers.manage', 'products.cost',
          'receiving.view', 'receiving.manage', 'receiving.post', 'receiving.cancel', 'serials.view',
          'inventory.integrity', 'inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create',
-         'counts.approve', 'warehouses.manage'))
+         'counts.approve', 'warehouses.manage', 'transfers.request', 'transfers.approve', 'transfers.release',
+         'transfers.receive'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view'))
