@@ -35,7 +35,7 @@ if (is_post()) {
             flash('success', "{$data['name']} was updated.");
         } else {
             Branches::create($data);
-            flash('success', "{$data['name']} ({$data['code']}) was added with a Main Warehouse and a General stock location.");
+            flash('success', "{$data['name']} ({$data['code']}) was added with a Main Warehouse (GENERAL, DAMAGED and DISPLAY locations).");
         }
     } catch (HttpException $e) {
         flash('error', $e->getMessage());
@@ -130,14 +130,15 @@ require ROOT_PATH . '/includes/header.php';
                     <?php foreach ($locations as $l): ?>
                         <div>
                             <dt><?= e($l['warehouse_name']) ?> <small class="muted">(<?= e($l['warehouse_code']) ?>)</small></dt>
-                            <dd><?= e($l['name']) ?> <small class="muted">(<?= e($l['code']) ?><?= (int) $l['is_default'] === 1 ? ', default' : '' ?><?= (int) $l['is_sellable'] === 1 ? ', sellable' : '' ?>)</small></dd>
+                            <dd><?= e($l['name']) ?> <small class="muted">(<?= e($l['code']) ?><?= $l['kind'] !== 'stock' ? ', ' . e(strtolower(Warehouses::KINDS[$l['kind']] ?? $l['kind'])) : '' ?><?= (int) $l['is_default'] === 1 ? ', default' : '' ?><?= (int) $l['is_sellable'] === 1 ? ', sellable' : '' ?><?= (int) $l['is_active'] === 1 && (int) $l['warehouse_active'] === 1 ? '' : ', inactive' ?>)</small></dd>
                         </div>
                     <?php endforeach; ?>
                     <?php if (!$locations): ?>
                         <div><dt>None</dt><dd class="muted">—</dd></div>
                     <?php endif; ?>
                 </dl>
-                <p class="form-hint">The POS sells from the default sellable location; stock adjustments go there too.</p>
+                <p class="form-hint">The POS sells from the default sellable location; stock adjustments go there too.<?php if (Auth::can('warehouses.manage')): ?>
+                    Manage warehouses and locations in <a href="<?= e(url('pages/warehouses.php')) ?>">Settings → Warehouses</a> (switch to this branch first).<?php endif; ?></p>
             </section>
         <?php endif; ?>
     </aside>

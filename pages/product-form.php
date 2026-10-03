@@ -95,12 +95,37 @@ $models     = MasterData::options('models', $cur('model_id'));
 $units      = MasterData::options('units', $cur('unit_id'));
 $unitValue  = $val('unit_id', (string) ($product ? '' : (Products::defaultUnitId() ?? '')));
 $inactive   = static fn (array $o): string => (int) $o['is_active'] === 1 ? '' : ' (inactive)';
-$typeLabels = ['initial' => 'Opening stock', 'sale' => 'Sale', 'restock' => 'Restock', 'adjustment' => 'Adjustment', 'void' => 'Void', 'receiving' => 'Receiving'];
+$typeLabels = ['initial' => 'Opening stock', 'sale' => 'Sale', 'restock' => 'Restock', 'adjustment' => 'Adjustment', 'void' => 'Void', 'receiving' => 'Receiving',
+               'transfer' => 'Transfer', 'issue' => 'Internal use', 'write_off' => 'Write-off', 'count' => 'Stock count'];
+$canDocs    = Auth::canAny(...InventoryDocs::VIEW_PERMISSIONS);
+
+// Stock per storage location (current scope) and the POS location, where adjustments go.
+$locStock      = $product ? Products::locations($id) : [];
+$stockLocation = null;
+if ($product && Branch::isConcrete()) {
+    foreach (Warehouses::pickerLocations((int) Branch::current()) as $l) {
+        if ($l['is_default']) {
+            $stockLocation = $l;
+            break;
+        }
+    }
+}
+$posQty = 0;
+foreach ($locStock as $ls) {
+    if ($stockLocation !== null && (int) $ls['location_id'] === $stockLocation['id']) {
+        $posQty = (int) $ls['qty'];
+    }
+}
+$kindBadge = ['damaged' => 'badge--danger', 'display' => 'badge--warning'];
+// Serial registration: an untracked item that already has stock (products.manage; Serials::register checks again).
+$canRegister = $product !== null && $canManage && (int) $product['track_serial'] === 0
+    && (int) $product['total_stock'] > 0 && (int) $product['serial_count'] === 0;
 
 // Serial tracking can only change while the product has no stock in any branch (Products::update).
 $serialLocked = $product !== null && (int) $product['total_stock'] > 0;
 $isSerial     = (int) ($product['track_serial'] ?? 0) === 1;
 $stockReturn = $self;
+$pageStyles  = ['css/stock-docs.css'];
 $pageScripts = ['js/inventory.js'];
 
 require ROOT_PATH . '/includes/header.php';
@@ -269,16 +294,21 @@ require ROOT_PATH . '/includes/header.php';
                         <span class="form-label">In stock</span>
                         <div class="stock-now">
                             <strong><?= (int) $product['stock'] ?></strong>
-                            <?php if ($canAdjust && !$isSerial): ?>
+                            <?php if ($canAdjust && $stockLocation !== null && !$isSerial): ?>
                                 <button type="button" class="btn btn--light btn--sm" data-adjust
                                         data-id="<?= (int) $product['id'] ?>" data-name="<?= e($product['name']) ?>"
-                                        data-code="<?= e($product['code']) ?>" data-stock="<?= (int) $product['stock'] ?>">
+                                        data-code="<?= e($product['code']) ?>" data-stock="<?= $posQty ?>">
                                     <?= icon('stock') ?> Adjust
                                 </button>
                             <?php endif; ?>
                         </div>
                         <p class="form-hint">At <?= e(Branch::label()) ?><?= Branch::isConcrete() && Branch::canSeeAll() ? ' · company total ' . (int) $product['total_stock'] : '' ?></p>
-                        <?php if ($isSerial): ?><p class="form-hint">Serial-tracked: stock changes through Receiving and sales.</p><?php endif; ?>
+                        <?php if ($isSerial): ?><p class="form-hint">Serial-tracked: stock changes through Receiving, sales and stock operations.</p><?php endif; ?>
+                        <?php if ($canRegister): ?>
+                            <a class="btn btn--light btn--sm reg-btn" id="registerSerialsBtn"
+                               href="<?= e(url('pages/serial-register.php?' . http_build_query(['id' => (int) $product['id'], 'return' => $self]))) ?>"><?= icon('barcode') ?> Register Serials</a>
+                            <p class="form-hint">Start tracking serial numbers for the units already in stock.</p>
+                        <?php endif; ?>
                     </div>
                 <?php else: ?>
                     <label class="form-field" id="openingStockField">
@@ -295,6 +325,33 @@ require ROOT_PATH . '/includes/header.php';
                            value="<?= e($val('reorder_level', '5')) ?>"<?= invalid('reorder_level') ?><?= $ro ?>>
                     <?= field_error('reorder_level') ?>
                 </label>
+                <?php if ($product): ?>
+                    <div class="form-field form-field--full" id="stockByLocation">
+                        <span class="form-label">Stock by location</span>
+                        <?php if ($locStock): ?>
+                            <table class="loc-stock">
+                                <tbody>
+                                <?php foreach ($locStock as $ls): ?>
+                                    <tr>
+                                        <td>
+                                            <?php if (Branch::current() === Branch::ALL): ?><span class="badge badge--branch" title="<?= e($ls['branch_name']) ?>"><?= e($ls['branch_code']) ?></span><?php endif; ?>
+                                            <span class="loc-code"><?= e($ls['warehouse_code'] . ' / ' . $ls['location_code']) ?></span>
+                                            <?php if ((int) $ls['is_pos_location'] === 1): ?><span class="badge badge--success">POS</span><?php endif; ?>
+                                            <?php if (isset($kindBadge[$ls['kind']])): ?><span class="badge <?= e($kindBadge[$ls['kind']]) ?>"><?= e(Warehouses::KINDS[$ls['kind']]) ?></span><?php endif; ?>
+                                            <?php if ((int) $ls['is_active'] !== 1): ?><span class="badge">Inactive</span><?php endif; ?>
+                                            <small class="muted block"><?= e($ls['location_name']) ?></small>
+                                        </td>
+                                        <td class="num"><?= number_format((int) $ls['qty']) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                            <p class="form-hint">The POS sells only from the POS location; damaged and display units can't be sold.</p>
+                        <?php else: ?>
+                            <p class="form-hint">No stock at <?= e(Branch::label()) ?>.</p>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
             </div>
         </section>
 
@@ -324,7 +381,7 @@ require ROOT_PATH . '/includes/header.php';
                 <?php foreach ($movements as $m): ?>
                     <tr>
                         <td><?= e(date('M j, Y g:i A', strtotime($m['created_at']))) ?></td>
-                        <td><span class="badge"><?= e($typeLabels[$m['type']] ?? $m['type']) ?></span></td>
+                        <td><span class="badge"><?= e($typeLabels[$m['type']] ?? $m['type']) ?></span><?php if ($m['location_code'] !== null): ?><small class="muted block loc-code"><?= e($m['warehouse_code'] . ' / ' . $m['location_code']) ?></small><?php endif; ?></td>
                         <td class="num <?= (int) $m['quantity'] < 0 ? 'text-danger' : 'text-success' ?>"><?= (int) $m['quantity'] > 0 ? '+' : '' ?><?= (int) $m['quantity'] ?></td>
                         <td class="num"<?= Branch::canSeeAll() ? ' title="Company total after: ' . (int) $m['stock_after'] . '"' : '' ?>><?= $m['location_qty_after'] !== null ? (int) $m['location_qty_after'] : (Branch::canSeeAll() ? (int) $m['stock_after'] : '—') ?></td>
                         <td>
@@ -332,6 +389,8 @@ require ROOT_PATH . '/includes/header.php';
                                 <a href="<?= e(url('pages/sale-view.php?id=' . (int) $m['sale_id'])) ?>"><?= e($m['type'] === 'void' ? ($m['note'] ?? 'Voided sale No. ' . $m['sale_no']) : 'Sale No. ' . $m['sale_no']) ?></a>
                             <?php elseif ($m['rr_no'] !== null && Auth::can('receiving.view')): ?>
                                 <a href="<?= e(url('pages/receiving-view.php?id=' . (int) $m['receiving_id'])) ?>"><?= e($m['note'] !== null && $m['note'] !== $m['rr_no'] ? $m['note'] : $m['rr_no']) ?></a>
+                            <?php elseif ($m['doc_no'] !== null && $canDocs): ?>
+                                <a href="<?= e(url('pages/stock-doc-view.php?id=' . (int) $m['inventory_doc_id'])) ?>"><?= e($m['note'] ?? $m['doc_no']) ?></a>
                             <?php elseif ($m['sale_no']): ?>
                                 <?= e($m['type'] === 'void' ? ($m['note'] ?? 'Voided sale No. ' . $m['sale_no']) : 'Sale No. ' . $m['sale_no']) ?>
                             <?php else: ?>

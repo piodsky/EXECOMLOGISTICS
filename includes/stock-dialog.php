@@ -6,6 +6,9 @@
  * and the user has inventory.adjust.
  *
  * @var string $stockReturn  page to come back to, e.g. 'inventory.php?page=2'
+ * @var ?array $stockLocation the branch's POS location (Warehouses::pickerLocations row, is_default):
+ *                            adjustments go there (Products::adjustStock), so the dialog names it.
+ *                            [data-adjust] buttons pass its quantity as data-stock.
  */
 ?>
 <dialog class="modal" id="adjustDialog" aria-labelledby="adjustTitle">
@@ -22,7 +25,12 @@
 
         <p class="adjust-product">
             <strong id="adjustName"></strong>
-            <span class="muted">Current stock at <?= e(Branch::label()) ?>: <strong id="adjustStock"></strong></span>
+            <?php
+            $adjustAt = Branch::label() . (isset($stockLocation)
+                ? ' · ' . $stockLocation['warehouse_code'] . ' / ' . $stockLocation['code'] . ' - ' . $stockLocation['name'] : '');
+            ?>
+            <span class="muted" id="adjustAt">Current stock at <?= e($adjustAt) ?>: <strong id="adjustStock"></strong></span>
+            <small class="muted block">Adjustments change the POS location only. Use Stock Operations for other locations.</small>
         </p>
 
         <fieldset class="segmented">

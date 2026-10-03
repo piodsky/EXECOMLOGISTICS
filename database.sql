@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004 and 005.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005 and 006.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,9 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS inventory_doc_serials;
+DROP TABLE IF EXISTS inventory_doc_lines;
+DROP TABLE IF EXISTS inventory_docs;
 DROP TABLE IF EXISTS sale_item_serials;
 DROP TABLE IF EXISTS product_serials;
 DROP TABLE IF EXISTS receiving_item_serials;
@@ -286,6 +289,9 @@ CREATE TABLE products (
 -- Branch stock: branch -> warehouse -> storage location -> balance.
 --   products.stock stays the company total (= SUM(stock_balances.qty)).
 --   The composite keys keep (location, warehouse, branch) consistent.
+--   Location kind: stock (GENERAL, bins; may be sellable/default),
+--   damaged (DAMAGED) and display (DISPLAY), one each per warehouse and
+--   never sellable or default.
 -- ---------------------------------------------------------------------
 CREATE TABLE warehouses (
   id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -309,6 +315,7 @@ CREATE TABLE storage_locations (
   branch_id     INT UNSIGNED NOT NULL,
   code          VARCHAR(20)  NOT NULL,
   name          VARCHAR(100) NOT NULL,
+  kind          ENUM('stock','damaged','display') NOT NULL DEFAULT 'stock',
   is_sellable   TINYINT(1)   NOT NULL DEFAULT 1,
   is_default    TINYINT(1)   NOT NULL DEFAULT 0,
   is_active     TINYINT(1)   NOT NULL DEFAULT 1,
@@ -319,7 +326,9 @@ CREATE TABLE storage_locations (
   UNIQUE KEY uq_locations_id_wh_branch (id, warehouse_id, branch_id),
   KEY idx_locations_wh_branch (warehouse_id, branch_id),
   CONSTRAINT fk_locations_warehouse FOREIGN KEY (warehouse_id, branch_id) REFERENCES warehouses (id, branch_id)
-    ON UPDATE CASCADE ON DELETE RESTRICT
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_locations_kind CHECK (kind = 'stock' OR (is_sellable = 0 AND is_default = 0)),
+  CONSTRAINT chk_locations_kind_code CHECK ((kind = 'stock') = (code NOT IN ('DAMAGED', 'DISPLAY')))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE stock_balances (
@@ -671,6 +680,118 @@ CREATE TABLE sale_item_serials (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
+-- Stock documents (as migrations/006)
+--   doc_type transfer = location -> location of the same branch (purpose
+--                       move / damage / display / restore, set by the app
+--                       from the location kinds); posted at creation
+--            issue    = internal use (stock leaves the company); posted
+--            writeoff = damaged stock written off; posted
+--            count    = stock count: open -> submitted -> posted | cancelled
+--   from_* = source location (count: the counted location); to_* = transfer
+--   destination only. The composite FKs keep both locations in branch_id.
+--   Numbers TRF/ISS/WOF/CNT-<branch>-<year>-<n> come from document_sequences.
+-- ---------------------------------------------------------------------
+CREATE TABLE inventory_docs (
+  id                 INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  doc_no             VARCHAR(30)   NOT NULL,
+  doc_type           ENUM('transfer','issue','writeoff','count') NOT NULL,
+  purpose            ENUM('move','damage','display','restore') NULL,
+  branch_id          INT UNSIGNED  NOT NULL,
+  from_warehouse_id  INT UNSIGNED  NOT NULL,
+  from_location_id   INT UNSIGNED  NOT NULL,
+  to_warehouse_id    INT UNSIGNED  NULL,
+  to_location_id     INT UNSIGNED  NULL,
+  status             ENUM('open','submitted','posted','cancelled') NOT NULL,
+  reason             VARCHAR(255)  NULL,
+  total_qty          INT           NOT NULL DEFAULT 0,
+  total_cost         DECIMAL(14,2) NULL,
+  created_by         INT UNSIGNED  NOT NULL,
+  submitted_by       INT UNSIGNED  NULL,
+  posted_by          INT UNSIGNED  NULL,
+  cancelled_by       INT UNSIGNED  NULL,
+  created_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  submitted_at       DATETIME      NULL,
+  posted_at          DATETIME      NULL,
+  cancelled_at       DATETIME      NULL,
+  cancel_reason      VARCHAR(255)  NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_invdocs_doc_no (doc_no),
+  KEY idx_invdocs_branch_type_status_date (branch_id, doc_type, status, created_at),
+  KEY idx_invdocs_from_status (from_location_id, status),
+  KEY idx_invdocs_from_location (from_location_id, from_warehouse_id, branch_id),
+  KEY idx_invdocs_to_location (to_location_id, to_warehouse_id, branch_id),
+  KEY idx_invdocs_created_by (created_by),
+  KEY idx_invdocs_submitted_by (submitted_by),
+  KEY idx_invdocs_posted_by (posted_by),
+  KEY idx_invdocs_cancelled_by (cancelled_by),
+  CONSTRAINT fk_invdocs_from_location FOREIGN KEY (from_location_id, from_warehouse_id, branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_invdocs_to_location FOREIGN KEY (to_location_id, to_warehouse_id, branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_invdocs_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_invdocs_submitted_by FOREIGN KEY (submitted_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_invdocs_posted_by FOREIGN KEY (posted_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_invdocs_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT chk_invdocs_status CHECK (doc_type = 'count' OR status = 'posted'),
+  CONSTRAINT chk_invdocs_purpose CHECK ((doc_type = 'transfer') = (purpose IS NOT NULL)),
+  CONSTRAINT chk_invdocs_to_location CHECK ((doc_type = 'transfer') = (to_location_id IS NOT NULL)),
+  CONSTRAINT chk_invdocs_to_pair CHECK ((to_location_id IS NULL) = (to_warehouse_id IS NULL)),
+  CONSTRAINT chk_invdocs_from_to CHECK (to_location_id IS NULL OR to_location_id <> from_location_id),
+  CONSTRAINT chk_invdocs_total_qty CHECK (total_qty >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- quantity   = transfer / issue / writeoff quantity (NULL on counts)
+-- system_qty = count: balance frozen when the count was created
+-- counted_qty= count: quantity entered (NULL until counted)
+-- adjust_qty = signed change actually posted (-qty for issue/writeoff,
+--              the variance for a count, NULL for a transfer)
+-- unit_cost  = branch average cost snapshot (outbound / count lines)
+CREATE TABLE inventory_doc_lines (
+  id           INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  doc_id       INT UNSIGNED      NOT NULL,
+  product_id   INT UNSIGNED      NOT NULL,
+  quantity     INT               NULL,
+  system_qty   INT               NULL,
+  counted_qty  INT               NULL,
+  adjust_qty   INT               NULL,
+  unit_cost    DECIMAL(12,4)     NULL,
+  sort_order   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_invdoc_lines_product (doc_id, product_id),
+  KEY idx_invdoc_lines_product (product_id),
+  CONSTRAINT fk_invdoc_lines_doc FOREIGN KEY (doc_id) REFERENCES inventory_docs (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_invdoc_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_invdoc_lines_qty CHECK (quantity IS NULL OR quantity > 0),
+  CONSTRAINT chk_invdoc_lines_system_qty CHECK (system_qty IS NULL OR system_qty >= 0),
+  CONSTRAINT chk_invdoc_lines_counted_qty CHECK (counted_qty IS NULL OR counted_qty >= 0),
+  CONSTRAINT chk_invdoc_lines_cost CHECK (unit_cost IS NULL OR unit_cost >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Serials on a document line. Counts: the expected serials frozen at
+-- creation (found 0 = not found yet / missing, 1 = found). Other types: the
+-- serials moved / removed (found = 1).
+CREATE TABLE inventory_doc_serials (
+  line_id    INT UNSIGNED NOT NULL,
+  serial_id  INT UNSIGNED NOT NULL,
+  found      TINYINT(1)   NOT NULL DEFAULT 1,
+  PRIMARY KEY (line_id, serial_id),
+  KEY idx_invdoc_serials_serial (serial_id),
+  CONSTRAINT fk_invdoc_serials_line FOREIGN KEY (line_id) REFERENCES inventory_doc_lines (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_invdoc_serials_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
 --   the change; location_qty_after is the level at (branch, warehouse, location).
@@ -681,10 +802,11 @@ CREATE TABLE stock_movements (
   user_id             INT UNSIGNED    NULL,
   sale_id             INT UNSIGNED    NULL,
   receiving_id        INT UNSIGNED    NULL,
+  inventory_doc_id    INT UNSIGNED    NULL,
   branch_id           INT UNSIGNED    NOT NULL,
   warehouse_id        INT UNSIGNED    NOT NULL,
   location_id         INT UNSIGNED    NOT NULL,
-  type                ENUM('initial','sale','restock','adjustment','void','receiving') NOT NULL,
+  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count') NOT NULL,
   quantity            INT             NOT NULL,
   stock_after         INT             NOT NULL,
   location_qty_after  INT             NULL,
@@ -697,6 +819,7 @@ CREATE TABLE stock_movements (
   KEY idx_movements_branch_date (branch_id, created_at),
   KEY idx_movements_location (location_id, warehouse_id, branch_id),
   KEY idx_movements_receiving (receiving_id),
+  KEY idx_movements_inventory_doc (inventory_doc_id),
   CONSTRAINT fk_movements_location FOREIGN KEY (location_id, warehouse_id, branch_id)
     REFERENCES storage_locations (id, warehouse_id, branch_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -707,6 +830,8 @@ CREATE TABLE stock_movements (
   CONSTRAINT fk_movements_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT fk_movements_receiving FOREIGN KEY (receiving_id) REFERENCES receiving_reports (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_movements_inventory_doc FOREIGN KEY (inventory_doc_id) REFERENCES inventory_docs (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -773,6 +898,20 @@ SELECT id, 'MAIN', 'Main Warehouse', 1 FROM branches ORDER BY id;
 INSERT INTO storage_locations (warehouse_id, branch_id, code, name, is_sellable, is_default)
 SELECT id, branch_id, 'GENERAL', 'General Stock', 1, 1 FROM warehouses ORDER BY id;
 
+-- Plus DAMAGED + DISPLAY per warehouse, never sellable/default (same rows and ids as
+-- migrations/006 gives a Phase 7a install).
+INSERT INTO storage_locations (id, warehouse_id, branch_id, code, name, kind, is_sellable, is_default) VALUES
+  ( 6, 1, 1, 'DAMAGED', 'Damaged Stock',  'damaged', 0, 0),
+  ( 7, 1, 1, 'DISPLAY', 'Display / Demo', 'display', 0, 0),
+  ( 8, 2, 2, 'DAMAGED', 'Damaged Stock',  'damaged', 0, 0),
+  ( 9, 2, 2, 'DISPLAY', 'Display / Demo', 'display', 0, 0),
+  (10, 3, 3, 'DAMAGED', 'Damaged Stock',  'damaged', 0, 0),
+  (11, 3, 3, 'DISPLAY', 'Display / Demo', 'display', 0, 0),
+  (12, 4, 4, 'DAMAGED', 'Damaged Stock',  'damaged', 0, 0),
+  (13, 4, 4, 'DISPLAY', 'Display / Demo', 'display', 0, 0),
+  (14, 5, 5, 'DAMAGED', 'Damaged Stock',  'damaged', 0, 0),
+  (15, 5, 5, 'DISPLAY', 'Display / Demo', 'display', 0, 0);
+
 -- Permission registry (must match config/permissions.php).
 INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   ( 1, 'pos.access',          'POS',       'Open the POS and complete sales',                           10),
@@ -802,7 +941,13 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (25, 'receiving.post',      'Receiving', 'Post receiving reports - adds stock and sets cost',         84),
   (26, 'receiving.cancel',    'Receiving', 'Cancel posted receiving reports',                           85),
   (27, 'serials.view',        'Inventory', 'Look up serial numbers',                                    86),
-  (28, 'inventory.integrity', 'Inventory', 'Run stock integrity checks',                                87);
+  (28, 'inventory.integrity', 'Inventory', 'Run stock integrity checks',                                87),
+  (29, 'inventory.transfer',  'Inventory', 'Move stock between locations of a branch',                  88),
+  (30, 'inventory.damage',    'Inventory', 'Mark stock damaged and write off damaged stock',            89),
+  (31, 'inventory.issue',     'Inventory', 'Issue stock for internal use and display units',           91),
+  (32, 'counts.create',       'Inventory', 'Create stock counts and enter counted quantities',          92),
+  (33, 'counts.approve',      'Inventory', 'Approve or cancel stock counts',                            93),
+  (34, 'warehouses.manage',   'Branches',  'Manage warehouses and storage locations',                  155);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -817,7 +962,8 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'customers.edit', 'customers.delete', 'inventory.view', 'inventory.adjust', 'reports.view', 'users.view',
          'users.manage', 'audit_logs.view', 'suppliers.view', 'suppliers.manage', 'products.cost',
          'receiving.view', 'receiving.manage', 'receiving.post', 'receiving.cancel', 'serials.view',
-         'inventory.integrity'))
+         'inventory.integrity', 'inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create',
+         'counts.approve', 'warehouses.manage'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view'))

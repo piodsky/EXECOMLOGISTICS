@@ -53,18 +53,42 @@ if (is_post()) {
 // List
 // ---------------------------------------------------------------------
 $statuses = ['all' => 'All products', 'active' => 'Active', 'inactive' => 'Inactive', 'low' => 'Low stock', 'out' => 'Out of stock'];
+
+// Storage locations of the current branch (Location filter; not offered for "All branches").
+$locations   = Branch::isConcrete() ? Warehouses::pickerLocations((int) Branch::current()) : [];
+$locationIds = array_column($locations, 'id');
+$posLocation = null; // the POS / adjustment location of the branch
+foreach ($locations as $l) {
+    if ($l['is_default']) {
+        $posLocation = $l;
+        break;
+    }
+}
+$locationId = input_int($_GET, 'location', 1);
+if ($locationId !== null && !in_array($locationId, $locationIds, true)) {
+    $locationId = null; // another branch's or an inactive location: ignore
+}
+
 $filters = [
     'q'        => input_string($_GET, 'search', 100),
     'category' => input_int($_GET, 'category', 1),
     'brand'    => input_int($_GET, 'brand', 1),
     'status'   => is_string($_GET['status'] ?? null) && array_key_exists($_GET['status'], $statuses) ? $_GET['status'] : 'all',
+    'location' => $locationId,
 ];
 $pgQuery = array_filter([
     'search'   => $filters['q'],
     'category' => $filters['category'],
     'brand'    => $filters['brand'],
+    'location' => $filters['location'],
     'status'   => $filters['status'] !== 'all' ? $filters['status'] : null,
 ], static fn ($v) => $v !== '' && $v !== null);
+$locationLabel = null;
+foreach ($locations as $l) {
+    if ($l['id'] === $locationId) {
+        $locationLabel = $l['warehouse_code'] . ' / ' . $l['code'];
+    }
+}
 
 $pg         = paginate(Products::count($filters), 15);
 $products   = Products::search($filters, $pg['per_page'], $pg['offset']);
@@ -76,7 +100,18 @@ $canCost    = Auth::can('products.cost'); // unit cost column only with products
 $canManage   = Auth::can('products.manage');
 $canAdjust   = Auth::can('inventory.adjust') && Branch::isConcrete(); // adjustments go to one branch
 $returnTo    = 'inventory.php' . (($pgQuery || $pg['page'] > 1) ? '?' . http_build_query($pgQuery + ['page' => $pg['page']]) : '');
+
+// Adjust stock works on the POS location: its quantity per listed product (the dialog's "current stock").
+$posQty = [];
+if ($canAdjust && $posLocation !== null && $products) {
+    $ids  = array_map(static fn (array $p): int => (int) $p['id'], $products);
+    $stmt = db()->prepare('SELECT product_id, qty FROM stock_balances WHERE location_id = ? AND product_id IN ('
+        . implode(',', array_fill(0, count($ids), '?')) . ')');
+    $stmt->execute([$posLocation['id'], ...$ids]);
+    $posQty = array_map('intval', $stmt->fetchAll(PDO::FETCH_KEY_PAIR));
+}
 $stockReturn = $returnTo;
+$stockLocation = $posLocation;
 $pgPath      = 'pages/inventory.php';
 $pageScripts = ['js/inventory.js'];
 
@@ -86,7 +121,7 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Inventory</h1>
-        <p class="muted">Products, prices, stock levels and images · stock at <strong id="stockScope"><?= e(Branch::label()) ?></strong>.</p>
+        <p class="muted">Products, prices, stock levels and images · stock at <strong id="stockScope"><?= e(Branch::label()) ?><?= $locationLabel !== null ? ' · ' . e($locationLabel) : '' ?></strong>.</p>
     </div>
     <div class="page-actions">
         <?php if (Auth::can('inventory.integrity')): ?>
@@ -144,6 +179,14 @@ require ROOT_PATH . '/includes/header.php';
                 <option value="<?= (int) $b['id'] ?>"<?= $filters['brand'] === (int) $b['id'] ? ' selected' : '' ?>><?= e($b['name']) ?></option>
             <?php endforeach; ?>
         </select>
+        <?php if ($locations): ?>
+            <select class="form-input" name="location" aria-label="Location" id="locationFilter">
+                <option value="">All locations</option>
+                <?php foreach ($locations as $l): ?>
+                    <option value="<?= $l['id'] ?>"<?= $locationId === $l['id'] ? ' selected' : '' ?>><?= e($l['warehouse_code'] . ' / ' . $l['code'] . ' - ' . $l['name']) ?><?= $l['is_default'] ? ' (POS)' : '' ?></option>
+                <?php endforeach; ?>
+            </select>
+        <?php endif; ?>
         <select class="form-input" name="status" aria-label="Status">
             <?php foreach ($statuses as $value => $label): ?>
                 <option value="<?= e($value) ?>"<?= $filters['status'] === $value ? ' selected' : '' ?>><?= e($label) ?></option>
@@ -164,7 +207,7 @@ require ROOT_PATH . '/includes/header.php';
                 <th class="col-opt">Brand</th>
                 <th class="num">Price</th>
                 <?php if ($canCost): ?><th class="num col-opt">Unit cost</th><?php endif; ?>
-                <th class="num">Stock</th>
+                <th class="num"><?= $locationLabel !== null ? 'Stock here' : 'Stock' ?></th>
                 <th class="col-opt">Unit</th>
                 <th>Status</th>
                 <th class="actions-col">Actions</th>
@@ -209,10 +252,10 @@ require ROOT_PATH . '/includes/header.php';
                     </td>
                     <td class="actions-col">
                         <div class="row-actions">
-                            <?php if ($canAdjust && (int) $p['track_serial'] !== 1): ?>
+                            <?php if ($canAdjust && $posLocation !== null && (int) $p['track_serial'] !== 1): ?>
                                 <button type="button" class="icon-btn" title="Adjust stock" aria-label="Adjust stock of <?= e($p['name']) ?>"
                                         data-adjust data-id="<?= (int) $p['id'] ?>" data-name="<?= e($p['name']) ?>"
-                                        data-code="<?= e($p['code']) ?>" data-stock="<?= $stock ?>">
+                                        data-code="<?= e($p['code']) ?>" data-stock="<?= $posQty[(int) $p['id']] ?? 0 ?>">
                                     <?= icon('stock') ?>
                                 </button>
                             <?php endif; ?>
@@ -257,7 +300,7 @@ require ROOT_PATH . '/includes/header.php';
     <?php require ROOT_PATH . '/includes/pagination.php'; ?>
 </section>
 
-<?php if ($canAdjust): ?>
+<?php if ($canAdjust && $posLocation !== null): ?>
     <?php require ROOT_PATH . '/includes/stock-dialog.php'; ?>
 <?php endif; ?>
 <?php require ROOT_PATH . '/includes/footer.php'; ?>

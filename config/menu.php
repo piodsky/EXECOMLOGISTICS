@@ -32,6 +32,13 @@ return [
         'url'        => 'pages/receiving.php',
         'permission' => 'receiving.view',
     ],
+    // Transfers, damaged / display units, internal use, write-offs, stock counts (= InventoryDocs::VIEW_PERMISSIONS).
+    'stock-docs' => [
+        'label'      => 'Stock Operations',
+        'icon'       => 'stock',
+        'url'        => 'pages/stock-docs.php',
+        'permission' => ['inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create', 'counts.approve'],
+    ],
     'serials' => [
         'label'      => 'Serial Lookup',
         'icon'       => 'barcode',
@@ -61,7 +68,7 @@ return [
         'label'      => 'Settings',
         'icon'       => 'settings',
         'url'        => 'pages/settings.php',
-        'permission' => ['settings.manage', 'users.view', 'roles.manage', 'branches.manage', 'audit_logs.view'],
+        'permission' => ['settings.manage', 'users.view', 'roles.manage', 'branches.manage', 'warehouses.manage', 'audit_logs.view'],
         'tabs'       => true,
     ],
 ];

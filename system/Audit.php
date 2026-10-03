@@ -29,6 +29,7 @@ final class Audit
         'master_data' => 'Master Data',
         'suppliers'   => 'Suppliers',
         'receiving'   => 'Receiving',
+        'warehouses'  => 'Warehouses',
     ];
 
     /**

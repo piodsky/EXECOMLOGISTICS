@@ -73,10 +73,10 @@ final class Products
                LEFT JOIN product_models pm ON pm.id = p.model_id
                LEFT JOIN units un ON un.id = p.unit_id';
 
-    /** @param array{q:string, category:?int, brand?:?int, status:string} $f */
+    /** @param array{q:string, category:?int, brand?:?int, status:string, location?:?int} $f (location: one storage location, checked by the caller) */
     public static function count(array $f): int
     {
-        [$join, $joinParams] = Stock::scopeJoin();
+        [$join, $joinParams] = Stock::scopeJoin($f['location'] ?? null);
         [$where, $params] = self::where($f);
         $stmt = db()->prepare("SELECT COUNT(*) FROM products p " . self::LIST_JOINS . " {$join} WHERE {$where}");
         $stmt->execute([...$joinParams, ...$params]);
@@ -85,7 +85,7 @@ final class Products
 
     public static function search(array $f, int $limit, int $offset): array
     {
-        [$join, $joinParams] = Stock::scopeJoin();
+        [$join, $joinParams] = Stock::scopeJoin($f['location'] ?? null);
         [$where, $params] = self::where($f);
         $cost = Auth::can('products.cost') ? 'p.unit_cost, ' : ''; // cost only with products.cost
         $stmt = db()->prepare(
@@ -416,6 +416,11 @@ final class Products
         if ((int) $product['times_received'] > 0 || (int) $product['serial_count'] > 0) {
             throw new HttpException(409, "{$product['name']} has receiving history, so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
+        $stmt = db()->prepare('SELECT 1 FROM inventory_doc_lines WHERE product_id = ? LIMIT 1');
+        $stmt->execute([$id]);
+        if ($stmt->fetchColumn()) {
+            throw new HttpException(409, "{$product['name']} has stock documents (transfers, counts, write-offs), so it can't be deleted. Deactivate it instead to hide it from the POS.");
+        }
         $pdo = db();
         $pdo->beginTransaction();
         try {
@@ -499,17 +504,43 @@ final class Products
         [$scope, $params] = Branch::scopeSql('m.branch_id');
         $stmt = db()->prepare(
             "SELECT m.type, m.quantity, m.stock_after, m.location_qty_after, m.note, m.created_at, m.sale_id,
-                    m.receiving_id, r.rr_no, u.username, s.sale_no, b.code AS branch_code, b.name AS branch_name
+                    m.receiving_id, r.rr_no, u.username, s.sale_no, b.code AS branch_code, b.name AS branch_name,
+                    m.inventory_doc_id, d.doc_no, d.doc_type, w.code AS warehouse_code, l.code AS location_code
                FROM stock_movements m
                LEFT JOIN users u ON u.id = m.user_id
                LEFT JOIN sales s ON s.id = m.sale_id
                LEFT JOIN receiving_reports r ON r.id = m.receiving_id
+               LEFT JOIN inventory_docs d ON d.id = m.inventory_doc_id
+               LEFT JOIN warehouses w ON w.id = m.warehouse_id
+               LEFT JOIN storage_locations l ON l.id = m.location_id
                LEFT JOIN branches b ON b.id = m.branch_id
               WHERE m.product_id = ? AND {$scope}
               ORDER BY m.id DESC
               LIMIT ?"
         );
         $stmt->execute([$productId, ...$params, $limit]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Stock of a product per storage location in the current branch scope (locations holding stock,
+     * plus inactive ones only while they still hold some). No cost.
+     */
+    public static function locations(int $productId): array
+    {
+        [$scope, $params] = Branch::scopeSql('sb.branch_id');
+        $stmt = db()->prepare(
+            "SELECT sb.branch_id, b.code AS branch_code, b.name AS branch_name, sb.warehouse_id, w.code AS warehouse_code,
+                    w.name AS warehouse_name, sb.location_id, l.code AS location_code, l.name AS location_name, l.kind,
+                    l.is_default AND w.is_default AS is_pos_location, l.is_active AND w.is_active AS is_active, sb.qty
+               FROM stock_balances sb
+               JOIN branches b ON b.id = sb.branch_id
+               JOIN warehouses w ON w.id = sb.warehouse_id
+               JOIN storage_locations l ON l.id = sb.location_id
+              WHERE sb.product_id = ? AND sb.qty > 0 AND {$scope}
+              ORDER BY b.is_main DESC, b.name, w.is_default DESC, w.code, l.is_default DESC, l.kind = 'stock' DESC, l.kind, l.code"
+        );
+        $stmt->execute([$productId, ...$params]);
         return $stmt->fetchAll();
     }
 }

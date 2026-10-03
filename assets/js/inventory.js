@@ -119,6 +119,21 @@
         }
     }
 
+    // ---- Register serials (serial-register.php): live count per location ----
+    document.querySelectorAll('[data-reg-input]').forEach((box) => {
+        const out = box.parentElement.querySelector('[data-reg-count]');
+        const qty = parseInt(box.dataset.qty, 10) || 0;
+        const sync = () => {
+            const list = box.value.split(/\r?\n/).map((s) => s.trim()).filter((s) => s !== '');
+            const dupes = list.length - new Set(list.map((s) => s.toUpperCase())).size;
+            out.textContent = `${list.length} of ${qty} serial numbers` + (dupes > 0 ? ` (${dupes} repeated)` : '');
+            out.classList.toggle('is-ok', list.length === qty && dupes === 0);
+            out.classList.toggle('is-warn', list.length !== qty || dupes > 0);
+        };
+        box.addEventListener('input', sync);
+        sync();
+    });
+
     // ---- Product form: serial-tracked items start at 0 (stock comes through Receiving) ----
     const track = document.getElementById('trackSerial');
     const opening = document.getElementById('openingStock');

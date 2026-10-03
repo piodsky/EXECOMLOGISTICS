@@ -1,6 +1,7 @@
 <?php
 /**
- * The only writer of stock. Used by Products (opening stock, adjustments) and Sales (sale, void).
+ * The only writer of stock. Used by Products (opening stock, adjustments), Sales (sale, void),
+ * Receiving (RR post / cancel) and InventoryDocs (transfers, issues, write-offs, counts).
  *
  * Stock::move() changes one product at one storage location:
  *   stock_balances.qty (per location)  +  products.stock (company total)  +  one stock_movements row.
@@ -11,6 +12,9 @@ declare(strict_types=1);
 
 final class Stock
 {
+    /** stock_movements.type values (transfer / issue / write_off / count come from InventoryDocs). */
+    public const TYPES = ['initial', 'sale', 'restock', 'adjustment', 'void', 'receiving', 'transfer', 'issue', 'write_off', 'count'];
+
     /** Quantity at a location, locking the balance row (0 when there is none yet). */
     public static function balance(int $productId, int $locationId): int
     {
@@ -22,18 +26,21 @@ final class Stock
     }
 
     /**
-     * @param array{id:int, warehouse_id:int, branch_id:int, branch_name?:string} $location from Branch::defaultLocation()
+     * @param array{id:int, warehouse_id:int, branch_id:int, branch_name?:string, label?:string} $location
+     *        from Branch::defaultLocation() (or a storage location row; 'label' names it in the 409 message)
      * @param int    $delta  signed change (+ in, - out)
-     * @param string $type   initial | sale | restock | adjustment | void | receiving
+     * @param string $type   initial | sale | restock | adjustment | void | receiving | transfer | issue | write_off | count
      * @param ?int   $receivingId receiving_reports.id (type 'receiving': RR post and cancel)
+     * @param ?int   $docId  inventory_docs.id (types transfer / issue / write_off / count)
      * @return array{location_qty:int, stock:int} levels after the change
      * @throws HttpException 409 when the location would go below zero
      */
     public static function move(int $productId, array $location, int $delta, string $type, ?string $note,
-                                ?int $saleId = null, ?int $userId = null, ?int $receivingId = null): array
+                                ?int $saleId = null, ?int $userId = null, ?int $receivingId = null,
+                                ?int $docId = null): array
     {
         self::assertTransaction();
-        if (!in_array($type, ['initial', 'sale', 'restock', 'adjustment', 'void', 'receiving'], true)) {
+        if (!in_array($type, self::TYPES, true)) {
             throw new LogicException("Unknown stock movement type [{$type}]");
         }
         $pdo = db();
@@ -52,7 +59,7 @@ final class Stock
         $new     = ($current === false ? 0 : (int) $current) + $delta;
 
         if ($new < 0) {
-            throw new HttpException(409, 'Not enough stock at ' . ($location['branch_name'] ?? 'this branch') . '.');
+            throw new HttpException(409, 'Not enough stock at ' . ($location['label'] ?? $location['branch_name'] ?? 'this branch') . '.');
         }
 
         if ($current === false) {
@@ -70,11 +77,11 @@ final class Stock
         $total = (int) $stmt->fetchColumn();
 
         $pdo->prepare(
-            'INSERT INTO stock_movements (product_id, user_id, sale_id, receiving_id, branch_id, warehouse_id,
+            'INSERT INTO stock_movements (product_id, user_id, sale_id, receiving_id, inventory_doc_id, branch_id, warehouse_id,
                                           location_id, type, quantity, stock_after, location_qty_after, note)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )->execute([
-            $productId, $userId ?? Auth::id(), $saleId, $receivingId,
+            $productId, $userId ?? Auth::id(), $saleId, $receivingId, $docId,
             $location['branch_id'], $location['warehouse_id'], $location['id'],
             $type, $delta, $total, $new,
             $note !== null ? mb_substr($note, 0, 255) : null,
@@ -86,11 +93,16 @@ final class Stock
     /**
      * [JOIN, params] adding `bs.qty` = stock of product `p` in the current branch scope
      * (NULL when there is none; use COALESCE(bs.qty, 0)). Shared by Products and Reports.
+     * $locationId narrows it to one storage location (the caller checks the location is in scope).
      * @return array{0:string, 1:list<int>}
      */
-    public static function scopeJoin(): array
+    public static function scopeJoin(?int $locationId = null): array
     {
         [$scope, $params] = Branch::scopeSql('sb.branch_id');
+        if ($locationId !== null) {
+            $scope   .= ' AND sb.location_id = ?';
+            $params[] = $locationId;
+        }
         return [
             "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
                          WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",

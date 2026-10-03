@@ -113,6 +113,59 @@ final class Integrity
              HAVING SUM(sb.qty) > 0
               ORDER BY sb.product_id, sb.branch_id', 'sb.branch_id');
 
+        $add('inventory_doc_movements', 'Stock document movements do not match the document',
+            "SELECT x.* FROM (
+             SELECT d.id AS doc_id, d.doc_no, d.doc_type, d.status, d.branch_id, d.total_qty,
+                    (SELECT COUNT(*) FROM stock_movements m WHERE m.inventory_doc_id = d.id) AS movements,
+                    (SELECT COALESCE(SUM(m.quantity), 0) FROM stock_movements m WHERE m.inventory_doc_id = d.id) AS moved_net,
+                    (SELECT COALESCE(SUM(GREATEST(m.quantity, 0)), 0) FROM stock_movements m WHERE m.inventory_doc_id = d.id) AS moved_in,
+                    (SELECT COALESCE(SUM(dl.adjust_qty), 0) FROM inventory_doc_lines dl WHERE dl.doc_id = d.id) AS line_adjust
+               FROM inventory_docs d
+             ) x
+              WHERE ((x.status <> 'posted' AND x.movements > 0)
+                  OR (x.status = 'posted' AND x.doc_type = 'transfer' AND (x.moved_net <> 0 OR x.moved_in <> x.total_qty))
+                  OR (x.status = 'posted' AND x.doc_type <> 'transfer' AND x.moved_net <> x.line_adjust))
+                AND {scope}
+              ORDER BY x.doc_id", 'x.branch_id');
+
+        $add('removed_serials', 'Removed serial without a posted issue, write-off or count',
+            "SELECT ps.id AS serial_id, ps.serial_no, ps.product_id, ps.branch_id, ps.location_id
+               FROM product_serials ps
+              WHERE ps.status = 'removed'
+                AND NOT EXISTS (SELECT 1 FROM inventory_doc_serials ds
+                                  JOIN inventory_doc_lines dl ON dl.id = ds.line_id
+                                  JOIN inventory_docs d ON d.id = dl.doc_id
+                                 WHERE ds.serial_id = ps.id AND d.status = 'posted'
+                                   AND (d.doc_type IN ('issue', 'writeoff') OR (d.doc_type = 'count' AND ds.found = 0)))
+                AND {scope}
+              ORDER BY ps.id", 'ps.branch_id');
+
+        $add('inactive_location_stock', 'Inactive location or warehouse still holds stock',
+            'SELECT sb.branch_id, sb.warehouse_id, w.code AS warehouse_code, sb.location_id, l.code AS location_code,
+                    SUM(sb.qty) AS qty
+               FROM stock_balances sb
+               JOIN storage_locations l ON l.id = sb.location_id
+               JOIN warehouses w ON w.id = sb.warehouse_id
+              WHERE (l.is_active = 0 OR w.is_active = 0) AND sb.qty > 0 AND {scope}
+              GROUP BY sb.branch_id, sb.warehouse_id, w.code, sb.location_id, l.code
+              ORDER BY sb.location_id', 'sb.branch_id');
+
+        $add('location_setup', 'Warehouse without DAMAGED / DISPLAY, or active branch without a default sellable location',
+            "SELECT x.* FROM (
+             SELECT w.branch_id, w.id AS warehouse_id, w.code AS warehouse_code, 'Missing DAMAGED or DISPLAY location' AS problem
+               FROM warehouses w
+              WHERE NOT EXISTS (SELECT 1 FROM storage_locations l WHERE l.warehouse_id = w.id AND l.kind = 'damaged')
+                 OR NOT EXISTS (SELECT 1 FROM storage_locations l WHERE l.warehouse_id = w.id AND l.kind = 'display')
+             UNION ALL
+             SELECT b.id, NULL, NULL, 'No default sellable location'
+               FROM branches b
+              WHERE b.is_active = 1
+                AND NOT EXISTS (SELECT 1 FROM storage_locations l JOIN warehouses w ON w.id = l.warehouse_id
+                                 WHERE l.branch_id = b.id AND w.is_default = 1 AND w.is_active = 1
+                                   AND l.is_default = 1 AND l.is_sellable = 1 AND l.is_active = 1)
+             ) x WHERE {scope}
+              ORDER BY x.branch_id, x.warehouse_id", 'x.branch_id');
+
         return $checks;
     }
 

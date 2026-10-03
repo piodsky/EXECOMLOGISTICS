@@ -4,7 +4,8 @@
  * Rules: exactly one main branch (setting a new main unsets the old one); the main branch can't
  * be deactivated or deleted; a branch with active home users can't be deactivated (they could no
  * longer sign in); a branch with any history (sales, stock, users, customers) can't be deleted.
- * Creating a branch also creates its MAIN warehouse and GENERAL sellable location.
+ * Creating a branch also creates its MAIN warehouse with GENERAL (sellable, default), DAMAGED and
+ * DISPLAY locations (Warehouses::createLocations).
  * Address / contact / TIN stay empty until the owner fills them in (never invented).
  */
 declare(strict_types=1);
@@ -44,7 +45,7 @@ final class Branches
     {
         $stmt = db()->prepare(
             'SELECT w.code AS warehouse_code, w.name AS warehouse_name, w.is_default AS warehouse_default,
-                    l.code, l.name, l.is_sellable, l.is_default, l.is_active
+                    w.is_active AS warehouse_active, l.code, l.name, l.kind, l.is_sellable, l.is_default, l.is_active
                FROM storage_locations l JOIN warehouses w ON w.id = l.warehouse_id AND w.branch_id = l.branch_id
               WHERE l.branch_id = ?
               ORDER BY w.id, l.id'
@@ -140,9 +141,7 @@ final class Branches
             $pdo->prepare('INSERT INTO warehouses (branch_id, code, name, is_default) VALUES (?, ?, ?, ?)')
                 ->execute([$id, 'MAIN', 'Main Warehouse', 1]);
             $warehouseId = (int) $pdo->lastInsertId();
-            $pdo->prepare(
-                'INSERT INTO storage_locations (warehouse_id, branch_id, code, name, is_sellable, is_default) VALUES (?, ?, ?, ?, ?, ?)'
-            )->execute([$warehouseId, $id, 'GENERAL', 'General Stock', 1, 1]);
+            Warehouses::createLocations($warehouseId, $id); // GENERAL (sellable, default) + DAMAGED + DISPLAY
 
             Audit::record('branches', 'create', 'branch', $id, $data['code'], null,
                 array_intersect_key($data, array_flip(self::AUDIT_FIELDS)));
@@ -199,6 +198,7 @@ final class Branches
             'user_branches'     => 'users have access to it',
             'stock_balances'    => 'it has stock records',
             'stock_movements'   => 'it has stock history',
+            'inventory_docs'    => 'it has stock documents',
         ];
         foreach ($checks as $table => $reason) {
             // $table comes from the whitelist above, never from input.

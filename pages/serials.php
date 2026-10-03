@@ -15,6 +15,7 @@ $serialId  = input_int($_GET, 'id', 1);
 $canRr     = Auth::can('receiving.view');
 $canSales  = Auth::can('sales.view');
 $canItems  = Auth::can('inventory.view');
+$canDocs   = Auth::canAny(...InventoryDocs::VIEW_PERMISSIONS);
 
 $results = ($search !== '' || $productId !== null) ? Serials::lookup($search, 100, $productId) : [];
 $history = $serialId !== null ? Serials::history($serialId) : null;
@@ -72,6 +73,7 @@ require ROOT_PATH . '/includes/header.php';
                 <th class="col-opt"><?= $showBranch ? 'Branch / Location' : 'Location' ?></th>
                 <th>Received</th>
                 <th>Last Sale</th>
+                <th class="col-opt">Last Stock Document</th>
                 <th class="actions-col"><span class="visually-hidden">History</span></th>
             </tr>
             </thead>
@@ -111,6 +113,15 @@ require ROOT_PATH . '/includes/header.php';
                             <?php endif; ?>
                         <?php endif; ?>
                     </td>
+                    <td class="nowrap col-opt">
+                        <?php if ($s['last_doc_no'] === null): ?>
+                            <span class="muted">—</span>
+                        <?php elseif ($canDocs): ?>
+                            <a href="<?= e(url('pages/stock-doc-view.php?id=' . (int) $s['last_doc_id'])) ?>"><?= e($s['last_doc_no']) ?></a>
+                        <?php else: ?>
+                            <?= e($s['last_doc_no']) ?>
+                        <?php endif; ?>
+                    </td>
                     <td class="actions-col">
                         <div class="row-actions">
                             <a class="icon-btn" href="<?= e($selfUrl(['id' => (int) $s['id']])) ?>" title="History" aria-label="History of serial <?= e($s['serial_no']) ?>"><?= icon('clock') ?></a>
@@ -119,7 +130,7 @@ require ROOT_PATH . '/includes/header.php';
                 </tr>
             <?php endforeach; ?>
             <?php if (!$results): ?>
-                <tr><td colspan="7" class="empty"><?= $listQuery ? 'No serial numbers found at ' . e(Branch::label()) . '.' : 'Scan or type a serial number, or choose a product.' ?></td></tr>
+                <tr><td colspan="8" class="empty"><?= $listQuery ? 'No serial numbers found at ' . e(Branch::label()) . '.' : 'Scan or type a serial number, or choose a product.' ?></td></tr>
             <?php endif; ?>
             </tbody>
         </table>
@@ -136,34 +147,57 @@ require ROOT_PATH . '/includes/header.php';
             <span class="badge <?= e($statusBadge[$history['status']] ?? '') ?>"><?= e($statusLabel[$history['status']] ?? $history['status']) ?></span>
         </header>
         <p class="muted rr-lines__hint"><?= e($history['product_code'] . ' · ' . $history['product_name']) ?> · now at <?= e($history['branch_name'] . ' / ' . $history['location_code']) ?></p>
+        <?php
+        // One timeline: received / registered, sales (+ voids) and posted stock documents, oldest first.
+        $events = [];
+        $events[] = [
+            'ts' => $history['posted_at'] ?? $history['created_at'], 'badge' => 'badge--success',
+            'label' => $history['rr_no'] !== null ? 'Received' : 'Registered',
+            'text' => $history['rr_no'] ?? 'Existing stock, serial number registered',
+            'url' => $history['rr_no'] !== null && $canRr ? url('pages/receiving-view.php?id=' . (int) $history['receiving_id']) : null,
+        ];
+        foreach ($history['sales'] as $sale) {
+            $events[] = [
+                'ts' => $sale['created_at'], 'badge' => 'badge--info', 'label' => 'Sold',
+                'text' => 'Sale No. ' . $sale['sale_no'] . ' · ' . $sale['branch_name'],
+                'url' => $canSales ? url('pages/sale-view.php?id=' . (int) $sale['sale_id']) : null,
+            ];
+            if ($sale['status'] === 'cancelled') {
+                $events[] = [
+                    'ts' => $sale['voided_at'], 'badge' => 'badge--danger', 'label' => 'Voided',
+                    'text' => 'Sale No. ' . $sale['sale_no'] . ' was voided; the unit went back to stock.', 'url' => null,
+                ];
+            }
+        }
+        foreach ($history['documents'] ?? [] as $doc) {
+            $fromLoc = $doc['from_warehouse_code'] . ' / ' . $doc['from_location_code'];
+            $toLoc   = $doc['to_location_code'] !== null ? $doc['to_warehouse_code'] . ' / ' . $doc['to_location_code'] : null;
+            [$badge, $label, $what] = match (true) {
+                $doc['doc_type'] === 'transfer' => ['badge--info', InventoryDocs::PURPOSES[$doc['purpose']] ?? 'Transfer', "moved {$fromLoc} → {$toLoc}"],
+                $doc['doc_type'] === 'issue'    => ['badge--warning', 'Internal use', "issued from {$fromLoc}; removed from stock"],
+                $doc['doc_type'] === 'writeoff' => ['badge--danger', 'Written off', "written off at {$fromLoc}; removed from stock"],
+                (int) $doc['found'] === 1       => ['badge--success', 'Counted', "found at {$fromLoc}"],
+                default                         => ['badge--danger', 'Missing', "not found when counting {$fromLoc}; removed from stock"],
+            };
+            $events[] = [
+                'ts' => $doc['posted_at'], 'badge' => $badge, 'label' => $label,
+                'text' => $doc['doc_no'] . ' · ' . $what,
+                'url' => $canDocs ? url('pages/stock-doc-view.php?id=' . (int) $doc['doc_id']) : null,
+            ];
+        }
+        usort($events, static fn (array $a, array $b): int => strcmp((string) $a['ts'], (string) $b['ts']));
+        ?>
         <ol class="serial-events">
-            <li>
-                <time><?= e(date('M j, Y g:i A', strtotime($history['posted_at'] ?? $history['created_at']))) ?></time>
-                <span class="badge badge--success">Received</span>
-                <?php if ($history['rr_no'] !== null && $canRr): ?>
-                    <a href="<?= e(url('pages/receiving-view.php?id=' . (int) $history['receiving_id'])) ?>"><?= e($history['rr_no']) ?></a>
-                <?php else: ?>
-                    <span><?= e($history['rr_no'] ?? 'Receiving') ?></span>
-                <?php endif; ?>
-            </li>
-            <?php foreach ($history['sales'] as $sale): ?>
-                <?php $saleText = 'Sale No. ' . $sale['sale_no'] . ' · ' . $sale['branch_name']; ?>
+            <?php foreach ($events as $ev): ?>
                 <li>
-                    <time><?= e(date('M j, Y g:i A', strtotime($sale['created_at']))) ?></time>
-                    <span class="badge badge--info">Sold</span>
-                    <?php if ($canSales): ?>
-                        <a href="<?= e(url('pages/sale-view.php?id=' . (int) $sale['sale_id'])) ?>"><?= e($saleText) ?></a>
+                    <time><?= e($ev['ts'] ? date('M j, Y g:i A', strtotime($ev['ts'])) : '—') ?></time>
+                    <span class="badge <?= e($ev['badge']) ?>"><?= e($ev['label']) ?></span>
+                    <?php if ($ev['url'] !== null): ?>
+                        <a href="<?= e($ev['url']) ?>"><?= e($ev['text']) ?></a>
                     <?php else: ?>
-                        <span><?= e($saleText) ?></span>
+                        <span><?= e($ev['text']) ?></span>
                     <?php endif; ?>
                 </li>
-                <?php if ($sale['status'] === 'cancelled'): ?>
-                    <li>
-                        <time><?= e($sale['voided_at'] ? date('M j, Y g:i A', strtotime($sale['voided_at'])) : '—') ?></time>
-                        <span class="badge badge--danger">Voided</span>
-                        <span>Sale No. <?= e($sale['sale_no']) ?> was voided; the unit went back to stock.</span>
-                    </li>
-                <?php endif; ?>
             <?php endforeach; ?>
         </ol>
     </section>

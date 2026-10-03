@@ -32,9 +32,36 @@ Read this first; open only the files a task needs.
       suppliers + contacts, product brand/model/unit/cost/serial/warranty/specs, customer type/TIN/contacts.
       Migration `migrations/004_master_data.sql`. Payment methods / discount types wait for POS pricing (v2 phase 6).
 - [x] Phase 7a (= v2 phase 4, part 1): Receiving Reports, branch moving-average cost, serial numbers (receiving + POS),
-      serial lookup, stock integrity page. Migration `migrations/005_receiving_cost_serials.sql`. 7b next: issuance,
-      damaged stock, counts with approval, same-branch warehouse transfers (decisions saved in memory).
+      serial lookup, stock integrity page. Migration `migrations/005_receiving_cost_serials.sql`.
+- [x] Phase 7b (= v2 phase 4, part 2): warehouses & locations, stock operations (transfer / damage / display /
+      restore, internal-use issue, write-off), stock counts with approval, serial registration for stock on hand.
+      Migration `migrations/006_warehouse_ops.sql`. Next (v2 phase 5): branch-to-branch transfers.
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## Warehouses & stock operations (Phase 7b)
+- Locations have `kind` stock/damaged/display. Every warehouse gets GENERAL (stock) + DAMAGED + DISPLAY (system,
+  never sellable/default, can't be deactivated) via `Warehouses::createLocations()` (also used by `Branches::create`).
+  New bins are non-sellable; the POS and adjustStock act only on the branch's default location. Inventory "Stock" =
+  all locations of the branch (damaged/display included); the Location filter narrows it. Settings tab "Warehouses"
+  (`warehouses.manage`, branch admin = own branch; "All branches" is read-only; writes need the working branch).
+- One generic document `InventoryDocs` (`inventory_docs` + lines + serials), menu "Stock Operations" (`stock-docs`):
+  transfer (purpose move/damage/display/restore, derived server-side from the location kinds, permission per
+  purpose), issue (internal use), writeoff, count. Numbers TRF/ISS/WOF/CNT-<BRANCH>-<YEAR>-NNNNNN. Transfers, issues
+  and write-offs post in one step (no draft); the form posts once per page load.
+- Costing: moves between locations keep branch qty + average; issue/write-off store the branch average as cost
+  snapshot (cost only with `products.cost`). Serials move with the stock; issued/written-off/unfound serials become
+  `removed`. Display → damaged allowed, damaged → display refused (restore to stock first).
+- Counts: open (system qty + serials frozen at create; one open count per location) → submitted → posted. Approval
+  (`counts.approve`) never by the creator, the submitter or anyone who saved counts (audit `count_save`), super admin
+  included. Posting moves counted − frozen (sales during the count stay correct); tracked items can't count up.
+- `Serials::register` (super admin / `products.manage`): serials = qty at every location (switch to All branches if
+  the item is at several branches), then tracking turns on with no stock movement; refused while on an open count.
+- `Stock::move(..., ?int $receivingId, ?int $docId)`; movement types + transfer/issue/write_off/count. Any later
+  movement (incl. transfers/counts) blocks an RR cancel. Integrity has 12 checks.
+- Follow-ups (code review nits): stock-doc-view approval "Est. value" duplicates `Costing::avg` in the page (add a
+  read-only helper) and overstates serial lines whose serial was sold during the count; serials.php history says
+  "removed from stock" for every not-found serial; a `counted_by` column would be sturdier than the audit-based
+  `hasCounted()`; inventory/product-form re-find the POS location instead of `Branch::defaultLocation()`.
 
 ## Receiving, cost & serials (Phase 7a)
 - Classes: `Receiving` (RR draft/post/cancel), `Costing` (branch average), `Serials`, `Integrity`. Pages
@@ -195,7 +222,7 @@ the main session runs each step with the agent named in project-manager's plan.
   (user-form.php uses `$target`).
 
 ## Inventory / Customers behaviour
-- Stock changes ONLY via sales, receiving (RR post/cancel) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
+- Stock changes ONLY via sales, receiving (RR post/cancel), stock documents (InventoryDocs) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
   every change writes `stock_movements` (type initial/sale/restock/adjustment/void/receiving, signed qty, stock_after).
   The product edit form never edits stock; opening stock is set on create only.
 - Delete is allowed only if never sold / never bought; otherwise deactivate (`is_active=0` hides from POS).
@@ -241,7 +268,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (229 checks incl. receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (317 checks incl. warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

@@ -288,6 +288,7 @@ function settings_tabs(): array
         'users'    => ['Users',             'user',    'pages/users.php',     'users.view'],
         'roles'    => ['Roles',             'shield',  'pages/roles.php',     'roles.manage'],
         'branches' => ['Branches',          'store',   'pages/branches.php',  'branches.manage'],
+        'warehouses' => ['Warehouses',      'grid',    'pages/warehouses.php', 'warehouses.manage'],
         'audit'    => ['Audit Log',         'clock',   'pages/audit-log.php', 'audit_logs.view'],
     ];
 }

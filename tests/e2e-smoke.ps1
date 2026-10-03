@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -230,6 +230,17 @@ function BranchQty([string]$pid_) { Sql "SELECT COALESCE(SUM(qty), 0) FROM stock
 function PostForm([string]$path, [string]$fields) {
     Eval "fetch('$Base/$path', {method: 'POST', body: new URLSearchParams({_csrf: document.querySelector('meta[name=csrf-token]').content, $fields})}).then(r => r.text().then(t => r.status + ':' + t))"
 }
+# Phase 7b: fill the stock document form and post it (confirm stubbed).
+# $lines = JS array of [productId, qty, serialNos or null]; serial lines tick their serial numbers.
+function DocPost([string]$query, [string]$from, [string]$to, [string]$reason, [string]$lines, [string]$label) {
+    Nav "$Base/pages/stock-doc-form.php?$query"
+    [void](Eval "window.confirm = () => true; window.__dl = $lines; const fs = document.getElementById('fromLocation'); fs.value = '$from'; fs.dispatchEvent(new Event('change')); const ts = document.getElementById('toLocation'); if (ts && '$to' !== '') ts.value = '$to'; document.getElementById('docForm').querySelector('[name=reason]').value = '$reason'; window.__dl.forEach((l, i) => { let t = document.querySelectorAll('#docLines tbody[data-line]')[i]; if (!t) { document.getElementById('addLine').click(); t = [...document.querySelectorAll('#docLines tbody[data-line]')].pop(); } const s = t.querySelector('[data-product]'); s.value = String(l[0]); s.dispatchEvent(new Event('change', {bubbles: true})); if (!l[2]) t.querySelector('[data-qty]').value = String(l[1]); }); true")
+    WaitFor "window.__dl.every((l, i) => !l[2] || document.querySelectorAll('#docLines tbody[data-line]')[i].querySelectorAll('[data-serial-list] input').length > 0)" "serial list $label"
+    [void](Eval "window.__dl.forEach((l, i) => { if (!l[2]) return; const t = document.querySelectorAll('#docLines tbody[data-line]')[i]; t.querySelectorAll('[data-serial-list] label').forEach(lb => { const c = lb.querySelector('input'); if (l[2].includes(lb.textContent.trim()) && !c.checked) c.click(); }); }); true")
+    Submit "document.getElementById('docForm').requestSubmit()" "post $label"
+}
+function LocQty([string]$pid_, [string]$loc) { Sql "SELECT COALESCE((SELECT qty FROM stock_balances WHERE product_id = $pid_ AND location_id = $loc), 0)" }
+function PStock([string]$pid_) { Sql "SELECT stock FROM products WHERE id = $pid_" }
 
 try {
     [void](Cdp 'Page.enable'); [void](Cdp 'Runtime.enable'); [void](Cdp 'Log.enable')
@@ -531,7 +542,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'POS Sales|Sales History|Inventory|Receiving|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'POS Sales|Sales History|Inventory|Receiving|Stock Operations|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -906,6 +917,268 @@ try {
     }
     Size 1536 1024
     SwitchBranch 1
+
+    # --- Phase 7b: warehouses + locations, stock operations, counts, serial registration (MAR) ---
+    $p7 = "'inventory.transfer','inventory.damage','inventory.issue','counts.create','counts.approve','warehouses.manage'"
+    Check ((Sql "SELECT COUNT(*) FROM permissions WHERE perm_key IN ($p7)") -eq '6') 'permissions table has the 6 Phase 7b keys'
+    $st = Sql "SELECT GROUP_CONCAT(x ORDER BY x) FROM (SELECT CONCAT(r.code, ':', COUNT(*)) x FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id WHERE p.perm_key IN ($p7) GROUP BY r.code) t"
+    Check ($st -eq 'branch_admin:6') "7b keys granted to branch_admin only ($st)"
+    $st = Sql "SELECT COUNT(*) FROM warehouses w WHERE NOT EXISTS (SELECT 1 FROM storage_locations l WHERE l.warehouse_id = w.id AND l.code = 'DAMAGED' AND l.kind = 'damaged') OR NOT EXISTS (SELECT 1 FROM storage_locations l WHERE l.warehouse_id = w.id AND l.code = 'DISPLAY' AND l.kind = 'display')"
+    Check ($st -eq '0') "every warehouse has DAMAGED + DISPLAY ($st missing)"
+    # 4 more ThinkPad units (SN-C1..C4) for display / issue / count
+    RrSubmit "$Base/pages/receiving-form.php" $sup "[[$tp, 4, '30000.00', 'SN-C1\nSN-C2\nSN-C3\nSN-C4']]" 'post' 'rrC post'
+    $rrC = Sql 'SELECT MAX(id) FROM receiving_reports'
+    Check ((Sql "SELECT COUNT(*) FROM product_serials WHERE serial_no LIKE 'SN-C%' AND status = 'in_stock' AND location_id = 1") -eq '4') 'RR with SN-C1..C4 posted'
+    $sn = @{}; foreach ($n in 'SN-C1', 'SN-C2', 'SN-C3', 'SN-C4') { $sn[$n] = Sql "SELECT id FROM product_serials WHERE serial_no = '$n'" }
+    AddUser 'Mara Admin' 'maradmin' 'branch_admin' 1
+    AddUser 'Marco Tech' 'martech' 'technician' 1
+    Logout
+
+    # Cashier / technician: no stock operations, no warehouses, API 403
+    $denied = "pages/stock-docs.php|pages/stock-doc-form.php?type=transfer|pages/stock-doc-form.php?type=issue|pages/stock-doc-form.php?type=writeoff|pages/stock-doc-view.php?id=1|pages/warehouses.php|pages/serial-register.php?id=8|api/inventory/serials.php?product_id=2&location_id=1"
+    foreach ($u in @(@('cashier', 'cashier123', 'pos.php'), @('martech', $script:pw, 'inventory.php'))) {
+        Login $u[0] $u[1] $u[2]
+        $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
+        Check ($menu -notlike '*Stock Operations*') "$($u[0]) menu: no Stock Operations ($menu)"
+        $st = ($denied.Split('|') | ForEach-Object { Status $_ }) -join ','
+        Check ($st -eq '403,403,403,403,403,403,403,403') "$($u[0]): stock docs list/forms/view, warehouses, serial-register, inventory serials API 403 ($st)"
+        $r1 = PostForm 'pages/stock-doc-form.php?type=transfer' "from_location_id: '1', to_location_id: '6', reason: 'hack', 'items[0][product_id]': '2', 'items[0][quantity]': '1'"
+        $r2 = PostForm 'pages/warehouses.php' "action: 'save_warehouse', code: 'HACK', name: 'Hack'"
+        $r3 = PostForm 'pages/stock-docs.php' "action: 'count_create', location_id: '1'"
+        $r4 = PostForm "pages/serial-register.php?id=8" "'serials[1]': 'X1'"
+        $st = "$($r1.Substring(0, 3)),$($r2.Substring(0, 3)),$($r3.Substring(0, 3)),$($r4.Substring(0, 3))"
+        Check ($st -eq '403,403,403,403' -and (Sql 'SELECT COUNT(*) FROM inventory_docs') -eq '0' -and (Sql "SELECT COUNT(*) FROM warehouses WHERE code = 'HACK'") -eq '0') "$($u[0]): POST transfer / warehouse / count / serial register 403 ($st)"
+        Logout
+    }
+
+    # MAR branch admin: warehouses + locations
+    Login 'maradmin' $script:pw
+    $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
+    Check ($menu -like '*Receiving|Stock Operations|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
+    Nav "$Base/pages/warehouses.php"
+    Check ((Eval "[...document.querySelectorAll('.wh-card[data-warehouse=MAIN] tr[data-location]')].map(r => r.dataset.location).sort().join(',')") -eq 'DAMAGED,DISPLAY,GENERAL') 'warehouses tab: MAIN with GENERAL / DAMAGED / DISPLAY'
+    $r = Eval "fetch('$Base/pages/warehouses.php', {method: 'POST', body: new URLSearchParams({action: 'save_warehouse', code: 'NOCSRF', name: 'No token'})}).then(r => r.status)"
+    Check ($r -eq 403 -and (Sql "SELECT COUNT(*) FROM warehouses WHERE code = 'NOCSRF'") -eq '0') "warehouse POST without CSRF -> $r"
+    [void](Eval "document.getElementById('addWarehouse').click()")
+    Submit "const f = document.getElementById('whForm'); f.querySelector('[name=code]').value = 'wh2'; f.querySelector('[name=name]').value = 'Back Storage'; f.requestSubmit()" 'add WH2'
+    $wh2 = Sql "SELECT id FROM warehouses WHERE code = 'WH2' AND branch_id = 1"
+    $st = Sql "SELECT GROUP_CONCAT(CONCAT(code, ':', kind, ':', is_default) ORDER BY code) FROM storage_locations WHERE warehouse_id = '$wh2'"
+    Check ($wh2 -ne '' -and $st -eq 'DAMAGED:damaged:0,DISPLAY:display:0,GENERAL:stock:1') "add warehouse WH2 -> $st ($(Text '.alert span'))"
+    [void](Eval "document.getElementById('addWarehouse').click()")
+    Submit "const f = document.getElementById('whForm'); f.querySelector('[name=code]').value = 'WH2'; f.querySelector('[name=name]').value = 'Again'; f.requestSubmit()" 'dup WH2'
+    Check ((Eval "document.getElementById('whDialog').open") -and (Text '#whForm #err-code') -like '*already uses this code*' -and (Sql "SELECT COUNT(*) FROM warehouses WHERE code = 'WH2'") -eq '1') "duplicate warehouse code -> dialog error ($(Text '#whForm #err-code'))"
+    Nav "$Base/pages/warehouses.php"
+    [void](Eval "document.querySelector('[data-loc-new][data-warehouse-id=`"$wh2`"]').click()")
+    Check (Eval "document.getElementById('locDialog').open") 'Add Location dialog opens'
+    Submit "const f = document.getElementById('locForm'); f.querySelector('[name=code]').value = 'BIN-A'; f.querySelector('[name=name]').value = 'Shelf A'; f.requestSubmit()" 'add BIN-A'
+    $binA = Sql "SELECT id FROM storage_locations WHERE warehouse_id = $wh2 AND code = 'BIN-A' AND kind = 'stock' AND is_default = 0 AND is_sellable = 0"
+    Check ($binA -ne '') "location BIN-A added to WH2 (id $binA; $(Text '.alert span'))"
+    [void](Eval "document.querySelector('[data-loc-new][data-warehouse-id=`"$wh2`"]').click()")
+    Submit "const f = document.getElementById('locForm'); f.querySelector('[name=code]').value = 'bin-a'; f.querySelector('[name=name]').value = 'Shelf A2'; f.requestSubmit()" 'dup BIN-A'
+    Check ((Eval "document.getElementById('locDialog').open") -and (Text '#locForm #err-code') -like '*already uses this code*') "duplicate location code -> dialog error ($(Text '#locForm #err-code'))"
+    Nav "$Base/pages/warehouses.php"
+    [void](Eval "document.querySelector('[data-loc-new][data-warehouse-id=`"$wh2`"]').click()")
+    Submit "const f = document.getElementById('locForm'); f.querySelector('[name=code]').value = 'DISPLAY'; f.querySelector('[name=name]').value = 'Fake'; f.requestSubmit()" 'reserved code'
+    Check ((Text '#locForm #err-code') -like '*reserved*') "reserved code DISPLAY refused ($(Text '#locForm #err-code'))"
+    Nav "$Base/pages/warehouses.php"
+    [void](Eval "document.querySelector('.wh-card[data-warehouse=MAIN] tr[data-location=DAMAGED] [data-loc-edit]').click()")
+    Submit "const f = document.getElementById('locForm'); f.querySelector('[name=name]').value = 'Damaged Units'; f.requestSubmit()" 'rename DAMAGED'
+    Check ((Sql "SELECT CONCAT(code, '|', name) FROM storage_locations WHERE id = 6") -eq 'DAMAGED|Damaged Units') "rename system location DAMAGED ok ($(Text '.alert span'))"
+    Check (Eval "!document.querySelector('.wh-card[data-warehouse=MAIN] tr[data-location=DAMAGED] [data-act=toggle]')") 'DAMAGED has no Deactivate button'
+    $r = PostForm 'pages/warehouses.php' "action: 'toggle', type: 'location', id: '6', active: '0'"
+    Check ($r -like '*system location*' -and (Sql 'SELECT is_active FROM storage_locations WHERE id = 6') -eq '1') 'deactivate DAMAGED (POST) refused: system location'
+    $r = PostForm 'pages/warehouses.php' "action: 'toggle', type: 'location', id: '1', active: '0'"
+    Check ($r -like '*default location*' -and (Sql 'SELECT is_active FROM storage_locations WHERE id = 1') -eq '1') 'deactivate the POS location refused'
+    Shot '36-warehouses'
+
+    # Transfer 3 Mouse GENERAL -> WH2/BIN-A
+    $mStock = PStock 2; $mQb = BranchQty 2; $mAvg = BranchAvg 2; $mGen = [int](LocQty 2 1)
+    DocPost 'type=transfer&preset=move' '1' $binA '' '[[2, 3, null]]' 'transfer'
+    $trf = Sql 'SELECT MAX(id) FROM inventory_docs'
+    Check ((Text '#docTitle') -eq "TRF-MAR-$year-000001" -and (Text '#docStatus') -eq 'Posted') "transfer posted as $(Text '#docTitle') ($(Text '.alert span'))"
+    $st = Sql "SELECT CONCAT_WS('|', COUNT(*), SUM(quantity), SUM(type = 'transfer')) FROM stock_movements WHERE inventory_doc_id = $trf"
+    Check ($st -eq '2|0|2') "transfer: 2 'transfer' movements, net 0 ($st)"
+    $st = "$(PStock 2)|$(BranchQty 2)|$(BranchAvg 2)|$(LocQty 2 1)|$(LocQty 2 $binA)"
+    Check ($st -eq "$mStock|$mQb|$mAvg|$($mGen - 3)|3") "transfer: company + branch qty and avg unchanged, GENERAL -3, BIN-A 3 ($st)"
+    Nav "$Base/pages/inventory.php?location=$binA&search=ITM-0002"
+    $st = Eval "(() => { const r = [...document.querySelectorAll('#inventoryTable tbody tr')].find(tr => tr.textContent.includes('ITM-0002')); return [...document.querySelectorAll('#inventoryTable th')].some(t => t.textContent.trim() === 'Stock here') + '|' + (r ? [...r.querySelectorAll('.badge')].map(b => b.textContent.trim()).join(',') : 'none') + '|' + document.getElementById('stockScope').textContent.trim(); })()"
+    Check ($st -like 'true|*3*|*WH2 / BIN-A*') "inventory Location filter: Stock here = 3 at WH2 / BIN-A ($st)"
+    Nav "$Base/pages/product-form.php?id=2"
+    $st = Eval "document.getElementById('stockByLocation')?.textContent.replace(/\s+/g, ' ').trim() || ''"
+    Check ($st -like '*WH2 / BIN-A*' -and $st -like '*MAIN / GENERAL*') "product page: Stock by location lists GENERAL and BIN-A ($st)"
+
+    # Mark damaged (reason required), write-off from DAMAGED
+    $docs0 = Sql 'SELECT COUNT(*) FROM inventory_docs'
+    $r = PostForm 'pages/stock-doc-form.php?type=transfer&preset=damage' "from_location_id: '1', to_location_id: '6', reason: '', 'items[0][product_id]': '2', 'items[0][quantity]': '1'"
+    Check ($r -like '*id="err-reason"*' -and (Sql 'SELECT COUNT(*) FROM inventory_docs') -eq $docs0) 'mark damaged without reason -> reason error, no document'
+    $mGen = [int](LocQty 2 1); $mStock = PStock 2
+    DocPost 'type=transfer&preset=damage' '1' '6' 'Cracked case' '[[2, 1, null]]' 'damage'
+    Check ((Text '#docTitle') -eq "TRF-MAR-$year-000002" -and (Sql "SELECT purpose FROM inventory_docs WHERE doc_no = 'TRF-MAR-$year-000002'") -eq 'damage') "mark damaged posted ($(Text '#docTitle'), purpose damage)"
+    $pos = Eval "fetch('$Base/api/pos/products.php').then(r => r.json()).then(d => d.products.find(p => Number(p.id) === 2).stock)"
+    Check ("$(LocQty 2 1)|$(LocQty 2 6)|$(PStock 2)|$pos" -eq "$($mGen - 1)|1|$mStock|$($mGen - 1)") "damaged: POS stock $pos (GENERAL -1), DAMAGED 1, company stock unchanged"
+    $mAvg = BranchAvg 2
+    DocPost 'type=writeoff' '6' '' 'Beyond repair' '[[2, 1, null]]' 'writeoff'
+    $wof = Sql 'SELECT MAX(id) FROM inventory_docs'
+    Check ((Text '#docTitle') -eq "WOF-MAR-$year-000001") "write-off posted as $(Text '#docTitle') ($(Text '.alert span'))"
+    $st = Sql "SELECT CONCAT_WS('|', l.quantity, l.adjust_qty, l.unit_cost, (SELECT GROUP_CONCAT(CONCAT(type, ':', quantity)) FROM stock_movements WHERE inventory_doc_id = d.id), d.total_qty) FROM inventory_docs d JOIN inventory_doc_lines l ON l.doc_id = d.id WHERE d.id = $wof"
+    Check ($st -eq "1|-1|$mAvg|write_off:-1|1" -and (PStock 2) -eq "$([int]$mStock - 1)" -and (LocQty 2 6) -eq '0' -and (BranchAvg 2) -eq $mAvg) "write-off: stock -1, unit cost = branch avg $mAvg, avg unchanged ($st)"
+    Check (Eval "!!document.getElementById('docTotalCost') && [...document.querySelectorAll('th')].some(t => t.textContent.trim() === 'Unit Cost')") 'branch admin (products.cost) sees the write-off cost'
+
+    # Display + restore of a serial unit (SN-C1)
+    $r = Eval "fetch('$Base/api/inventory/serials.php?product_id=$tp&location_id=1').then(r => r.text())"
+    Check ($r -like '*"ok":true*' -and $r -like '*SN-C1*' -and $r -notmatch '(?i)cost') "inventory serials API: qty + serials, no cost ($($r.Length) chars)"
+    $r = Eval "BB.api('inventory/serials.php?product_id=2&location_id=4').then(() => 200, e => e.status)"
+    Check ($r -eq 404) "inventory serials API: DAV location from MAR -> $r"
+    DocPost 'type=transfer&preset=display' '1' '7' 'Demo unit front counter' "[[$tp, 1, ['SN-C1']]]" 'display'
+    Check ((Text '#docTitle') -eq "TRF-MAR-$year-000003" -and (Sql "SELECT CONCAT(location_id, '|', status) FROM product_serials WHERE serial_no = 'SN-C1'") -eq '7|in_stock') "display unit: SN-C1 moved to DISPLAY ($(Text '#docTitle'); $(Text '.alert span'))"
+    $j = Eval "fetch('$Base/api/pos/serials.php?product_id=$tp').then(r => r.text())"
+    Check ($j -notlike '*SN-C1*' -and $j -like '*SN-C3*') 'POS serial picker excludes the display unit'
+    $r = Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: $tp, qty: 1, serial_ids: [$($sn['SN-C1'])]}], customer_id: null, payment_type: 'cash', discount_percent: '0', amount_paid: '99999.00'}}).then(d => 'ok', e => e.status + ':' + e.message)"
+    Check ($r -like '409:*') "POS checkout with the display serial -> $r"
+    $r = PostForm 'pages/stock-doc-form.php?type=transfer&preset=restore' "from_location_id: '6', to_location_id: '7', reason: 'x', 'items[0][product_id]': '2', 'items[0][quantity]': '1'"
+    Check ($r -like '*can only go back to a stock location*' -and (Sql "SELECT location_id FROM product_serials WHERE serial_no = 'SN-C1'") -eq '7') 'damaged -> display refused'
+    DocPost 'type=transfer&preset=restore' '7' '1' '' "[[$tp, 1, ['SN-C1']]]" 'restore'
+    Check ((Text '#docTitle') -eq "TRF-MAR-$year-000004" -and (Sql "SELECT location_id FROM product_serials WHERE serial_no = 'SN-C1'") -eq '1') "restore: SN-C1 back at GENERAL ($(Text '#docTitle'))"
+
+    # Internal use of a serial unit
+    $docs0 = Sql 'SELECT COUNT(*) FROM inventory_docs'
+    $r = PostForm 'pages/stock-doc-form.php?type=issue' "from_location_id: '1', reason: 'Service laptop', 'items[0][product_id]': '$tp', 'items[0][quantity]': '2', 'items[0][serial_ids][]': '$($sn['SN-C2'])'"
+    Check ($r -like '*Choose exactly 2 serial numbers*' -and (Sql 'SELECT COUNT(*) FROM inventory_docs') -eq $docs0) 'issue: serial count != qty refused'
+    $tStock = PStock $tp; $tAvg = BranchAvg $tp
+    DocPost 'type=issue' '1' '' 'Laptop for the service technician' "[[$tp, 1, ['SN-C2']]]" 'issue'
+    $iss = Sql 'SELECT MAX(id) FROM inventory_docs'
+    $st = Sql "SELECT CONCAT_WS('|', (SELECT status FROM product_serials WHERE serial_no = 'SN-C2'), l.unit_cost, (SELECT GROUP_CONCAT(CONCAT(type, ':', quantity)) FROM stock_movements WHERE inventory_doc_id = d.id), (SELECT COUNT(*) FROM inventory_doc_serials WHERE line_id = l.id)) FROM inventory_docs d JOIN inventory_doc_lines l ON l.doc_id = d.id WHERE d.id = $iss"
+    Check ((Text '#docTitle') -eq "ISS-MAR-$year-000001" -and $st -eq "removed|$tAvg|issue:-1|1" -and (PStock $tp) -eq "$([int]$tStock - 1)") "internal use $(Text '#docTitle'): serial removed, cost snapshot, stock -1 ($st)"
+    $r = PostForm 'pages/stock-doc-form.php?type=issue' "from_location_id: '1', reason: 'Again', 'items[0][product_id]': '$tp', 'items[0][quantity]': '1', 'items[0][serial_ids][]': '$($sn['SN-C2'])'"
+    Check ($r -like '*Serial SN-C2 is no longer at*' -and (Sql 'SELECT COUNT(*) FROM inventory_docs') -eq "$([int]$docs0 + 1)") 'issue of a removed serial refused'
+
+    # Count at BIN-A by the branch admin: second open count 409, own approval refused, cancel
+    Nav "$Base/pages/stock-docs.php"
+    Check ((Eval "document.querySelectorAll('#opTiles .op-tile').length") -eq 7 -and (Eval "document.querySelectorAll('#docTable tbody tr .doc-no').length") -eq 6) 'stock operations: 7 New tiles, 6 documents listed'
+    Shot '37-stock-docs'
+    [void](Eval "document.getElementById('newCountBtn').click()")
+    Check (Eval "document.getElementById('countDialog').open") 'New Count dialog opens'
+    Submit "const f = document.getElementById('countForm'); f.location_id.value = '$binA'; f.requestSubmit()" 'count BIN-A'
+    $cnt2 = Sql 'SELECT MAX(id) FROM inventory_docs'
+    Check ((Text '#docTitle') -eq "CNT-MAR-$year-000001" -and (Text '#docStatus') -eq 'Open' -and (Sql "SELECT GROUP_CONCAT(CONCAT(product_id, ':', system_qty)) FROM inventory_doc_lines WHERE doc_id = $cnt2") -eq '2:3') "count created $(Text '#docTitle') with frozen Mouse 3"
+    $r = PostForm 'pages/stock-docs.php' "action: 'count_create', location_id: '$binA'"
+    Check ($r -like '*is still open at*' -and (Sql "SELECT COUNT(*) FROM inventory_docs WHERE doc_type = 'count'") -eq '1') 'second open count at the same location refused'
+    $r = PostForm 'pages/warehouses.php' "action: 'toggle', type: 'location', id: '$binA', active: '0'"
+    Check ($r -like '*Move its stock first*' -and (Sql "SELECT is_active FROM storage_locations WHERE id = $binA") -eq '1') 'deactivate BIN-A with stock refused'
+    Nav "$Base/pages/stock-doc-view.php?id=$cnt2"
+    [void](Eval "document.querySelector('[data-counted]').value = '5'")
+    Submit "window.confirm = () => true; document.getElementById('submitCountBtn').click()" 'submit count BIN-A'
+    Check ((Text '#docStatus') -eq 'Submitted' -and (Eval "!document.getElementById('approveBtn')")) "count submitted; creator has no Approve button ($(Text '.alert span'))"
+    $r = PostForm "pages/stock-doc-view.php?id=$cnt2" "action: 'approve'"
+    Check ($r -like '*approve a count you created or counted*' -and (Sql "SELECT status FROM inventory_docs WHERE id = $cnt2") -eq 'submitted') 'branch admin approving own count refused'
+    Nav "$Base/pages/stock-doc-view.php?id=$cnt2"
+    [void](Eval "document.getElementById('cancelCountBtn').click()")
+    Submit "window.confirm = () => true; document.getElementById('cancelReason').value = 'Wrong location'; document.getElementById('cancelReason').form.requestSubmit()" 'cancel count'
+    Check ((Text '#docStatus') -eq 'Cancelled' -and (LocQty 2 $binA) -eq '3' -and (Sql "SELECT COUNT(*) FROM stock_movements WHERE inventory_doc_id = $cnt2") -eq '0') "cancelled count leaves stock unchanged ($(Text '.alert span'))"
+    Logout
+
+    # Count at GENERAL by the super admin, POS sale during the count, approval by the branch admin
+    Login 'admin' 'admin123'
+    Nav "$Base/pages/stock-docs.php"
+    [void](Eval "document.getElementById('newCountBtn').click()")
+    Submit "const f = document.getElementById('countForm'); f.location_id.value = '1'; f.category_id.value = '1'; f.requestSubmit()" 'count GENERAL'
+    $cnt1 = Sql 'SELECT MAX(id) FROM inventory_docs'
+    $lapF = [int](Sql "SELECT system_qty FROM inventory_doc_lines WHERE doc_id = $cnt1 AND product_id = 1")
+    $st = Sql "SELECT COUNT(*) FROM inventory_doc_serials s JOIN inventory_doc_lines l ON l.id = s.line_id WHERE l.doc_id = $cnt1 AND s.found = 0"
+    Check ((Text '#docTitle') -eq "CNT-MAR-$year-000002" -and $lapF -eq [int](LocQty 1 1) -and $st -eq '5') "count $(Text '#docTitle'): Laptop frozen at $lapF, 5 expected ThinkPad serials ($st)"
+    $r = ApiSale 1
+    Check ($r -like 'ok:*' -and [int](LocQty 1 1) -eq $lapF - 1) "POS sale of a Laptop during the count ($r)"
+    Nav "$Base/pages/stock-doc-view.php?id=$cnt1"
+    [void](Eval "document.querySelectorAll('tr[data-count-line]').forEach(r => { const i = r.querySelector('[data-counted]'); if (i) i.value = r.textContent.includes('ITM-0001') ? String(Number(r.dataset.system) - 2) : r.dataset.system; r.querySelectorAll('[data-found]').forEach(c => { c.checked = c.closest('label').textContent.trim() !== 'SN-C4'; }); })")
+    Submit "window.confirm = () => true; document.getElementById('submitCountBtn').click()" 'submit count GENERAL'
+    Check ((Text '#docStatus') -eq 'Submitted') "count submitted by the super admin ($(Text '.alert span'))"
+    $r = PostForm "pages/stock-doc-view.php?id=$cnt1" "action: 'approve'"
+    Check ($r -like '*approve a count you created or counted*' -and (Sql "SELECT status FROM inventory_docs WHERE id = $cnt1") -eq 'submitted') 'super admin approving own count refused'
+    Logout
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/stock-doc-view.php?id=$cnt1"
+    [void](Eval "document.getElementById('approveBtn').click()")
+    Check ((Eval "document.getElementById('approveDialog').open") -and (Eval "document.querySelectorAll('#approveTable tbody tr').length") -eq 2) 'approve dialog lists the 2 differences'
+    Shot '38-count-approve'
+    Submit "document.getElementById('approveSubmit').click()" 'approve count'
+    $st = Sql "SELECT CONCAT_WS('|', d.status, d.posted_by = (SELECT id FROM users WHERE username = 'maradmin'), (SELECT GROUP_CONCAT(CONCAT(product_id, ':', type, ':', quantity) ORDER BY product_id) FROM stock_movements WHERE inventory_doc_id = d.id), (SELECT status FROM product_serials WHERE serial_no = 'SN-C4'), d.total_qty) FROM inventory_docs d WHERE d.id = $cnt1"
+    Check ($st -eq "posted|1|1:count:-2,${tp}:count:-1|removed|3") "approve: Laptop -2 (counted - frozen), SN-C4 removed ($st; $(Text '.alert span'))"
+    Check ([int](LocQty 1 1) -eq $lapF - 3) "Laptop at GENERAL = frozen $lapF - 1 sold - 2 = $(LocQty 1 1)"
+    Nav "$Base/pages/serials.php?search=SN-C4"
+    Check (Eval "document.body.textContent.includes('CNT-MAR-$year-000002')") 'serial lookup: SN-C4 shows the count as last stock document'
+
+    # Empty BIN-A, then deactivate it
+    DocPost 'type=transfer&preset=move' $binA '1' 'Back to the shelf' '[[2, 3, null]]' 'transfer back'
+    Nav "$Base/pages/warehouses.php"
+    Submit "window.confirm = () => true; document.querySelector('tr[data-location=BIN-A] [data-act=toggle]').closest('form').requestSubmit()" 'deactivate BIN-A'
+    Check ((Sql "SELECT is_active FROM storage_locations WHERE id = $binA") -eq '0') "empty BIN-A deactivated ($(Text '.alert span'))"
+    Nav "$Base/pages/stock-doc-form.php?type=transfer"
+    $a = Eval "!document.querySelector('#fromLocation option[value=`"$binA`"], #toLocation option[value=`"$binA`"]')"
+    Nav "$Base/pages/inventory.php"
+    Check ($a -and (Eval "!!document.getElementById('locationFilter') && !document.querySelector('#locationFilter option[value=`"$binA`"]')")) 'inactive BIN-A is gone from the pickers and the Location filter'
+    Logout
+
+    # Technician granted inventory.issue (no products.cost): can issue, sees no cost
+    [void](Sql "INSERT INTO role_permissions (role_id, permission_id) SELECT r.id, p.id FROM roles r JOIN permissions p ON p.perm_key = 'inventory.issue' WHERE r.code = 'technician'")
+    Login 'martech' $script:pw 'inventory.php'
+    DocPost 'type=issue' '1' '' 'Office keyboard' '[[3, 1, null]]' 'tech issue'
+    $issT = Sql 'SELECT MAX(id) FROM inventory_docs'
+    Check ((Text '#docTitle') -eq "ISS-MAR-$year-000002" -and (Sql "SELECT total_cost IS NOT NULL FROM inventory_docs WHERE id = $issT") -eq '1') "technician with inventory.issue posts $(Text '#docTitle')"
+    Check (Eval "!document.getElementById('docTotalCost') && ![...document.querySelectorAll('th')].some(t => /cost|value/i.test(t.textContent))") 'technician (no products.cost): no cost on the document'
+    Nav "$Base/pages/stock-docs.php"
+    Check (Eval "![...document.querySelectorAll('#docTable th')].some(t => t.textContent.trim() === 'Value') && document.querySelectorAll('#opTiles .op-tile').length === 2") 'technician list: no Value column, only Display / Internal Use tiles'
+    $r = PostForm 'pages/stock-doc-form.php?type=writeoff' "from_location_id: '1', reason: 'hack', 'items[0][product_id]': '3', 'items[0][quantity]': '1'"
+    Check ($r -like '403:*') "technician write-off (no inventory.damage) -> $($r.Substring(0, 3))"
+    Logout
+    [void](Sql "DELETE rp FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id WHERE r.code = 'technician' AND p.perm_key = 'inventory.issue'")
+
+    # DAV branch admin: MAR documents / warehouses / locations are 404
+    Login 'davadmin' $script:pw
+    $st = "$(Status "pages/stock-doc-view.php?id=$trf"),$(Status "pages/stock-doc-view.php?id=$cnt1")"
+    Check ($st -eq '404,404') "DAV admin: MAR transfer / count 404 ($st)"
+    $r = PostForm 'pages/warehouses.php' "action: 'save_warehouse', id: '$wh2', name: 'Hacked'"
+    $r2 = PostForm 'pages/warehouses.php' "action: 'toggle', type: 'location', id: '$binA', active: '1'"
+    Check ($r -like '*not found*' -and (Sql "SELECT name FROM warehouses WHERE id = $wh2") -eq 'Back Storage' -and (Sql "SELECT is_active FROM storage_locations WHERE id = $binA") -eq '0') 'DAV admin: renaming the MAR warehouse / activating its location -> not found'
+    $r = PostForm 'pages/stock-doc-form.php?type=transfer' "from_location_id: '1', to_location_id: '$binA', 'items[0][product_id]': '2', 'items[0][quantity]': '1'"
+    Check ($r -like '*Choose an active location of this branch*' -and (Sql 'SELECT COUNT(*) FROM inventory_docs WHERE branch_id = 4') -eq '0') 'DAV admin: transfer between MAR locations refused'
+    Nav "$Base/pages/stock-docs.php"
+    Check (Eval "!document.body.textContent.includes('-MAR-')") 'DAV admin: stock operations list has no MAR documents'
+    Nav "$Base/pages/warehouses.php"
+    Check (Eval "!document.querySelector('[data-warehouse=WH2]') && !!document.querySelector('[data-warehouse=MAIN]')") 'DAV admin: warehouses tab shows only DAV'
+    Logout
+
+    # Super admin: RR cancel after a transfer, serial registration
+    Login 'admin' 'admin123'
+    Nav "$Base/pages/receiving-view.php?id=$rrC"
+    Submit "document.getElementById('cancelReason').value = 'Wrong delivery'; document.getElementById('cancelReason').form.submit()" 'cancel rrC'
+    Check ((Text '.alert--error span') -like '*cannot be cancelled*' -and (Sql "SELECT status FROM receiving_reports WHERE id = $rrC") -eq 'posted') "cancel RR after a transfer of its serials is blocked ($(Text '.alert span'))"
+    $pq = Sql "SELECT GROUP_CONCAT(CONCAT(location_id, ':', qty)) FROM stock_balances WHERE product_id = 8 AND qty > 0"
+    $pn = [int](LocQty 8 1); $mv = Sql 'SELECT COUNT(*) FROM stock_movements WHERE product_id = 8'
+    Nav "$Base/pages/product-form.php?id=8"
+    Check ($pq -eq "1:$pn" -and (Eval "!!document.getElementById('registerSerialsBtn')")) "Printer ($pq): Register Serials button"
+    Nav (Eval "document.getElementById('registerSerialsBtn').href")
+    Submit "window.confirm = () => true; document.querySelector('[name=`"serials[1]`"]').value = Array.from({length: $($pn - 1)}, (_, i) => 'PRN-' + (i + 1)).join('\n'); document.getElementById('registerForm').requestSubmit()" 'register short'
+    Check ((Sql 'SELECT CONCAT(track_serial, (SELECT COUNT(*) FROM product_serials WHERE product_id = 8)) FROM products WHERE id = 8') -eq '00' -and (Eval "!!document.querySelector('.alert--error')")) "register $($pn - 1) serials for $pn units refused ($(Text '.alert span'))"
+    Submit "window.confirm = () => true; document.querySelector('[name=`"serials[1]`"]').value = Array.from({length: $pn}, (_, i) => 'prn-' + (i + 1)).join('\n'); document.getElementById('registerForm').requestSubmit()" 'register exact'
+    $st = Sql "SELECT CONCAT_WS('|', track_serial, (SELECT COUNT(*) FROM product_serials WHERE product_id = 8 AND status = 'in_stock' AND location_id = 1 AND serial_no LIKE 'PRN-%'), (SELECT COUNT(*) FROM stock_movements WHERE product_id = 8), stock) FROM products WHERE id = 8"
+    Check ($st -eq "1|$pn|$mv|$pn" -and (Eval "!document.getElementById('registerSerialsBtn')")) "register $pn serials: tracking on, serials in stock, no movement ($st; $(Text '.alert span'))"
+    Nav "$Base/pages/serial-register.php?id=11"
+    Check (Eval "!!document.getElementById('registerScopeWarning') && document.getElementById('registerBtn').disabled") 'Webcam (stock at MAR + DAV) from MAR: scope warning, button disabled'
+    $r = PostForm 'pages/serial-register.php?id=11' "'serials[1]': 'W1'"
+    Check ($r -like '*Switch to All branches*' -and (Sql 'SELECT track_serial FROM products WHERE id = 11') -eq '0') 'Webcam registration from MAR scope refused'
+
+    # Integrity page + layout at 1024px
+    SwitchBranch 0
+    Nav "$Base/pages/stock-integrity.php"
+    Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after 7b (All branches): $(Text '#integritySummary span')"
+    SwitchBranch 1
+    Size 1024 900
+    foreach ($pgUrl in 'warehouses.php', 'stock-docs.php', "stock-doc-view.php?id=$cnt1", "stock-doc-view.php?id=$iss", 'stock-doc-form.php?type=transfer', 'serial-register.php?id=11', 'inventory.php?location=1', 'product-form.php?id=2') {
+        Nav "$Base/pages/$pgUrl"
+        $wide = Eval "[...document.querySelectorAll('main *')].filter(e => e.getBoundingClientRect().right > window.innerWidth + 1).slice(-3).map(e => e.tagName + '.' + e.className + '#' + e.id + ':' + Math.round(e.getBoundingClientRect().right)).join(' ')"
+        Check (Eval 'document.documentElement.scrollWidth <= window.innerWidth') "$pgUrl : no horizontal page scroll at 1024px (scrollWidth $(Eval 'document.documentElement.scrollWidth') $wide)"
+    }
+    Size 1536 1024
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"
