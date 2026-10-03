@@ -42,6 +42,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 6 → 7a | `migrations\005_receiving_cost_serials.sql` (receiving reports, branch average cost, serial numbers) |
 | Phase 7a → 7b | `migrations\006_warehouse_ops.sql` (warehouses & locations, stock operations, stock counts) |
 | Phase 7b → 8 | `migrations\007_branch_transfers.sql` (branch-to-branch transfers) |
+| Phase 8 → 9 | `migrations\008_pos_pricing.sql` (POS pricing: actual price, limits, approvals) |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql

@@ -72,6 +72,24 @@
         serialError: $('serialError'),
         serialCount: $('serialCount'),
         serialConfirm: $('serialConfirm'),
+        priceDialog: $('priceDialog'),
+        priceForm: $('priceForm'),
+        priceProduct: $('priceProduct'),
+        priceSuggested: $('priceSuggested'),
+        priceInput: $('priceInput'),
+        priceReason: $('priceReason'),
+        priceHint: $('priceHint'),
+        priceCost: $('priceCost'),
+        priceError: $('priceError'),
+        approveDialog: $('approveDialog'),
+        approveForm: $('approveForm'),
+        approveList: $('approveList'),
+        approveUser: $('approveUser'),
+        approvePass: $('approvePass'),
+        approveError: $('approveError'),
+        approveSubmit: $('approveSubmit'),
+        approveTpl: $('approveItemTpl'),
+        costToggle: $('costToggle'),
     };
 
     const state = {
@@ -81,7 +99,13 @@
         query: els.search ? els.search.value.trim() : '',
         visible: [],
         highlight: 0,
-        cart: [],            // [{ id, qty, serials? }] serials = [{ id, serial_no }] (serial-tracked: qty = serials.length)
+        cart: [],            // [{ id, qty, serials?, price?, reason? }] serials = [{ id, serial_no }] (serial-tracked: qty = serials.length);
+                             // price = actual unit price in cents when it differs from the suggested one (VAT-exclusive)
+        pricing: { price_drop: 0, discount: 0, change_price: false, give_discount: false, override: false, view_cost: false },
+        approvals: { lines: {}, discount: null }, // one-time tokens from api/pos/approve.php (never stored)
+        pendingApproval: null,
+        showCost: false,     // cost / margin column (pos.view_cost); off by default, never stored
+        priceLine: null,     // product id while the price dialog is open
         picker: null,        // { product } while the serial picker is open
         lastSale: null,      // { id, sale_no } — for Print after completing
         printAfter: false,
@@ -126,6 +150,11 @@
             .map((s) => ({ id: s.id, serial_no: s.serial_no }));
     };
     const qtyInCart = (id) => (state.cart.find((l) => l.id === id) || { qty: 0 }).qty;
+    /** Actual unit price of a cart line (cents): the changed price, else the suggested one. */
+    const linePrice = (line, p) => (Number.isInteger(line.price) ? line.price : p.price_cents);
+    /** {price, reason} kept for a changed line (only these plain values are stored). */
+    const priceOf = (l) => (Number.isInteger(l.price) && l.price >= 0 && l.price <= 999999999
+        ? { price: l.price, reason: typeof l.reason === 'string' ? l.reason.slice(0, 255) : '' } : {});
 
     const discountPercent = () => {
         const v = parseFloat(els.discount.value);
@@ -140,7 +169,7 @@
         for (const line of state.cart) {
             const p = state.byId.get(line.id);
             if (!p) continue;
-            subtotal += p.price_cents * line.qty;
+            subtotal += linePrice(line, p) * line.qty;
             count += line.qty;
         }
         const discount = Math.round(subtotal * discountPercent() / 100);
@@ -154,9 +183,9 @@
     function persist() {
         try {
             localStorage.setItem(cfg.storageKey, JSON.stringify({
-                cart: state.cart.map((l) => (Array.isArray(l.serials)
+                cart: state.cart.map((l) => Object.assign(Array.isArray(l.serials)
                     ? { id: l.id, qty: l.serials.length, serials: cleanSerials(l.serials) }
-                    : { id: l.id, qty: l.qty })),
+                    : { id: l.id, qty: l.qty }, priceOf(l))),
                 customer: els.customer.value,
                 payment: els.payment.value,
                 discount: els.discount.value,
@@ -176,9 +205,9 @@
                 .map((l) => {
                     if (Array.isArray(l.serials)) {
                         const serials = cleanSerials(l.serials).slice(0, MAX_QTY);
-                        return { id: l.id, qty: serials.length, serials };
+                        return Object.assign({ id: l.id, qty: serials.length, serials }, priceOf(l));
                     }
-                    return { id: l.id, qty: l.qty };
+                    return Object.assign({ id: l.id, qty: l.qty }, priceOf(l));
                 })
                 .filter((l) => Number.isInteger(l.qty) && l.qty > 0 && l.qty <= MAX_QTY)
                 .slice(0, MAX_LINES);
@@ -195,7 +224,7 @@
         if (saved.lastSale && Number.isInteger(saved.lastSale.id)) {
             state.lastSale = { id: saved.lastSale.id, sale_no: String(saved.lastSale.sale_no || '') };
         }
-        persist(); // rewrite the cleaned cart: only {id, qty} or {id, qty, serials: [{id, serial_no}]} is kept
+        persist(); // rewrite the cleaned cart: only {id, qty[, serials: [{id, serial_no}]][, price, reason]} is kept
     }
 
     // ------------------------------------------------------------------
@@ -217,6 +246,8 @@
             state.loaded = true;
             if (data.next_sale_no) els.saleNo.textContent = data.next_sale_no;
             if (typeof data.vat_rate === 'number') cfg.vatRate = data.vat_rate;
+            if (data.pricing) state.pricing = data.pricing;
+            applyPricing();
 
             els.sumItems.textContent = String(state.products.length);
             els.sumValue.textContent = fmt(state.products.reduce((sum, p) => sum + p.price_cents * p.stock, 0));
@@ -414,6 +445,7 @@
     }
 
     function cartChanged(flashId) {
+        state.approvals = { lines: {}, discount: null }; // an approval fits one exact cart
         renderCart(flashId);
         renderGrid();
         persist();
@@ -441,8 +473,24 @@
                 row.classList.add('is-serial');
                 renderSerialChips(row.querySelector('.cart-sn'), line);
             }
-            row.querySelector('.cart-row__price').textContent = fmt(p.price_cents);
-            row.querySelector('.cart-row__total').textContent = fmt(p.price_cents * line.qty);
+            const price = linePrice(line, p);
+            const changed = price !== p.price_cents;
+            row.querySelector('.cart-row__price').textContent = fmt(price);
+            const was = row.querySelector('.cart-row__was');
+            was.hidden = !changed;
+            was.textContent = changed ? fmt(p.price_cents) : '';
+            const priceBtn = row.querySelector('[data-act="price"]');
+            priceBtn.disabled = !state.pricing.change_price;
+            priceBtn.title = state.pricing.change_price ? 'Change price' : 'Suggested price';
+            if (changed) row.classList.add('is-repriced');
+            if (state.showCost && Number.isInteger(p.cost_cents)) {
+                const margin = price - p.cost_cents;
+                row.querySelector('.cart-row__cost').textContent = fmt(p.cost_cents);
+                const m = row.querySelector('.cart-row__margin');
+                m.textContent = price > 0 ? `${margin < 0 ? '−' : '+'}${Math.abs(Math.round(margin * 1000 / price) / 10)}%` : '';
+                m.classList.toggle('is-loss', margin < 0);
+            }
+            row.querySelector('.cart-row__total').textContent = fmt(price * line.qty);
             if (line.id === flashId) row.classList.add('is-flash');
             frag.appendChild(row);
         });
@@ -816,9 +864,18 @@
             const data = await BB.api('pos/checkout.php', {
                 method: 'POST',
                 body: {
-                    items: state.cart.map((l) => (Array.isArray(l.serials)
-                        ? { product_id: l.id, qty: l.serials.length, serial_ids: l.serials.map((s) => s.id) }
-                        : { product_id: l.id, qty: l.qty })),
+                    items: state.cart.map((l) => {
+                        const item = Array.isArray(l.serials)
+                            ? { product_id: l.id, qty: l.serials.length, serial_ids: l.serials.map((s) => s.id) }
+                            : { product_id: l.id, qty: l.qty };
+                        if (Number.isInteger(l.price)) {
+                            item.price = (l.price / 100).toFixed(2);
+                            item.reason = l.reason || '';
+                        }
+                        if (state.approvals.lines[l.id]) item.approval = state.approvals.lines[l.id];
+                        return item;
+                    }),
+                    discount_approval: state.approvals.discount,
                     customer_id: els.customer.value ? Number(els.customer.value) : null,
                     payment_type: els.payment.value,
                     discount_percent: String(discountPercent()),
@@ -828,6 +885,11 @@
             els.payDialog.close();
             saleCompleted(data);
         } catch (err) {
+            if (err.status === 422 && err.data && err.data.approval) {
+                els.payError.hidden = true;
+                openApproval(err.data.approval);
+                return;
+            }
             showPayError(err.message);
             if (err.status === 409) {
                 dropSoldSerials(err.data && err.data.problems);
@@ -865,6 +927,125 @@
         els.doneDialog.showModal();
 
         if (state.printAfter) printReceipt(sale.id);
+    }
+
+    // ------------------------------------------------------------------
+    // Pricing: actual price per line, discount limit, admin approval, cost toggle
+    // ------------------------------------------------------------------
+    /** Discount field and cost toggle follow the user's POS permissions (the server checks again). */
+    function applyPricing() {
+        const pr = state.pricing;
+        els.discount.disabled = !pr.give_discount;
+        if (!pr.give_discount && els.discount.value !== '0') els.discount.value = '0';
+        els.discount.title = pr.give_discount
+            ? `Up to ${pr.discount}% without approval${pr.override ? ' (you can approve more yourself)' : ''}`
+            : 'You cannot give discounts';
+        if (els.costToggle) els.costToggle.hidden = !pr.view_cost;
+        if (!pr.view_cost) state.showCost = false;
+        root.classList.toggle('show-cost', state.showCost);
+        root.classList.toggle('can-reprice', pr.change_price);
+    }
+
+    function toggleCost() {
+        state.showCost = !state.showCost && state.pricing.view_cost;
+        els.costToggle.setAttribute('aria-pressed', String(state.showCost));
+        root.classList.toggle('show-cost', state.showCost);
+        renderCart();
+    }
+
+    function openPriceDialog(id) {
+        const p = state.byId.get(id);
+        const line = state.cart.find((l) => l.id === id);
+        if (!p || !line || !state.pricing.change_price) return;
+        state.priceLine = id;
+        els.priceProduct.textContent = p.name;
+        els.priceSuggested.textContent = `Suggested ${fmt(p.price_cents)} (before VAT)`;
+        els.priceInput.value = (linePrice(line, p) / 100).toFixed(2);
+        els.priceReason.value = line.reason || '';
+        const pr = state.pricing;
+        els.priceHint.textContent = pr.override
+            ? 'You can approve any price yourself. Lower prices need a reason.'
+            : `Up to ${pr.price_drop}% below the suggested price without approval. Lower prices need a reason; selling below cost needs an administrator.`;
+        const showCost = state.showCost && Number.isInteger(p.cost_cents);
+        els.priceCost.hidden = !showCost;
+        els.priceCost.textContent = showCost ? `Cost ${fmt(p.cost_cents)}` : '';
+        els.priceError.hidden = true;
+        els.priceDialog.showModal();
+        els.priceInput.select();
+    }
+
+    function submitPrice(e) {
+        e.preventDefault();
+        const p = state.byId.get(state.priceLine);
+        const line = state.cart.find((l) => l.id === state.priceLine);
+        if (!p || !line) { els.priceDialog.close(); return; }
+        const value = parseMoney(els.priceInput.value);
+        const reason = els.priceReason.value.trim();
+        const fail = (msg, el) => { els.priceError.textContent = msg; els.priceError.hidden = false; el.focus(); };
+        if (!Number.isFinite(value) || value > 999999999) return fail('Enter a valid price.', els.priceInput);
+        if (value < p.price_cents && reason.length < 3) return fail('Enter the reason for the lower price.', els.priceReason);
+        if (value === p.price_cents) {
+            delete line.price;
+            delete line.reason;
+        } else {
+            line.price = value;
+            line.reason = reason.slice(0, 255);
+        }
+        els.priceDialog.close();
+        cartChanged(line.id);
+    }
+
+    function openApproval(approval) {
+        state.pendingApproval = {
+            lines: Array.isArray(approval.lines) ? approval.lines : [],
+            discount: typeof approval.discount === 'string' ? approval.discount : null,
+        };
+        const frag = document.createDocumentFragment();
+        const add = (name, value) => {
+            const li = els.approveTpl.content.firstElementChild.cloneNode(true);
+            li.querySelector('.approve-list__name').textContent = name;
+            li.querySelector('.approve-list__price').textContent = value;
+            frag.appendChild(li);
+        };
+        state.pendingApproval.lines.forEach((l) => add(l.name, `${fmt(parseMoney(l.price))} each`));
+        if (state.pendingApproval.discount !== null) add('Sale discount', `${state.pendingApproval.discount}%`);
+        els.approveList.replaceChildren(frag);
+        els.approveError.hidden = true;
+        els.approvePass.value = '';
+        els.approveDialog.showModal();
+        els.approveUser.focus();
+    }
+
+    async function submitApproval(e) {
+        e.preventDefault();
+        const a = state.pendingApproval;
+        if (!a || els.approveSubmit.disabled) return;
+        els.approveSubmit.disabled = true;
+        els.approveError.hidden = true;
+        try {
+            const data = await BB.api('pos/approve.php', {
+                method: 'POST',
+                body: {
+                    username: els.approveUser.value.trim(),
+                    password: els.approvePass.value,
+                    lines: a.lines.map((l) => ({ product_id: l.product_id, price: l.price })),
+                    discount_percent: a.discount,
+                },
+            });
+            Object.entries(data.lines || {}).forEach(([pid, token]) => { state.approvals.lines[Number(pid)] = token; });
+            if (data.discount) state.approvals.discount = data.discount;
+            state.pendingApproval = null;
+            els.approveDialog.close();
+            BB.toast(data.message, 'success');
+            if (els.payDialog.open) els.payForm.requestSubmit(); // complete the sale with the approvals
+        } catch (err) {
+            els.approveError.textContent = err.message;
+            els.approveError.hidden = false;
+            els.approvePass.select();
+        } finally {
+            els.approvePass.value = '';
+            els.approveSubmit.disabled = false;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -932,6 +1113,7 @@
         if (btn.dataset.act === 'inc') setQty(id, line.qty + 1);
         if (btn.dataset.act === 'dec') setQty(id, line.qty - 1);
         if (btn.dataset.act === 'remove') removeFromCart(id);
+        if (btn.dataset.act === 'price') openPriceDialog(id);
         if (btn.dataset.act === 'sn-remove') removeSerial(id, Number(btn.closest('li').dataset.serialId));
     });
 
@@ -940,12 +1122,22 @@
         setQty(Number(e.target.closest('tr').dataset.id), parseInt(e.target.value, 10));
     });
 
-    els.discount.addEventListener('input', () => { renderTotals(); persist(); });
+    els.discount.addEventListener('input', () => { state.approvals.discount = null; renderTotals(); persist(); });
     els.discount.addEventListener('change', () => {
         els.discount.value = String(discountPercent());
         renderTotals();
         persist();
     });
+    els.priceForm.addEventListener('submit', submitPrice);
+    $('priceReset').addEventListener('click', () => {
+        const p = state.byId.get(state.priceLine);
+        if (!p) return;
+        els.priceInput.value = (p.price_cents / 100).toFixed(2);
+        els.priceReason.value = '';
+        els.priceForm.requestSubmit();
+    });
+    els.approveForm.addEventListener('submit', submitApproval);
+    if (els.costToggle) els.costToggle.addEventListener('click', toggleCost);
     els.customer.addEventListener('change', persist);
     els.payment.addEventListener('change', persist);
 

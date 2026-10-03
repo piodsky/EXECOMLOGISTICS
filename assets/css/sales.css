@@ -110,3 +110,7 @@
 @media print {
     .sn-list li { border-color: #999; background: none; }
 }
+
+/* Changed POS prices (Phase 9) */
+.price-was { color: var(--text-muted); font-size: 12px; text-decoration: line-through; }
+.price-note { margin-top: 2px; color: var(--primary-700); font-size: 12px; }

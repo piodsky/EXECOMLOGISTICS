@@ -1,7 +1,7 @@
 <?php
 /**
  * Permission registry: key => [module, label].
- * Must match the `permissions` table seed (database.sql / migrations/003-007). Roles get permissions
+ * Must match the `permissions` table seed (database.sql / migrations/003-008). Roles get permissions
  * through `role_permissions`; a role with roles.is_super = 1 holds every key (also future ones).
  * Check with Auth::can('key'); an unknown key is a programming error.
  */
@@ -9,6 +9,10 @@ declare(strict_types=1);
 
 return [
     'pos.access'          => ['POS',       'Open the POS and complete sales'],
+    'pos.change_price'    => ['POS',       'Change the selling price within the role limit (reason when lower)'],
+    'pos.discount'        => ['POS',       'Give a sale discount within the role limit'],
+    'pos.price_override'  => ['POS',       'Approve prices / discounts beyond the limits or below cost'],
+    'pos.view_cost'       => ['POS',       'Show unit cost and margin on the POS (toggle)'],
     'sales.view'          => ['Sales',     'View sales history and receipts'],
     'sales.cancel'        => ['Sales',     'Void sales'],
     'customers.view'      => ['Customers', 'View customers'],

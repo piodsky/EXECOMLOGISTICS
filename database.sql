@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006 and 007.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007 and 008.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -39,6 +39,7 @@ DROP TABLE IF EXISTS document_sequences;
 DROP TABLE IF EXISTS audit_logs;
 DROP TABLE IF EXISTS stock_movements;
 DROP TABLE IF EXISTS stock_balances;
+DROP TABLE IF EXISTS price_approvals;
 DROP TABLE IF EXISTS sale_items;
 DROP TABLE IF EXISTS sales;
 DROP TABLE IF EXISTS customer_contacts;
@@ -95,10 +96,13 @@ CREATE TABLE roles (
   is_system    TINYINT(1)   NOT NULL DEFAULT 0,
   is_super     TINYINT(1)   NOT NULL DEFAULT 0,
   is_active    TINYINT(1)   NOT NULL DEFAULT 1,
+  max_price_drop DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  max_discount DECIMAL(5,2) NOT NULL DEFAULT 0.00,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_roles_code (code)
+  UNIQUE KEY uq_roles_code (code),
+  CONSTRAINT chk_roles_limits CHECK (max_price_drop BETWEEN 0 AND 100 AND max_discount BETWEEN 0 AND 100)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE permissions (
@@ -488,6 +492,7 @@ CREATE TABLE sales (
   subtotal          DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   discount_percent  DECIMAL(5,2)  NOT NULL DEFAULT 0.00,
   discount_amount   DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  discount_approved_by INT UNSIGNED NULL,
   vat_rate          DECIMAL(5,2)  NOT NULL DEFAULT 12.00,
   vat_amount        DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   total             DECIMAL(10,2) NOT NULL DEFAULT 0.00,
@@ -508,6 +513,7 @@ CREATE TABLE sales (
   KEY idx_sales_voided_by (voided_by),
   KEY idx_sales_branch_status_date (branch_id, status, created_at),
   KEY idx_sales_branch_user_date (branch_id, user_id, created_at),
+  KEY idx_sales_discount_approved_by (discount_approved_by),
   CONSTRAINT fk_sales_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_sales_user FOREIGN KEY (user_id) REFERENCES users (id)
@@ -515,6 +521,8 @@ CREATE TABLE sales (
   CONSTRAINT fk_sales_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT fk_sales_voided_by FOREIGN KEY (voided_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_sales_discount_approved_by FOREIGN KEY (discount_approved_by) REFERENCES users (id)
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT chk_sales_discount CHECK (discount_percent BETWEEN 0 AND 100)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -527,15 +535,21 @@ CREATE TABLE sale_items (
   product_code  VARCHAR(20)   NOT NULL,
   product_name  VARCHAR(100)  NOT NULL,
   unit_price    DECIMAL(10,2) NOT NULL,
+  suggested_price DECIMAL(10,2) NULL,
+  price_reason  VARCHAR(255)  NULL,
+  price_approved_by INT UNSIGNED NULL,
   unit_cost     DECIMAL(12,4) NULL,
   quantity      INT           NOT NULL,
   line_total    DECIMAL(10,2) NOT NULL,
   PRIMARY KEY (id),
   KEY idx_items_sale (sale_id),
   KEY idx_items_product (product_id),
+  KEY idx_items_price_approved_by (price_approved_by),
   CONSTRAINT fk_items_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_items_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_items_price_approved_by FOREIGN KEY (price_approved_by) REFERENCES users (id)
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT chk_items_qty CHECK (quantity > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -792,6 +806,43 @@ CREATE TABLE inventory_doc_serials (
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_invdoc_serials_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- One-time price / discount approvals typed at the POS (migration 008)
+-- ---------------------------------------------------------------------
+CREATE TABLE price_approvals (
+  id                INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  token_hash        CHAR(64)      NOT NULL,
+  branch_id         INT UNSIGNED  NOT NULL,
+  cashier_id        INT UNSIGNED  NOT NULL,
+  approver_id       INT UNSIGNED  NOT NULL,
+  product_id        INT UNSIGNED  NULL,
+  price             DECIMAL(10,2) NULL,
+  discount_percent  DECIMAL(5,2)  NULL,
+  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at        DATETIME      NOT NULL,
+  used_at           DATETIME      NULL,
+  sale_id           INT UNSIGNED  NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_price_approvals_token (token_hash),
+  KEY idx_price_approvals_cashier (cashier_id, expires_at),
+  KEY idx_price_approvals_branch (branch_id),
+  KEY idx_price_approvals_approver (approver_id),
+  KEY idx_price_approvals_product (product_id),
+  KEY idx_price_approvals_sale (sale_id),
+  CONSTRAINT fk_price_approvals_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_price_approvals_cashier FOREIGN KEY (cashier_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_price_approvals_approver FOREIGN KEY (approver_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_price_approvals_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_price_approvals_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT chk_price_approvals_kind CHECK ((product_id IS NULL) = (price IS NULL) AND (product_id IS NULL) = (discount_percent IS NOT NULL)),
+  CONSTRAINT chk_price_approvals_values CHECK ((price IS NULL OR price >= 0) AND (discount_percent IS NULL OR discount_percent BETWEEN 0 AND 100))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -1070,7 +1121,11 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (35, 'transfers.request',   'Transfers', 'Request stock from another branch',                        101),
   (36, 'transfers.approve',   'Transfers', 'Approve or cancel requests for this branch''s stock',       102),
   (37, 'transfers.release',   'Transfers', 'Release approved transfers (stock leaves the branch)',     103),
-  (38, 'transfers.receive',   'Transfers', 'Receive incoming transfers (stock enters the branch)',     104);
+  (38, 'transfers.receive',   'Transfers', 'Receive incoming transfers (stock enters the branch)',     104),
+  (39, 'pos.change_price',    'POS',       'Change the selling price within the role limit (reason when lower)', 11),
+  (40, 'pos.discount',        'POS',       'Give a sale discount within the role limit',                12),
+  (41, 'pos.price_override',  'POS',       'Approve prices / discounts beyond the limits or below cost', 13),
+  (42, 'pos.view_cost',       'POS',       'Show unit cost and margin on the POS (toggle)',             14);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -1078,6 +1133,10 @@ INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
   (2, 'branch_admin', 'Branch Administrator', 'Runs a branch: sales and voids, customers, stock adjustments, reports and branch users.', 1, 0),
   (3, 'cashier',      'Cashier',              'Sells at the POS and looks after customers.', 1, 0),
   (4, 'technician',   'Technician',           'Looks up customers and stock.', 1, 0);
+
+-- POS limits (percent): price below suggested / sale discount without approval (super admin: unlimited).
+UPDATE roles SET max_price_drop = 20.00, max_discount = 20.00 WHERE code = 'branch_admin';
+UPDATE roles SET max_price_drop = 5.00,  max_discount = 5.00  WHERE code = 'cashier';
 
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id FROM roles r JOIN permissions p
@@ -1087,9 +1146,9 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'receiving.view', 'receiving.manage', 'receiving.post', 'receiving.cancel', 'serials.view',
          'inventory.integrity', 'inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create',
          'counts.approve', 'warehouses.manage', 'transfers.request', 'transfers.approve', 'transfers.release',
-         'transfers.receive'))
+         'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
-         'inventory.view', 'serials.view'))
+         'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view'))
 ORDER BY r.id, p.id;
 

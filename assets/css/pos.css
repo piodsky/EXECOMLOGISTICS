@@ -540,3 +540,44 @@ body[data-page="pos"] .content { padding: 14px 16px; }
 .sn-state { margin-top: 10px; font-size: 13px; }
 .sn-state:empty { display: none; }
 .sn-count { margin-right: auto; align-self: center; font-size: 13px; }
+
+/* ---------- Pricing (Phase 9): changed prices, cost / margin column, approval ---------- */
+.cost-toggle {
+    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+    border: 1px solid rgba(255, 255, 255, .55); border-radius: 999px; background: transparent; color: #fff;
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.cost-toggle .icon { width: 16px; height: 16px; }
+.cost-toggle[aria-pressed="true"] { background: #fff; color: #133d80; }
+.cost-toggle:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+.cart-table .c-cost { display: none; }
+.pos.show-cost .cart-table .c-cost { display: table-cell; }
+.cart-row__cost, .cart-row__margin { display: block; white-space: nowrap; }
+.cart-row__margin { color: var(--success, #1f8f4a); font-size: 12px; }
+.cart-row__margin.is-loss { color: var(--danger); font-weight: 600; }
+
+.price-btn {
+    display: inline-flex; flex-direction: column; align-items: flex-end; padding: 2px 4px; border: 1px dashed transparent;
+    border-radius: 6px; background: none; color: inherit; font: inherit; text-align: right; cursor: pointer;
+}
+.price-btn:not(:disabled):hover, .price-btn:focus-visible { border-color: var(--primary-400); background: var(--surface-2); outline: none; }
+.price-btn:disabled { cursor: default; }
+.cart-row__was { color: var(--text-muted); font-size: 11px; text-decoration: line-through; }
+tr.is-repriced .cart-row__price { color: var(--primary-700); font-weight: 700; }
+
+.price-item { display: grid; gap: 2px; margin-bottom: 12px; }
+.price-hint { font-size: 13px; }
+.price-cost { font-size: 13px; font-weight: 600; }
+
+.approve-list { display: grid; gap: 6px; margin: 4px 0 14px; padding: 0; list-style: none; }
+.approve-list li {
+    display: flex; justify-content: space-between; gap: 12px; padding: 8px 12px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+}
+
+@media (max-width: 1280px) {
+    .pos.can-reprice .cart-table .c-price { display: table-cell; }
+    .pos.can-reprice .cart-table .cart-row__total,
+    .pos.can-reprice .cart-table thead th:nth-last-child(2) { display: none; }
+}

@@ -182,6 +182,15 @@ final class Roles
             'description' => $custom ? input_string($in, 'description', 255) : (string) ($role['description'] ?? ''),
             'is_active'   => $custom ? (isset($in['is_active']) ? 1 : 0) : (int) $role['is_active'],
         ];
+        // POS limits (percent below the suggested price / sale discount without approval).
+        foreach (['max_price_drop', 'max_discount'] as $key) {
+            $raw = $in[$key] ?? '0';
+            $val = input_decimal([$key => is_string($raw) && trim($raw) === '' ? '0' : $raw], $key, 0, 100);
+            if ($val === null) {
+                $errors[$key] = 'Enter a percentage from 0 to 100.';
+            }
+            $data[$key] = number_format((float) $val, 2, '.', '');
+        }
 
         if ($role === null) {
             if (!preg_match('/^[a-z][a-z0-9_]{2,29}$/', $data['code'])) {
@@ -226,12 +235,14 @@ final class Roles
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('INSERT INTO roles (code, name, description, is_system, is_super, is_active) VALUES (?, ?, ?, 0, 0, ?)')
-                ->execute([$data['code'], $data['name'], $data['description'], $data['is_active']]);
+            $pdo->prepare('INSERT INTO roles (code, name, description, is_system, is_super, is_active, max_price_drop, max_discount)
+                            VALUES (?, ?, ?, 0, 0, ?, ?, ?)')
+                ->execute([$data['code'], $data['name'], $data['description'], $data['is_active'], $data['max_price_drop'], $data['max_discount']]);
             $id = (int) $pdo->lastInsertId();
             self::syncPermissions($id, $data['permissions']);
             Audit::record('roles', 'create', 'role', $id, $data['code'], null, [
                 'name' => $data['name'], 'is_active' => $data['is_active'], 'permissions' => $data['permissions'],
+                'max_price_drop' => $data['max_price_drop'], 'max_discount' => $data['max_discount'],
             ]);
             $pdo->commit();
         } catch (Throwable $e) {
@@ -253,12 +264,14 @@ final class Roles
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('UPDATE roles SET name = ?, description = ?, is_active = ? WHERE id = ?')
-                ->execute([$data['name'], $data['description'], $data['is_active'], $role['id']]);
+            $pdo->prepare('UPDATE roles SET name = ?, description = ?, is_active = ?, max_price_drop = ?, max_discount = ? WHERE id = ?')
+                ->execute([$data['name'], $data['description'], $data['is_active'], $data['max_price_drop'], $data['max_discount'], $role['id']]);
             self::syncPermissions((int) $role['id'], $data['permissions']);
 
-            $before = ['name' => $role['name'], 'description' => $role['description'], 'is_active' => (int) $role['is_active']];
-            $after  = ['name' => $data['name'], 'description' => $data['description'], 'is_active' => $data['is_active']];
+            $before = ['name' => $role['name'], 'description' => $role['description'], 'is_active' => (int) $role['is_active'],
+                       'max_price_drop' => (string) ($role['max_price_drop'] ?? '0.00'), 'max_discount' => (string) ($role['max_discount'] ?? '0.00')];
+            $after  = ['name' => $data['name'], 'description' => $data['description'], 'is_active' => $data['is_active'],
+                       'max_price_drop' => $data['max_price_drop'], 'max_discount' => $data['max_discount']];
             [$old, $new] = Audit::diff($before, $after);
             $was = self::keysOf($role);
             $added   = array_values(array_diff($data['permissions'], $was));

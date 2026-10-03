@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -799,7 +799,7 @@ try {
     Nav "$Base/pages/pos.php"
     WaitFor "document.querySelectorAll('.product-card').length === 13" 'POS shows 13 products'
     $j = Eval "fetch('$Base/api/pos/products.php').then(r => r.text())"
-    Check ($j -match '"track_serial":true' -and $j -notmatch '(?i)cost') 'POS products API: track_serial flag, no cost key'
+    Check ($j -match '"track_serial":true' -and $j -match '"cost_cents"') 'POS products API: track_serial flag, admin (pos.view_cost) gets cost_cents'
     $j = Eval "fetch('$Base/api/pos/serials.php?product_id=$tp').then(r => r.text())"
     Check ($j -like '*SN-A1*' -and $j -notmatch '(?i)cost') "POS serials API lists serials, no cost ($($j.Length) chars)"
     ClickCard 'ThinkPad X1'
@@ -882,7 +882,7 @@ try {
     Nav "$Base/pages/pos.php"
     WaitFor "document.querySelectorAll('.product-card').length === 13" 'cashier POS'
     $j = Eval "Promise.all([fetch('$Base/api/pos/products.php').then(r => r.text()), fetch('$Base/api/pos/serials.php?product_id=$tp').then(r => r.text()), fetch('$Base/api/pos/serials.php?serial=SN-A1').then(r => r.text())]).then(a => a.join(' '))"
-    Check ($j -like '*SN-A1*' -and $j -notmatch '(?i)cost') 'cashier: POS products / serials / scan JSON have no cost'
+    Check ($j -like '*SN-A1*' -and ($j -replace '"view_cost":false', '') -notmatch '(?i)cost') 'cashier: POS products / serials / scan JSON have no cost'
     ClickCard 'ThinkPad X1'
     WaitFor "document.querySelectorAll('#serialList input').length === 2" 'cashier picker'
     [void](Eval "document.querySelector('#serialList input').click(); document.getElementById('serialForm').requestSubmit()")
@@ -1262,6 +1262,78 @@ try {
     }
     Size 1536 1024
     Shot '39-transfer-view'
+
+    # --- Phase 9: POS pricing (actual vs suggested price, role limits, approval at the till, cost toggle) ---
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $p9 = "'pos.change_price','pos.discount','pos.price_override','pos.view_cost'"
+    $lim = Sql "SELECT CONCAT_WS('|', (SELECT CONCAT(max_price_drop, '/', max_discount) FROM roles WHERE code = 'cashier'), (SELECT CONCAT(max_price_drop, '/', max_discount) FROM roles WHERE code = 'branch_admin'))"
+    Check ((Sql "SELECT COUNT(*) FROM permissions WHERE perm_key IN ($p9)") -eq '4' -and $lim -eq '5.00/5.00|20.00/20.00') "pricing permissions + role limits ($lim)"
+    Nav "$Base/pages/pos.php"
+    WaitFor "document.querySelectorAll('.product-card').length > 0" 'pos products (admin)'
+    Check (Eval "!document.getElementById('costToggle').hidden && getComputedStyle(document.querySelector('.cart-table th.c-cost')).display === 'none'") 'admin: cost toggle shown, cost column hidden by default'
+    [void](Eval "document.getElementById('costToggle').click()")
+    Check (Eval "getComputedStyle(document.querySelector('.cart-table th.c-cost')).display !== 'none' && document.getElementById('costToggle').getAttribute('aria-pressed') === 'true'") 'admin: cost toggle shows the Cost / Margin column'
+    [void](Eval "document.getElementById('costToggle').click()")
+    Logout
+
+    Login 'cashier' 'cashier123'
+    WaitFor "document.querySelectorAll('.product-card').length > 0" 'pos products (cashier)'
+    $api = Eval "BB.api('pos/products.php').then(d => JSON.stringify(d.products).includes('cost') ? 'cost' : 'nocost')"
+    Check ($api -eq 'nocost' -and (Eval "!document.getElementById('costToggle')")) "cashier: no cost in the products API, no cost toggle ($api)"
+    $mp = [long](Sql 'SELECT ROUND(price * 100) FROM products WHERE id = 2')
+    $p3 = [long][math]::Round($mp * 0.97); $p3s = ([decimal]$p3 / 100).ToString('0.00', $inv)
+    ClickCard 'Mouse'
+    [void](Eval "document.querySelector('#cartBody tr[data-id=`"2`"] [data-act=price]').click()")
+    Check (Eval "document.getElementById('priceDialog').open") 'cashier: price button opens the Change Price dialog'
+    [void](Eval "document.getElementById('priceInput').value = '$p3s'; document.getElementById('priceReason').value = ''; document.getElementById('priceForm').requestSubmit()")
+    Check (Eval "document.getElementById('priceDialog').open && !document.getElementById('priceError').hidden") 'lower price without a reason refused in the dialog'
+    [void](Eval "document.getElementById('priceReason').value = 'Loyal customer'; document.getElementById('priceForm').requestSubmit()")
+    Check (Eval "!document.getElementById('priceDialog').open && document.querySelector('#cartBody tr[data-id=`"2`"]').classList.contains('is-repriced')") 'price applied, line marked as changed'
+    $ls = Eval "localStorage.getItem(Object.keys(localStorage).find(k => k.startsWith('bb.pos.')))"
+    Check ($ls -like "*`"price`":$p3,*Loyal customer*" -and $ls -notlike '*cost*') 'cart storage keeps the price + reason, never cost'
+    $pay = "document.activeElement.blur(); { const s = document.getElementById('paymentSelect'); s.value = 'card'; s.dispatchEvent(new Event('change')); document.getElementById('btnSave').click(); document.getElementById('payForm').requestSubmit() }"
+    [void](Eval $pay)
+    WaitFor "document.getElementById('doneDialog').open" 'repriced sale done'
+    $st = Sql "SELECT CONCAT_WS('|', ROUND(unit_price * 100), ROUND(suggested_price * 100), price_reason, price_approved_by IS NULL) FROM sale_items ORDER BY id DESC LIMIT 1"
+    Check ($st -eq "$p3|$mp|Loyal customer|1") "3% lower within the cashier limit: saved with suggested price + reason, no approval ($st)"
+    [void](Eval "document.getElementById('doneNew').click()")
+
+    $p20 = [long][math]::Round($mp * 0.80); $p20s = ([decimal]$p20 / 100).ToString('0.00', $inv)
+    ClickCard 'Mouse'
+    [void](Eval "document.querySelector('#cartBody tr[data-id=`"2`"] [data-act=price]').click(); document.getElementById('priceInput').value = '$p20s'; document.getElementById('priceReason').value = 'Bulk order'; document.getElementById('priceForm').requestSubmit()")
+    [void](Eval $pay)
+    WaitFor "document.getElementById('approveDialog').open" 'approval dialog'
+    Check ((Text '#approveList') -like '*Mouse*') "20% lower: approval dialog lists the Mouse ($(Text '#approveList'))"
+    [void](Eval "document.getElementById('approveUser').value = 'cashier'; document.getElementById('approvePass').value = 'cashier123'; document.getElementById('approveForm').requestSubmit()")
+    WaitFor "!document.getElementById('approveError').hidden" 'self approval refused'
+    Check ((Text '#approveError') -like '*Another person*') "cashier cannot approve their own sale ($(Text '#approveError'))"
+    [void](Eval "document.getElementById('approveUser').value = 'maradmin'; document.getElementById('approvePass').value = 'wrong-password'; document.getElementById('approveForm').requestSubmit()")
+    WaitFor "(document.getElementById('approveError').textContent || '').includes('Invalid')" 'wrong approver password'
+    Check (Eval "document.getElementById('approvePass').value === '' && !document.getElementById('doneDialog').open") 'wrong approver password refused, password field cleared'
+    [void](Eval "document.getElementById('approveUser').value = 'maradmin'; document.getElementById('approvePass').value = '$script:pw'; document.getElementById('approveForm').requestSubmit()")
+    WaitFor "document.getElementById('doneDialog').open" 'approved sale done'
+    $sale9 = Sql 'SELECT MAX(id) FROM sales'
+    $st = Sql "SELECT CONCAT_WS('|', ROUND(si.unit_price * 100), si.price_reason, u.username, (SELECT COUNT(*) FROM price_approvals pa WHERE pa.sale_id = si.sale_id AND pa.used_at IS NOT NULL)) FROM sale_items si JOIN users u ON u.id = si.price_approved_by WHERE si.sale_id = $sale9"
+    Check ($st -eq "$p20|Bulk order|maradmin|1") "20% lower approved by maradmin at the till, token used once ($st)"
+    [void](Eval "document.getElementById('doneNew').click()")
+
+    ClickCard 'Keyboard'
+    [void](Eval "{ const d = document.getElementById('discountInput'); d.value = '10'; d.dispatchEvent(new Event('input')); d.dispatchEvent(new Event('change')); } $pay")
+    WaitFor "document.getElementById('approveDialog').open" 'discount approval dialog'
+    Check ((Text '#approveList') -like '*Sale discount*10.00%*') "10% discount needs approval ($(Text '#approveList'))"
+    [void](Eval "document.getElementById('approveUser').value = 'maradmin'; document.getElementById('approvePass').value = '$script:pw'; document.getElementById('approveForm').requestSubmit()")
+    WaitFor "document.getElementById('doneDialog').open" 'discounted sale done'
+    $st = Sql "SELECT CONCAT(s.discount_percent, '|', u.username) FROM sales s JOIN users u ON u.id = s.discount_approved_by WHERE s.id = (SELECT MAX(id) FROM sales)"
+    Check ($st -eq '10.00|maradmin') "10% discount approved by maradmin ($st)"
+    [void](Eval "document.getElementById('doneNew').click()")
+
+    Nav "$Base/pages/sale-view.php?id=$sale9"
+    Check ((Eval "document.querySelector('.price-was') !== null") -and (Text '.price-note') -like '*Bulk order*approved by Mara Admin*') "sale view: suggested price struck through, reason + approver ($(Text '.price-note'))"
+    Nav "$Base/pages/receipt.php?id=$sale9"
+    Check (Eval "!document.body.textContent.includes('Bulk order') && !document.querySelector('.price-was')") 'receipt shows the actual price only'
+    Nav "$Base/pages/pos.php"
+    Logout
+    Login 'admin' 'admin123'
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

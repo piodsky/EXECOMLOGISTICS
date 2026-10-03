@@ -38,8 +38,29 @@ Read this first; open only the files a task needs.
       Migration `migrations/006_warehouse_ops.sql`.
 - [x] Phase 8 (= v2 phase 5): branch-to-branch transfers (request → approve → release/in transit → receive, cancel
       before release). Migration `migrations/007_branch_transfers.sql`. Built in the main session without agents
-      (user request). Next (v2 phase 6): POS pricing.
+      (user request).
+- [x] Phase 9 (= v2 phase 6): POS pricing — actual vs suggested price, per-role price / discount limits, admin
+      approval at the till, cost toggle. Migration `migrations/008_pos_pricing.sql`. Built without agents.
+      Next (v2 phase 7): job orders & technicians.
 - Existing DBs need a migration file in `migrations/`, not a re-import.
+
+## POS pricing (Phase 9) — user decisions
+- Prices are VAT-exclusive (VAT added on top as before). `products.price` = suggested; `sale_items.unit_price` = actual,
+  `suggested_price` / `price_reason` / `price_approved_by` snapshots; `sales.discount_approved_by`. Receipt shows the
+  actual price only; sale-view shows the suggested price struck through + reason + approver.
+- Rules in `Pricing` + `Sales::checkPricing()` (server only): changing a price needs `pos.change_price`, a lower price
+  needs a reason (≥ 3 chars); more than `roles.max_price_drop` % below suggested, or a net price (after the sale
+  discount) below the branch average cost, needs approval; a discount needs `pos.discount`, above
+  `roles.max_discount` % needs approval. Defaults: cashier 5 / 5, branch admin 20 / 20 (Settings → Roles → POS
+  Limits; super admin unlimited). Users with `pos.price_override` are self-approved (recorded as approver).
+- Approval at the till: checkout returns 422 `details.approval {lines: [{product_id, name, price}], discount}` (never
+  says whether the cause is cost); the POS opens the Admin Approval dialog → `api/pos/approve.php` with the
+  approver's username + password (`Auth::verifyCredentials`, same lockout as login, `#[SensitiveParameter]`; must be
+  someone else with `pos.price_override` who works at the branch) → one-time tokens in `price_approvals`
+  (SHA-256 only, this cashier + branch + exact product/price or discount, 5 minutes) → the POS resubmits; tokens are
+  used inside the sale transaction (rollback frees them). Tokens never stored in localStorage; any cart change drops them.
+- Cost on the POS: `api/pos/products.php` adds `cost_cents` only with `pos.view_cost`; "Cost" toggle in the cart header
+  (off by default, never stored) shows a Cost / Margin column. Cashiers never receive cost.
 
 ## Branch transfers (Phase 8)
 - Class `Transfers` (`stock_transfers` + lines + serials), menu "Branch Transfers" (`transfers`): pages
@@ -199,8 +220,9 @@ the main session runs each step with the agent named in project-manager's plan.
 ## POS behaviour
 - Buttons: **Save** = payment dialog → complete sale (deduct stock). **Print** = same + auto-print; with an empty
   cart it reprints the last sale. **New Sale** / **Cancel** clear the cart (confirm). `held` status is unused so far.
-- Cart lives in the browser (+ localStorage `bb.pos.<userId>`); the server only receives product_id + qty and
-  recomputes everything in `Sales::complete()` (transaction, `SELECT … FOR UPDATE`, `stock >= ?` guard).
+- Cart lives in the browser (+ localStorage `bb.pos.<userId>.<branchId>`); the server receives product_id + qty (+ the
+  actual price / reason / approval token of changed lines, see Phase 9) and recomputes everything in
+  `Sales::complete()` (transaction, `SELECT … FOR UPDATE`, `stock >= ?` guard).
 - Receipt printing: hidden iframe loads `receipt.php?id=X&autoprint=1`; receipt.php calls `allow_same_origin_framing()`.
 - Keys: F2 scan (focus search), F3 search, F4 add highlighted card, ↑/↓ move highlight, Enter = exact barcode/code
   match else highlighted. Typing anywhere (scanner) goes to the search box.
@@ -292,7 +314,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (339 checks incl. branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (356 checks incl. POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

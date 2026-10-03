@@ -4,6 +4,9 @@
  * {
  *   "items": [{"product_id": 1, "qty": 2}, {"product_id": 13, "qty": 1, "serial_ids": [7]}, ...],
  *                                     // serial_ids: serial-tracked items only, one per unit
+ *                                     // optional per item: "price": "950.00" (actual, VAT-exclusive),
+ *                                     //   "reason": "..." (when lower), "approval": "<token from approve.php>"
+ *   "discount_approval": "<token>" | null,
  *   "customer_id": 3 | null,          // null = walk-in
  *   "payment_type": "cash"|"gcash"|"card",
  *   "discount_percent": "10",
@@ -17,7 +20,7 @@ api_guard('POST', 'pos.access');
 
 $data = request_json();
 
-// --- Items: product IDs + quantities only (prices come from the database) ---
+// --- Items: product IDs + quantities, optional actual price / reason / approval (checked in Sales::complete) ---
 $items = $data['items'] ?? null;
 if (!is_array($items) || $items === []) {
     throw new HttpException(422, 'The cart is empty.');
@@ -28,6 +31,7 @@ if (count($items) > Sales::MAX_LINES) {
 
 $qtyById     = [];
 $serialsById = []; // product_id => product_serials ids (serial-tracked items; checked in Sales::complete)
+$pricing     = []; // product_id => {price (cents) | null, reason, approval}
 foreach ($items as $item) {
     $id  = is_array($item) ? input_int($item, 'product_id', 1) : null;
     $qty = is_array($item) ? input_int($item, 'qty', 1, Sales::MAX_QTY) : null;
@@ -38,6 +42,22 @@ foreach ($items as $item) {
     if ($qtyById[$id] > Sales::MAX_QTY) {
         throw new HttpException(422, 'Quantity is too large (max ' . Sales::MAX_QTY . ' per item).');
     }
+
+    $price = null;
+    if (($item['price'] ?? null) !== null && $item['price'] !== '') {
+        $p = is_string($item['price']) || is_int($item['price']) || is_float($item['price'])
+            ? input_decimal(['v' => (string) $item['price']], 'v', 0, 9999999.99) : null;
+        if ($p === null) {
+            throw new HttpException(422, 'The cart has an invalid price.');
+        }
+        $price = to_cents($p);
+    }
+    if (isset($pricing[$id]) && $pricing[$id]['price'] !== $price) {
+        throw new HttpException(422, 'The same item is in the cart twice with different prices.');
+    }
+    $reason   = is_string($item['reason'] ?? null) ? mb_substr($item['reason'], 0, 255) : null;
+    $approval = is_string($item['approval'] ?? null) && preg_match('/^[0-9a-f]{64}$/', $item['approval']) ? $item['approval'] : null;
+    $pricing[$id] = ['price' => $price, 'reason' => $reason ?? ($pricing[$id]['reason'] ?? null), 'approval' => $approval ?? ($pricing[$id]['approval'] ?? null)];
 
     if (array_key_exists('serial_ids', $item) && $item['serial_ids'] !== null) {
         $raw = $item['serial_ids'];
@@ -87,7 +107,11 @@ if ($paymentType === 'cash') {
     $paidCents = to_cents($paid);
 }
 
-$sale = Sales::complete((int) Auth::id(), $qtyById, $customerId, $paymentType, $discount, $paidCents, $serialsById);
+$discountApproval = is_string($data['discount_approval'] ?? null) && preg_match('/^[0-9a-f]{64}$/', $data['discount_approval'])
+    ? $data['discount_approval'] : null;
+
+$sale = Sales::complete((int) Auth::id(), $qtyById, $customerId, $paymentType, (float) $discount, $paidCents, $serialsById,
+    $pricing, $discountApproval);
 
 json_response([
     'ok'           => true,

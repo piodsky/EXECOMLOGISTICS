@@ -111,13 +111,21 @@ require ROOT_PATH . '/includes/header.php';
                         <td>
                             <strong class="block"><?= e($item['product_name']) ?></strong>
                             <small class="muted"><?= e($item['product_code']) ?></small>
+                            <?php if ($item['price_reason'] !== null || $item['price_approved_by_name'] !== null): ?>
+                                <small class="price-note block"><?= e(trim(($item['price_reason'] !== null ? 'Price: ' . $item['price_reason'] : 'Price') . ($item['price_approved_by_name'] !== null ? ' · approved by ' . $item['price_approved_by_name'] : ''))) ?></small>
+                            <?php endif; ?>
                             <?php if (!empty($item['serials'])): ?>
                                 <ul class="sn-list" aria-label="Serial numbers">
                                     <?php foreach ($item['serials'] as $sn): ?><li>S/N <?= e($sn) ?></li><?php endforeach; ?>
                                 </ul>
                             <?php endif; ?>
                         </td>
-                        <td class="num"><?= e(money($item['unit_price'])) ?></td>
+                        <td class="num">
+                            <?= e(money($item['unit_price'])) ?>
+                            <?php if ($item['suggested_price'] !== null && to_cents($item['suggested_price']) !== to_cents($item['unit_price'])): ?>
+                                <small class="price-was block" title="Suggested price"><?= e(money($item['suggested_price'])) ?></small>
+                            <?php endif; ?>
+                        </td>
                         <td class="num"><?= (int) $item['quantity'] ?></td>
                         <td class="num"><?= e(money($item['line_total'])) ?></td>
                         <?php if ($showCost): ?>
@@ -134,7 +142,7 @@ require ROOT_PATH . '/includes/header.php';
         <dl class="sale-totals<?= $isVoid ? ' is-void' : '' ?>">
             <div><dt>Sub Total</dt><dd><?= e(money($sale['subtotal'])) ?></dd></div>
             <?php if ((float) $sale['discount_amount'] > 0): ?>
-                <div><dt>Discount (<?= e($discLabel) ?>%)</dt><dd>− <?= e(money($sale['discount_amount'])) ?></dd></div>
+                <div><dt>Discount (<?= e($discLabel) ?>%)<?= $sale['discount_approved_by_name'] !== null ? ' <small>approved by ' . e($sale['discount_approved_by_name']) . '</small>' : '' ?></dt><dd>− <?= e(money($sale['discount_amount'])) ?></dd></div>
             <?php endif; ?>
             <div><dt>VAT (<?= e($vatLabel) ?>%)</dt><dd><?= e(money($sale['vat_amount'])) ?></dd></div>
             <div class="sale-totals__grand"><dt>Total Amount</dt><dd id="saleTotal"><?= e(money($sale['total'])) ?></dd></div>

@@ -17,7 +17,7 @@ final class Auth
     private static bool $loaded = false;
 
     /** @return array{ok:bool, error?:string} */
-    public static function attempt(string $username, string $password): array
+    public static function attempt(string $username, #[SensitiveParameter] string $password): array
     {
         $ip      = client_ip();
         $max     = max(1, (int) config('app.security.login_max_attempts', 5));
@@ -66,6 +66,46 @@ final class Auth
         self::login((int) $user['id']);
 
         return ['ok' => true];
+    }
+
+    /**
+     * Check another user's credentials without signing in (an approver at the till). Same lockout as
+     * the login form. @return array{id:int, full_name:string, branch_id:int, role_id:int, is_super:int}
+     * @throws HttpException 422 on wrong credentials / lockout, 403 when the account or role is inactive
+     */
+    public static function verifyCredentials(string $username, #[SensitiveParameter] string $password): array
+    {
+        $ip      = client_ip();
+        $max     = max(1, (int) config('app.security.login_max_attempts', 5));
+        $minutes = max(1, (int) config('app.security.lockout_minutes', 15));
+        if (self::isLockedOut($username, $ip, $max, $minutes)) {
+            throw new HttpException(422, "Too many failed attempts. Please wait {$minutes} minutes and try again.");
+        }
+        $stmt = db()->prepare(
+            'SELECT u.id, u.full_name, u.password_hash, u.is_active, u.branch_id, r.id AS role_id, r.is_active AS role_active, r.is_super
+               FROM users u LEFT JOIN roles r ON r.code = u.role
+              WHERE u.username = ? LIMIT 1'
+        );
+        $stmt->execute([$username]);
+        $user = $stmt->fetch();
+        if (!password_verify($password, $user ? $user['password_hash'] : self::DUMMY_HASH) || $user === false) {
+            self::recordAttempt($username, $ip, false);
+            throw new HttpException(422, 'Invalid username or password.');
+        }
+        if ((int) $user['is_active'] !== 1 || $user['role_id'] === null || (int) $user['role_active'] !== 1) {
+            throw new HttpException(403, 'This account cannot approve.');
+        }
+        db()->prepare('DELETE FROM login_attempts WHERE username = ? AND ip_address = ? AND success = 0')->execute([$username, $ip]);
+        return [
+            'id' => (int) $user['id'], 'full_name' => (string) $user['full_name'], 'branch_id' => (int) $user['branch_id'],
+            'role_id' => (int) $user['role_id'], 'is_super' => (int) $user['is_super'],
+        ];
+    }
+
+    /** Does a user (from verifyCredentials) hold a permission? Super roles hold all. */
+    public static function userCan(array $user, string $key): bool
+    {
+        return (int) $user['is_super'] === 1 || self::roleHas((int) $user['role_id'], $key);
     }
 
     public static function login(int $userId): void

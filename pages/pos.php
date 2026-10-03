@@ -75,6 +75,9 @@ require ROOT_PATH . '/includes/header.php';
             <?= icon('cart') ?>
             <h2>Current Sale</h2>
             <span class="cart-head__no">No. <span id="saleNo"><?= e(Sales::nextNumber()) ?></span></span>
+            <?php if (Auth::can('pos.view_cost')): ?>
+                <button type="button" class="cost-toggle" id="costToggle" aria-pressed="false" title="Show unit cost and margin (hidden from customers by default)"><?= icon('eye') ?><span>Cost</span></button>
+            <?php endif; ?>
         </header>
 
         <div class="cart-fields">
@@ -112,6 +115,7 @@ require ROOT_PATH . '/includes/header.php';
                     <th>Item</th>
                     <th class="c-qty">Qty</th>
                     <th class="num c-price">Unit Price</th>
+                    <th class="num c-cost">Cost / Margin</th>
                     <th class="num">Total</th>
                     <th class="c-act">Action</th>
                 </tr>
@@ -189,7 +193,12 @@ require ROOT_PATH . '/includes/header.php';
                 <button type="button" data-act="inc" aria-label="Increase quantity"><?= icon('plus') ?></button>
             </span>
         </td>
-        <td class="num c-price cart-row__price"></td>
+        <td class="num c-price">
+            <button type="button" class="price-btn" data-act="price" aria-label="Change price">
+                <span class="cart-row__price"></span><small class="cart-row__was" hidden></small>
+            </button>
+        </td>
+        <td class="num c-cost"><span class="cart-row__cost"></span><small class="cart-row__margin"></small></td>
         <td class="num cart-row__total"></td>
         <td class="c-act">
             <button type="button" class="icon-btn icon-btn--danger" data-act="remove" aria-label="Remove item"><?= icon('trash') ?></button>
@@ -326,6 +335,68 @@ require ROOT_PATH . '/includes/header.php';
         </footer>
     </form>
 </dialog>
+
+<!-- ============ Change price dialog ============ -->
+<dialog class="modal" id="priceDialog" aria-labelledby="priceTitle">
+    <form class="modal__body" id="priceForm" novalidate>
+        <header class="modal__head">
+            <h2 id="priceTitle">Change Price</h2>
+            <button type="button" class="modal__close" data-close aria-label="Close"><?= icon('x') ?></button>
+        </header>
+        <p class="price-item"><strong id="priceProduct"></strong><small class="muted" id="priceSuggested"></small></p>
+        <label class="field">
+            <span class="field__label">Selling price (before VAT)</span>
+            <span class="field__control">
+                <span class="field__prefix"><?= e(config('app.currency')) ?></span>
+                <input id="priceInput" type="text" inputmode="decimal" autocomplete="off" maxlength="12">
+            </span>
+        </label>
+        <label class="field" id="priceReasonField">
+            <span class="field__label">Reason <small class="muted">(required when lower)</small></span>
+            <span class="field__control field__control--plain">
+                <input id="priceReason" type="text" maxlength="255" autocomplete="off" placeholder="e.g. Regular customer, bulk order">
+            </span>
+        </label>
+        <p class="muted price-hint" id="priceHint"></p>
+        <p class="price-cost" id="priceCost" hidden></p>
+        <p class="pay-error" id="priceError" role="alert" hidden></p>
+        <footer class="modal__foot">
+            <button type="button" class="btn btn--light" id="priceReset">Suggested Price</button>
+            <button type="submit" class="btn btn--primary">Apply</button>
+        </footer>
+    </form>
+</dialog>
+
+<!-- ============ Admin approval dialog (price / discount beyond the limits) ============ -->
+<dialog class="modal" id="approveDialog" aria-labelledby="approveTitle">
+    <form class="modal__body" id="approveForm" novalidate autocomplete="off">
+        <header class="modal__head">
+            <h2 id="approveTitle"><?= icon('lock') ?> Admin Approval</h2>
+            <button type="button" class="modal__close" data-close aria-label="Close"><?= icon('x') ?></button>
+        </header>
+        <p class="muted">These need an administrator's approval (beyond your limit or below the allowed price):</p>
+        <ul class="approve-list" id="approveList"></ul>
+        <label class="field">
+            <span class="field__label">Approver username</span>
+            <span class="field__control field__control--plain">
+                <input id="approveUser" type="text" maxlength="50" autocomplete="off" autocapitalize="none" spellcheck="false">
+            </span>
+        </label>
+        <label class="field">
+            <span class="field__label">Approver password</span>
+            <span class="field__control field__control--plain">
+                <input id="approvePass" type="password" maxlength="200" autocomplete="new-password">
+            </span>
+        </label>
+        <p class="pay-error" id="approveError" role="alert" hidden></p>
+        <footer class="modal__foot">
+            <button type="button" class="btn btn--light" data-close>Back</button>
+            <button type="submit" class="btn btn--primary" id="approveSubmit"><?= icon('check') ?> Approve &amp; Complete</button>
+        </footer>
+    </form>
+</dialog>
+
+<template id="approveItemTpl"><li><span class="approve-list__name"></span><strong class="approve-list__price"></strong></li></template>
 
 <iframe id="receiptFrame" class="receipt-frame" title="Receipt printer" tabindex="-1" aria-hidden="true"></iframe>
 

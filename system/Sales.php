@@ -1,8 +1,9 @@
 <?php
 /**
  * Sales: numbering, checkout (transaction + stock deduction), lookup.
- * Prices and totals are always recomputed here from the database;
- * the browser only sends product IDs and quantities.
+ * Prices and totals are always recomputed here from the database; the browser sends product IDs, quantities
+ * and (Phase 9) an actual price per line, which Pricing rules check against the suggested price, the role
+ * limits and the branch cost before anything is saved.
  */
 declare(strict_types=1);
 
@@ -35,7 +36,12 @@ final class Sales
      * @param int|null       $paidCents  cash received (required for cash, ignored otherwise)
      * @param array<int, list<int>> $serialsById product_id => product_serials ids (track_serial products only;
      *                                           their count must equal the quantity)
-     * @throws HttpException 409 when stock / a serial is not available, 422 on invalid data / no branch chosen
+     * @param array<int, array{price?:?int, reason?:?string, approval?:?string}> $pricing product_id => actual price in
+     *        cents (null/missing = suggested), reason (required when lower), approval token from Pricing::approve()
+     * @param ?string $discountApproval approval token for a discount above the role limit
+     * @throws HttpException 409 when stock / a serial is not available, 422 on invalid data / no branch chosen /
+     *         approval needed (details.approval = {lines: [{product_id, name, price}], discount: ?string}),
+     *         403 when the user may not change prices / give discounts
      */
     public static function complete(
         int $userId,
@@ -45,6 +51,8 @@ final class Sales
         float $discountPercent,
         ?int $paidCents,
         array $serialsById = [],
+        array $pricing = [],
+        ?string $discountApproval = null,
     ): array {
         $branchId = Branch::forWrite();
         $location = Branch::defaultLocation($branchId);
@@ -133,8 +141,11 @@ final class Sales
                 // Cost snapshot = the branch moving average (locks product_branches after stock_balances).
                 $cost       = Costing::avg($id, $branchId);
                 $costTotal += Costing::lineCents($qty, $cost);
-                $price      = to_cents($p['price']);
+                $suggested  = to_cents($p['price']);
+                $price      = isset($pricing[$id]['price']) ? (int) $pricing[$id]['price'] : $suggested;
                 $lines[]    = ['id' => $id, 'code' => $p['code'], 'name' => $p['name'], 'price' => $price, 'qty' => $qty,
+                               'suggested' => $suggested, 'reason' => $pricing[$id]['reason'] ?? null,
+                               'approval' => $pricing[$id]['approval'] ?? null, 'approved_by' => null,
                                'cost' => $cost, 'serials' => (int) $p['track_serial'] === 1 ? $serialsById[$id] : []];
                 $subtotal  += $price * $qty;
                 if ((int) $p['track_serial'] === 1) {
@@ -160,6 +171,16 @@ final class Sales
                 );
             }
 
+            // Pricing rules: price changes, limits, below cost, discount (all before anything is written).
+            $discountBp = Pricing::bp($discountPercent);
+            [$needLines, $needDiscount, $discountApprovedBy] = self::checkPricing($lines, $discountBp, $discountApproval, $userId);
+            if ($needLines || $needDiscount !== null) {
+                throw new HttpException(422, 'Admin approval needed: ' . implode(', ', array_merge(
+                    array_map(static fn (array $l): string => $l['name'] . ' at ' . money($l['price']), $needLines),
+                    $needDiscount !== null ? [$needDiscount . '% discount'] : []
+                )) . '.', ['approval' => ['lines' => $needLines, 'discount' => $needDiscount]]);
+            }
+
             // VAT is applied on the discounted amount.
             $vatRate  = (float) setting('vat_rate', '12');
             $discount = (int) round($subtotal * $discountPercent / 100);
@@ -177,9 +198,9 @@ final class Sales
 
             $pdo->prepare(
                 'INSERT INTO sales (sale_no, branch_id, user_id, customer_id, payment_type, status, subtotal, discount_percent,
-                                    discount_amount, vat_rate, vat_amount, total, cost_total, amount_paid, change_amount,
-                                    created_at, completed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
+                                    discount_amount, discount_approved_by, vat_rate, vat_amount, total, cost_total, amount_paid,
+                                    change_amount, created_at, completed_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())'
             )->execute([
                 'TMP' . bin2hex(random_bytes(8)), // replaced with the padded ID below
                 $branchId,
@@ -190,6 +211,7 @@ final class Sales
                 from_cents($subtotal),
                 number_format($discountPercent, 2, '.', ''),
                 from_cents($discount),
+                $discountApprovedBy === 0 ? null : $discountApprovedBy,
                 number_format($vatRate, 2, '.', ''),
                 from_cents($vat),
                 from_cents($total),
@@ -201,14 +223,20 @@ final class Sales
             $saleNo = self::formatNumber($saleId);
             $pdo->prepare('UPDATE sales SET sale_no = ? WHERE id = ?')->execute([$saleNo, $saleId]);
 
+            // Approvals typed at the till are used now (one use each; the rollback frees them on any failure).
+            $lines = self::useApprovals($lines, $discountBp, $discountApproval, $discountApprovedBy, $branchId, $userId, $saleId);
+
             $insertItem = $pdo->prepare(
-                'INSERT INTO sale_items (sale_id, product_id, product_code, product_name, unit_price, unit_cost, quantity, line_total)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO sale_items (sale_id, product_id, product_code, product_name, unit_price, suggested_price, price_reason,
+                                         price_approved_by, unit_cost, quantity, line_total)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             foreach ($lines as $line) {
+                $changed = $line['price'] !== $line['suggested'];
                 $insertItem->execute([
                     $saleId, $line['id'], $line['code'], $line['name'],
-                    from_cents($line['price']), $line['cost'], $line['qty'], from_cents($line['price'] * $line['qty']),
+                    from_cents($line['price']), from_cents($line['suggested']), $changed ? $line['reason'] : null,
+                    $line['approved_by'], $line['cost'], $line['qty'], from_cents($line['price'] * $line['qty']),
                 ]);
                 if ($line['serials']) {
                     Serials::markSold((int) $pdo->lastInsertId(), $line['serials']);
@@ -236,13 +264,101 @@ final class Sales
         ];
     }
 
+    /**
+     * Apply the pricing rules to the sale lines (Pricing). Sets each line's 'reason' (cleaned) and 'approved_by'
+     * (null = no approval needed, the seller's id = self-approved with pos.price_override, 0 = approval token to use).
+     * @return array{0: list<array{product_id:int, name:string, price:string}>, 1: ?string, 2: ?int}
+     *         [lines that still need approval, discount % that still needs approval, discount approved by (as above)]
+     */
+    private static function checkPricing(array &$lines, int $discountBp, ?string $discountApproval, int $userId): array
+    {
+        $limits = Pricing::limits();
+        if ($discountBp > 0 && !$limits['give_discount']) {
+            throw new HttpException(403, 'You do not have permission to give discounts.');
+        }
+        $need = [];
+        foreach ($lines as &$line) {
+            if ($line['price'] < 0 || $line['price'] > Pricing::MAX_PRICE_CENTS) {
+                throw new HttpException(422, "{$line['name']}: enter a valid price.");
+            }
+            $changed = $line['price'] !== $line['suggested'];
+            if ($changed && !$limits['change_price']) {
+                throw new HttpException(403, "You do not have permission to change prices ({$line['name']}).");
+            }
+            $reason = trim(preg_replace('/[\x00-\x1F\x7F]/u', ' ', (string) ($line['reason'] ?? '')) ?? '');
+            $line['reason'] = $reason === '' ? null : mb_substr($reason, 0, 255);
+            if ($line['price'] < $line['suggested'] && ($line['reason'] === null || mb_strlen($line['reason']) < 3)) {
+                throw new HttpException(422, "{$line['name']}: enter the reason for the lower price.");
+            }
+            $needs = Pricing::beyondLimit($line['suggested'], $line['price'], Pricing::bp($limits['price_drop']))
+                  || Pricing::belowCost($line['price'], $discountBp, Costing::toUnits((string) $line['cost']));
+            if (!$needs) {
+                continue;
+            }
+            if ($limits['override']) {
+                $line['approved_by'] = $userId;
+            } elseif (is_string($line['approval']) && $line['approval'] !== '') {
+                $line['approved_by'] = 0;
+            } else {
+                $need[] = ['product_id' => $line['id'], 'name' => $line['name'], 'price' => from_cents($line['price'])];
+            }
+        }
+        unset($line);
+
+        $needDiscount = null;
+        $discountBy   = null;
+        if ($discountBp > Pricing::bp($limits['discount'])) {
+            if ($limits['override']) {
+                $discountBy = $userId;
+            } elseif (is_string($discountApproval) && $discountApproval !== '') {
+                $discountBy = 0;
+            } else {
+                $needDiscount = number_format($discountBp / 100, 2, '.', '');
+            }
+        }
+        return [$need, $needDiscount, $discountBy];
+    }
+
+    /** Use the approval tokens (inside the sale transaction); 422 with details.approval when one no longer fits. */
+    private static function useApprovals(array $lines, int $discountBp, ?string $discountApproval, ?int $discountBy,
+                                         int $branchId, int $userId, int $saleId): array
+    {
+        $failed = [];
+        foreach ($lines as &$line) {
+            if ($line['approved_by'] !== 0) {
+                continue;
+            }
+            $by = Pricing::consume((string) $line['approval'], $branchId, $userId, $line['id'], $line['price'], null, $saleId);
+            if ($by === null) {
+                $failed[] = ['product_id' => $line['id'], 'name' => $line['name'], 'price' => from_cents($line['price'])];
+            } else {
+                $line['approved_by'] = $by;
+            }
+        }
+        unset($line);
+        $discountFailed = null;
+        if ($discountBy === 0) {
+            $by = Pricing::consume((string) $discountApproval, $branchId, $userId, null, null, $discountBp, $saleId);
+            if ($by === null) {
+                $discountFailed = number_format($discountBp / 100, 2, '.', '');
+            } else {
+                db()->prepare('UPDATE sales SET discount_approved_by = ? WHERE id = ?')->execute([$by, $saleId]);
+            }
+        }
+        if ($failed || $discountFailed !== null) {
+            throw new HttpException(422, 'The approval has expired or no longer matches the cart. Ask for approval again.',
+                ['approval' => ['lines' => $failed, 'discount' => $discountFailed]]);
+        }
+        return $lines;
+    }
+
     /** Sale header + items (receipts, sale details). Null if not found or outside the branch scope. */
     public static function find(int $id): ?array
     {
         [$scope, $params] = Branch::scopeSql('s.branch_id');
         $stmt = db()->prepare(
             "SELECT s.*, u.full_name AS cashier_name, COALESCE(c.name, 'Walk-in Customer') AS customer_name,
-                    v.full_name AS voided_by_name,
+                    v.full_name AS voided_by_name, da.full_name AS discount_approved_by_name,
                     b.code AS branch_code, b.name AS branch_name, b.address AS branch_address,
                     b.contact_no AS branch_contact, b.tin_branch_code AS branch_tin
                FROM sales s
@@ -250,6 +366,7 @@ final class Sales
                JOIN branches b ON b.id = s.branch_id
                LEFT JOIN customers c ON c.id = s.customer_id
                LEFT JOIN users v ON v.id = s.voided_by
+               LEFT JOIN users da ON da.id = s.discount_approved_by
               WHERE s.id = ? AND {$scope}"
         );
         $stmt->execute([$id, ...$params]);
@@ -260,8 +377,10 @@ final class Sales
         unset($sale['cost_total']); // receipts / sale view never carry cost: see costs()
 
         $stmt = db()->prepare(
-            'SELECT id, product_id, product_code, product_name, unit_price, quantity, line_total
-               FROM sale_items WHERE sale_id = ? ORDER BY id'
+            'SELECT si.id, si.product_id, si.product_code, si.product_name, si.unit_price, si.suggested_price, si.price_reason,
+                    si.quantity, si.line_total, pa.full_name AS price_approved_by_name
+               FROM sale_items si LEFT JOIN users pa ON pa.id = si.price_approved_by
+              WHERE si.sale_id = ? ORDER BY si.id'
         );
         $stmt->execute([$id]);
         $serials = Serials::forSale($id);

@@ -26,7 +26,7 @@ if (is_post()) {
     [$data, $errors] = Roles::validate($_POST, $role);
 
     if ($errors) {
-        $old = array_intersect_key(array_filter($_POST, 'is_string'), array_flip(['code', 'name', 'description']));
+        $old = array_intersect_key(array_filter($_POST, 'is_string'), array_flip(['code', 'name', 'description', 'max_price_drop', 'max_discount']));
         $old['is_active']   = isset($_POST['is_active']) ? '1' : '0';
         $old['permissions'] = implode(',', array_filter((array) ($_POST['permissions'] ?? []), 'is_string'));
         flash_old($old);
@@ -108,6 +108,28 @@ require ROOT_PATH . '/includes/header.php';
             <?php endif; ?>
         </div>
     </section>
+
+    <?php if (!(int) ($role['is_super'] ?? 0)): ?>
+    <section class="card card--pad">
+        <h2 class="card__title">POS Limits</h2>
+        <p class="muted">How far this role may go at the POS without an admin's approval (needs the POS price / discount permissions below).
+            Selling below cost always needs approval.</p>
+        <div class="form-grid">
+            <label class="form-field">
+                <span class="form-label">Lowest price (% below suggested)</span>
+                <input class="form-input num" type="number" name="max_price_drop" id="maxPriceDrop" min="0" max="100" step="0.01" inputmode="decimal"
+                       value="<?= e($val('max_price_drop') !== '' ? $val('max_price_drop') : '0') ?>"<?= invalid('max_price_drop') ?><?= $locked ? ' disabled' : '' ?>>
+                <?= field_error('max_price_drop') ?>
+            </label>
+            <label class="form-field">
+                <span class="form-label">Highest sale discount (%)</span>
+                <input class="form-input num" type="number" name="max_discount" id="maxDiscount" min="0" max="100" step="0.01" inputmode="decimal"
+                       value="<?= e($val('max_discount') !== '' ? $val('max_discount') : '0') ?>"<?= invalid('max_discount') ?><?= $locked ? ' disabled' : '' ?>>
+                <?= field_error('max_discount') ?>
+            </label>
+        </div>
+    </section>
+    <?php endif; ?>
 
     <section class="card card--pad">
         <h2 class="card__title">Permissions</h2>
