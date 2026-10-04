@@ -50,6 +50,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 12 → 13a | `migrations\012_purchasing.sql` (purchase requests, PO Internal, receiving from a PO; fills the MAR / MLB / CDO letterhead addresses if empty). Run as **root** |
 | Phase 13a → 13b | `migrations\013_customer_orders.sql` (customer orders / PO Outgoing, delivery receipts, billing on account). Run as **root** |
 | Phase 13b → 13c | `migrations\014_collections_quotations.sql` (quotations, collections of on-account bills with withholding taxes). Run as **root** |
+| Phase 13c → 13d | `migrations\015_billing_payables.sql` (credit terms, due dates, check register, supplier invoices and disbursements). Run as **root** |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql
@@ -215,6 +216,18 @@ For one-click printing without the dialog, start Edge/Chrome on the POS PC with 
   acknowledgement (not an official receipt).
 - A collection with taxes withheld waits for the certificate: **2307 Received** records it. A bounced check or a
   mistake: **Cancel Receipt** (branch admin) opens the bills again. A bill with collections can't be voided.
+- **Credit customers**: set the credit terms (days) and limit on the customer (branch admin). Then a branch admin can
+  sell **On account** at the POS and on job bills; the bill is due after the terms, within the limit.
+- **Bills** show the due date and days overdue; **Checks Received** tracks checks on hand → deposited → cleared (a
+  bounced check cancels its collection); **Statement of Account** prints what a customer owes with the aging.
+
+## Payables (what we owe suppliers)
+
+- **Supplier Invoices**: for each posted receiving report, record the supplier's invoice (their invoice no., date,
+  due date from the supplier's terms, amount = the RR total unless it differs). The list shows aging by days overdue.
+- **Pay Supplier**: a **Disbursement Voucher** pays one or more of a supplier's invoices by cash, check, bank or GCash,
+  with the 1% / 2% EWT EXECOM withholds (give the supplier BIR 2307). Print the voucher for the signatures; mark an
+  issued check **cleared**. Branch admins only (it shows costs).
 
 ## Folder structure
 

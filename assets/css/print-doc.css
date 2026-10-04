@@ -92,6 +92,9 @@ body.doc-page {
 .doc__signs span { color: #5d6b82; font-size: 11px; }
 .doc__signs strong { min-height: 20px; margin-top: 30px; padding-top: 4px; border-top: 1px solid #14223b; font-weight: 600; }
 .doc__signs small { color: #8a96aa; font-size: 10px; }
+.doc__signs--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+.doc__aging { margin-top: 12px; }
+.doc__aging th, .doc__aging td { font-size: 11px; }
 
 .doc__foot { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 8px; border-top: 1px solid #e1e7f0; color: #8a96aa; font-size: 10px; }
 

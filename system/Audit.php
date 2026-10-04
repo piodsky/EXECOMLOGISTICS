@@ -35,6 +35,7 @@ final class Audit
         'purchasing'  => 'Purchasing',
         'customer_orders' => 'Customer Orders',
         'collections'     => 'Collections',
+        'payables'        => 'Payables',
         'auth'        => 'Sign-in & Security',
     ];
 

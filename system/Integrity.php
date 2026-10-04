@@ -276,6 +276,16 @@ final class Integrity
                    FROM sales s WHERE s.settled_amount <> 0 OR EXISTS (SELECT 1 FROM collection_lines cl WHERE cl.sale_id = s.id)
              ) x WHERE (x.settled_amount <> x.collected OR x.settled_amount > x.total) AND {scope} ORDER BY x.sale_no", 'x.branch_id');
 
+        // Supplier invoices: paid_amount = posted disbursement lines (cash + EWT), status paid exactly when fully paid.
+        $add('payables', 'Supplier invoice paid amount differs from its disbursements (or its status)',
+            "SELECT x.ap_no, x.branch_id, x.status, x.paid_amount, x.paid_lines FROM (
+                 SELECT i.ap_no, i.branch_id, i.status, i.amount, i.paid_amount,
+                        COALESCE((SELECT SUM(l.amount + l.ewt_amount) FROM disbursement_lines l
+                                    JOIN disbursements d ON d.id = l.disbursement_id WHERE l.invoice_id = i.id AND d.status = 'posted'), 0) AS paid_lines
+                   FROM supplier_invoices i
+             ) x WHERE (x.paid_amount <> x.paid_lines OR x.paid_amount > x.amount OR (x.status = 'paid') <> (x.paid_amount = x.amount AND x.status <> 'cancelled')
+                        OR (x.status = 'cancelled' AND x.paid_amount <> 0)) AND {scope} ORDER BY x.ap_no", 'x.branch_id');
+
         return $checks;
     }
 

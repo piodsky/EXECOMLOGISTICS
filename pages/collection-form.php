@@ -73,7 +73,7 @@ require ROOT_PATH . '/includes/header.php';
 
 <div class="page-head">
     <div>
-        <a class="back-link" href="<?= e(url('pages/collections.php')) ?>"><?= icon('arrow-left') ?> Collections</a>
+        <a class="back-link" href="<?= e(url('pages/collections.php')) ?>"><?= icon('arrow-left') ?> Billing &amp; Collections</a>
         <h1 class="sale-title">Record Collection</h1>
         <p class="muted">A payment received from a customer on bills on account at <strong><?= e(Branch::label()) ?></strong>.</p>
     </div>
@@ -173,7 +173,7 @@ require ROOT_PATH . '/includes/header.php';
                         ?>
                         <tr data-cr-line data-balance="<?= $bal ?>" data-base="<?= $base ?>">
                             <td><strong class="doc-no">No. <?= e($b['sale_no']) ?></strong>
-                                <small class="muted block"><?= e(date('M j, Y', strtotime($b['created_at']))) ?> · <?= number_format((int) $b['days']) ?> days<?= $b['order_no'] ? ' · ' . e($b['order_no']) : '' ?><?= $b['customer_po_no'] ? ' · PO ' . e($b['customer_po_no']) : '' ?></small></td>
+                                <small class="muted block"><?= e(date('M j, Y', strtotime($b['created_at']))) ?><?= $b['due_date'] ? ' · due ' . e(date('M j, Y', strtotime($b['due_date']))) : '' ?><?= (int) $b['days'] > 0 ? ' · ' . number_format((int) $b['days']) . ' days overdue' : '' ?><?= $b['order_no'] ? ' · ' . e($b['order_no']) : '' ?><?= $b['customer_po_no'] ? ' · PO ' . e($b['customer_po_no']) : '' ?></small></td>
                             <td class="num"><?= e(money($b['balance'])) ?></td>
                             <?php foreach (['amount' => 'Cash applied', 'ewt' => 'EWT', 'vat' => 'VAT withheld'] as $k => $lbl): ?>
                                 <td class="num"><input class="form-input num cr-amt" name="lines[<?= $sid ?>][<?= $k ?>]" inputmode="decimal" maxlength="15" placeholder="0.00"

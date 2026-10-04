@@ -191,14 +191,24 @@ final class Sales
             $vat      = (int) round(($subtotal - $discount) * $vatRate / 100);
             $total    = $subtotal - $discount + $vat;
 
+            $dueDate = null;
             if ($paymentType === 'cash') {
                 if ($paidCents === null || $paidCents < $total) {
                     throw new HttpException(422, 'Amount received is less than the total of ' . money(from_cents($total)) . '.');
                 }
+            } elseif ($paymentType === 'charge') { // on account: a credit customer within the limit (Collections::chargeTerms)
+                if (!Auth::can('sales.charge')) {
+                    throw new HttpException(403, 'You do not have permission to sell on account.');
+                }
+                $dueDate   = Collections::chargeTerms($customerId, $total, true);
+                $paidCents = $total; // change 0; amount_paid is set to 0 below
             } else {
                 $paidCents = $total; // GCash / card are charged the exact amount
             }
             $change = $paidCents - $total;
+            if ($paymentType === 'charge') {
+                $paidCents = 0;
+            }
 
             $pdo->prepare(
                 'INSERT INTO sales (sale_no, branch_id, user_id, customer_id, payment_type, status, subtotal, discount_percent,
@@ -225,7 +235,7 @@ final class Sales
             ]);
             $saleId = (int) $pdo->lastInsertId();
             $saleNo = self::formatNumber($saleId);
-            $pdo->prepare('UPDATE sales SET sale_no = ? WHERE id = ?')->execute([$saleNo, $saleId]);
+            $pdo->prepare('UPDATE sales SET sale_no = ?, due_date = ? WHERE id = ?')->execute([$saleNo, $dueDate, $saleId]);
 
             // Approvals typed at the till are used now (one use each; the rollback frees them on any failure).
             $lines = self::useApprovals($lines, $discountBp, $discountApproval, $discountApprovedBy, $branchId, $userId, $saleId);

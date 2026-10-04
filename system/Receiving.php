@@ -670,6 +670,11 @@ final class Receiving
             }
             $rrNo     = (string) $rr['rr_no'];
             $branchId = (int) $rr['branch_id'];
+            $stmt = $pdo->prepare("SELECT ap_no FROM supplier_invoices WHERE receiving_id = ? AND status <> 'cancelled' LIMIT 1");
+            $stmt->execute([$id]);
+            if ($ap = $stmt->fetchColumn()) {
+                throw new HttpException(409, "{$rrNo} is on supplier invoice {$ap}. Cancel that invoice first (Payables).");
+            }
             if ($rr['po_id'] !== null) { // lock order: RR -> PO -> products
                 $pdo->prepare('SELECT id FROM purchase_orders WHERE id = ? FOR UPDATE')->execute([(int) $rr['po_id']]);
                 $pdo->prepare('SELECT id FROM purchase_order_lines WHERE po_id = ? FOR UPDATE')->execute([(int) $rr['po_id']]);

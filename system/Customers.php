@@ -97,6 +97,21 @@ final class Customers
             $errors['email'] = 'Enter a valid email address.';
         }
 
+        // Credit terms ("on account"): only users who may sell on account set them; otherwise they stay as saved.
+        $credit = [];
+        if (array_key_exists('credit_days', $input) && Auth::can('sales.charge')) {
+            $days = input_int($input, 'credit_days', 0, 365);
+            $rawLimit = is_string($input['credit_limit'] ?? null) ? str_replace(',', '', trim($input['credit_limit'])) : '';
+            $limit = $rawLimit === '' ? null : input_decimal(['v' => $rawLimit], 'v', 0, 99999999.99, 2);
+            if ($days === null) {
+                $errors['credit_days'] = 'Enter 0 (cash only) to 365 days.';
+            }
+            if ($rawLimit !== '' && $limit === null) {
+                $errors['credit_limit'] = 'Enter an amount, or leave it blank for no limit.';
+            }
+            $credit = ['credit_days' => $days ?? 0, 'credit_limit' => $limit === null ? null : number_format($limit, 2, '.', '')];
+        }
+
         return [[
             'name'    => $name,
             'phone'   => $phone !== '' ? $phone : null,
@@ -104,7 +119,7 @@ final class Customers
             'address' => $address !== '' ? $address : null,
             'customer_type_id' => $typeId,
             'tin'     => $tin !== '' ? $tin : null,
-        ], $errors];
+        ] + $credit, $errors];
     }
 
     /** Same as check(), but throws the first error as a 422 (for JSON APIs). */
@@ -227,7 +242,7 @@ final class Customers
         }
     }
 
-    private const AUDIT_FIELDS = ['name', 'phone', 'email', 'address', 'customer_type_id', 'tin'];
+    private const AUDIT_FIELDS = ['name', 'phone', 'email', 'address', 'customer_type_id', 'tin', 'credit_days', 'credit_limit'];
 
     /**
      * New customer at the current branch (home branch + visibility link).
@@ -237,12 +252,13 @@ final class Customers
     {
         self::requirePermission('customers.edit', 'You do not have permission to add customers.');
         $branchId = Branch::forWrite();
-        $data += ['customer_type_id' => null, 'tin' => null];
+        $data += ['customer_type_id' => null, 'tin' => null, 'credit_days' => 0, 'credit_limit' => null];
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('INSERT INTO customers (name, phone, email, address, customer_type_id, tin, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
-                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $data['customer_type_id'], $data['tin'], $branchId]);
+            $pdo->prepare('INSERT INTO customers (name, phone, email, address, customer_type_id, tin, credit_days, credit_limit, branch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $data['customer_type_id'], $data['tin'],
+                    $data['credit_days'], $data['credit_limit'], $branchId]);
             $id = (int) $pdo->lastInsertId();
             $pdo->prepare('INSERT INTO customer_branches (customer_id, branch_id) VALUES (?, ?)')->execute([$id, $branchId]);
             if ($contacts) {
@@ -265,11 +281,14 @@ final class Customers
     {
         self::requirePermission('customers.edit', 'You do not have permission to edit customers.');
         $before = self::find($id) ?? throw new HttpException(404, 'Customer not found.');
+        $before['credit_days'] = (int) $before['credit_days'];
+        $data += ['credit_days' => $before['credit_days'], 'credit_limit' => $before['credit_limit']]; // unchanged unless given
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('UPDATE customers SET name = ?, phone = ?, email = ?, address = ?, customer_type_id = ?, tin = ? WHERE id = ?')
-                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $data['customer_type_id'], $data['tin'], $id]);
+            $pdo->prepare('UPDATE customers SET name = ?, phone = ?, email = ?, address = ?, customer_type_id = ?, tin = ?, credit_days = ?, credit_limit = ? WHERE id = ?')
+                ->execute([$data['name'], $data['phone'], $data['email'], $data['address'], $data['customer_type_id'], $data['tin'],
+                    $data['credit_days'], $data['credit_limit'], $id]);
             if ($contacts !== null) {
                 Contacts::replace('customers', $id, $contacts);
             }

@@ -1,12 +1,14 @@
 <?php
 /**
- * Tabs across the Collections pages: open on-account bills (receivables) and collection receipts.
+ * Tabs across the Billing & Collections pages: bills on account, collection receipts, checks received, statements.
  *
- * @var string $collectionsTab 'receivables' | 'receipts'
+ * @var string $collectionsTab 'receivables' | 'receipts' | 'checks' | 'statement'
  */
 $collectionsTabs = [
-    'receivables' => ['Receivables', 'wallet', 'pages/collections.php'],
+    'receivables' => ['Bills', 'wallet', 'pages/collections.php'],
     'receipts'    => ['Collection Receipts', 'receipt', 'pages/collection-receipts.php'],
+    'checks'      => ['Checks Received', 'file', 'pages/checks.php'],
+    'statement'   => ['Statement of Account', 'printer', 'pages/soa.php'],
 ];
 ?>
 <nav class="report-tabs no-print" aria-label="Collections">

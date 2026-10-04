@@ -106,7 +106,7 @@ final class JobBilling
                 throw new HttpException(422, 'There is nothing to charge on this job. Release it without charge instead.');
             }
             $payment = input_string($in, 'payment_type', 10);
-            if (!isset(Sales::PAYMENT_TYPES[$payment])) {
+            if (!isset(Sales::PAYMENT_TYPES[$payment]) && !($payment === 'charge' && Auth::can('sales.charge'))) {
                 throw new HttpException(422, 'Choose the payment type.', ['errors' => ['payment_type' => 'Choose the payment type.']]);
             }
             $rawDisc  = $in['discount_percent'] ?? '';
@@ -141,6 +141,11 @@ final class JobBilling
             } else {
                 $paidCents = $total;
             }
+            $change = $paidCents - $total;
+            $dueDate = null;
+            if ($payment === 'charge') { // on account: the job's customer must be a credit customer (checked below)
+                $change = 0;
+            }
             $costCents = 0;
             foreach ($quote['lines'] as $l) {
                 if ($l['cost'] !== null) {
@@ -155,6 +160,10 @@ final class JobBilling
                 $stmt->execute([(int) $j['customer_id'], (int) $j['branch_id']]);
                 $customerId = $stmt->fetchColumn() !== false ? (int) $j['customer_id'] : null;
             }
+            if ($payment === 'charge') {
+                $dueDate   = Collections::chargeTerms($customerId, $total, true);
+                $paidCents = 0;
+            }
 
             $pdo->prepare(
                 'INSERT INTO sales (sale_no, branch_id, user_id, customer_id, job_order_id, payment_type, status, subtotal, discount_percent,
@@ -163,11 +172,11 @@ final class JobBilling
             )->execute([
                 'TMP' . bin2hex(random_bytes(8)), (int) $j['branch_id'], $userId, $customerId, $jobId, $payment, 'completed',
                 from_cents($subtotal), number_format($discount, 2, '.', ''), from_cents($disc), number_format($vatRate, 2, '.', ''),
-                from_cents($vat), from_cents($total), from_cents($costCents), from_cents($paidCents), from_cents($paidCents - $total),
+                from_cents($vat), from_cents($total), from_cents($costCents), from_cents($paidCents), from_cents($change),
             ]);
             $saleId = (int) $pdo->lastInsertId();
             $saleNo = Sales::formatNumber($saleId);
-            $pdo->prepare('UPDATE sales SET sale_no = ? WHERE id = ?')->execute([$saleNo, $saleId]);
+            $pdo->prepare('UPDATE sales SET sale_no = ?, due_date = ? WHERE id = ?')->execute([$saleNo, $dueDate, $saleId]);
 
             $item = $pdo->prepare(
                 'INSERT INTO sale_items (sale_id, product_id, line_type, product_code, product_name, unit_price, suggested_price, unit_cost, quantity, line_total)

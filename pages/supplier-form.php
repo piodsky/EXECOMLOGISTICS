@@ -102,6 +102,13 @@ require ROOT_PATH . '/includes/header.php';
                     <?= field_error('payment_terms') ?>
                 </label>
                 <label class="form-field">
+                    <span class="form-label">Terms (days)</span>
+                    <input class="form-input num" type="number" name="terms_days" min="0" max="365" step="1" id="supTermsDays"
+                           value="<?= e($val('terms_days') ?: '0') ?>"<?= invalid('terms_days') ?><?= $ro ?>>
+                    <?= field_error('terms_days') ?>
+                    <small class="form-hint">Supplier invoices are due this many days after the invoice date (0 = on receipt).</small>
+                </label>
+                <label class="form-field">
                     <span class="form-label">Phone</span>
                     <input class="form-input" name="phone" maxlength="30" inputmode="tel" value="<?= e($val('phone')) ?>"<?= invalid('phone') ?><?= $ro ?>>
                     <?= field_error('phone') ?>

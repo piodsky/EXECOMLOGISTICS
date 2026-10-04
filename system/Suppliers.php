@@ -9,7 +9,7 @@ declare(strict_types=1);
 
 final class Suppliers
 {
-    private const AUDIT_FIELDS = ['code', 'name', 'tin', 'address', 'phone', 'email', 'payment_terms', 'notes', 'is_active'];
+    private const AUDIT_FIELDS = ['code', 'name', 'tin', 'address', 'phone', 'email', 'payment_terms', 'terms_days', 'notes', 'is_active'];
 
     /** @param array{q:string, status:string} $f */
     public static function count(array $f): int
@@ -88,6 +88,7 @@ final class Suppliers
             'phone'         => input_string($in, 'phone', 30),
             'email'         => input_string($in, 'email', 120),
             'payment_terms' => input_string($in, 'payment_terms', 60),
+            'terms_days'    => is_string($in['terms_days'] ?? null) && trim($in['terms_days']) === '' ? 0 : input_int($in, 'terms_days', 0, 365),
             'notes'         => input_string($in, 'notes', 255),
             'is_active'     => isset($in['is_active']) ? 1 : 0,
         ];
@@ -115,6 +116,10 @@ final class Suppliers
         }
         if ($data['email'] !== '' && filter_var($data['email'], FILTER_VALIDATE_EMAIL) === false) {
             $errors['email'] = 'Enter a valid email address.';
+        }
+        if ($data['terms_days'] === null) {
+            $errors['terms_days'] = 'Enter 0 to 365 days.';
+            $data['terms_days'] = 0;
         }
         foreach (['tin', 'address', 'phone', 'email', 'payment_terms', 'notes'] as $key) {
             $data[$key] = $data[$key] !== '' ? $data[$key] : null;
@@ -209,7 +214,8 @@ final class Suppliers
      */
     public static function deleteBlocker(int $id): ?string
     {
-        $checks = ['receiving_reports' => 'it has receiving reports', 'purchase_orders' => 'it has purchase orders']; // fixed table names, never input
+        $checks = ['receiving_reports' => 'it has receiving reports', 'purchase_orders' => 'it has purchase orders',
+                   'supplier_invoices' => 'it has supplier invoices', 'disbursements' => 'it has disbursements']; // fixed table names, never input
         foreach ($checks as $table => $reason) {
             $stmt = db()->prepare("SELECT 1 FROM {$table} WHERE supplier_id = ? LIMIT 1");
             $stmt->execute([$id]);

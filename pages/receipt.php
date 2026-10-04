@@ -99,7 +99,11 @@ $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at'])
         <div class="row grand"><span>TOTAL</span><span><?= e(money($sale['total'])) ?></span></div>
         <hr>
         <div class="row"><span><?= e(Sales::ALL_PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?></span><span><?= e(number_format((float) $sale['amount_paid'], 2)) ?></span></div>
-        <div class="row"><span>Change</span><span><?= e(number_format((float) $sale['change_amount'], 2)) ?></span></div>
+        <?php if ($sale['payment_type'] === 'charge'): ?>
+            <div class="row"><span>Balance due<?= $sale['due_date'] ? ' ' . e(date('m/d/Y', strtotime($sale['due_date']))) : '' ?></span><span><?= e(number_format((float) $sale['total'] - (float) $sale['settled_amount'], 2)) ?></span></div>
+        <?php else: ?>
+            <div class="row"><span>Change</span><span><?= e(number_format((float) $sale['change_amount'], 2)) ?></span></div>
+        <?php endif; ?>
     </div>
     <hr>
 
