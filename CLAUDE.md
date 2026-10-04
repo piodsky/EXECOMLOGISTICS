@@ -73,7 +73,7 @@ Read this first; open only the files a task needs.
 - `FORCE_HTTPS` (.env, default false): `force_https()` in bootstrap redirects http → https (GET 301, other 308) and
   `send_security_headers()` adds HSTS on https. `zend.exception_ignore_args=1` outside debug; password parameters
   carry `#[SensitiveParameter]`. Apache ServerTokens / expose_php are documented for go-live (not changed here).
-      Next (v2 phase 10): data migration from the legacy system (if wanted) / go-live.
+      Next: go-live preparation (no legacy Globalchips data migration: user decision 2026-10-04).
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
