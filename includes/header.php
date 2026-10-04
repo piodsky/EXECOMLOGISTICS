@@ -28,7 +28,7 @@ $hdrSearch = Auth::can('pos.access') ? ['pages/pos.php', 'q'] : (Auth::can('inve
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= e(Csrf::token()) ?>">
     <title><?= e($page['title'] ?? 'POS') ?> · <?= e(config('app.name')) ?> POS</title>
-    <link rel="icon" href="<?= e(asset('img/favicon.svg')) ?>" type="image/svg+xml">
+    <link rel="icon" href="<?= e(asset('img/favicon.png')) ?>" type="image/png">
     <link rel="stylesheet" href="<?= e(asset('css/app.css')) ?>">
     <?php foreach ($pageStyles ?? [] as $style): ?>
         <link rel="stylesheet" href="<?= e(asset($style)) ?>">
@@ -42,7 +42,7 @@ $hdrSearch = Auth::can('pos.access') ? ['pages/pos.php', 'q'] : (Auth::can('inve
     </button>
 
     <a class="brand" href="<?= e(home_url()) ?>">
-        <img class="brand__logo" src="<?= e(asset('img/logo-mark.svg')) ?>" alt="" width="46" height="46">
+        <img class="brand__logo" src="<?= e(asset('img/execom-mark.png')) ?>" alt="" width="46" height="46">
         <span class="brand__text">
             <strong>EXECOM</strong>
             <small>LOGISTICS</small>

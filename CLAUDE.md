@@ -12,7 +12,7 @@ Read this first; open only the files a task needs.
 - [x] Phase 1: full EXECOM rebrand of everything: database.sql (5 IT categories, 12 mockup products ITM-0001..0012,
       4 sample sales), config/.env, auth, layout, POS (`pages/pos.php`, `assets/js/pos.js`, `api/pos/*`), receipt,
       Inventory (`pages/inventory.php`, `pages/product-form.php`), Customers, stock audit (`stock_movements`),
-      12 sample illustrations `assets/uploads/products/sample-itm-000N.png`, logo `assets/img/logo-mark.svg`.
+      12 sample illustrations `assets/uploads/products/sample-itm-000N.png`, logo = the EXECOM mark `assets/img/execom-mark.png` (512px, cropped from the old system's HD logo, white tile in CSS) + `favicon.png`.
 - [x] Phase 2: Sales History `pages/sales-history.php` (+ `assets/css/sales.css`) and sale details `pages/sale-view.php`
       (reprint, admin Void with reason). `Sales::count/search/summary/cashiers/void`, `input_date()` helper,
       `[data-open]` dialog opener in app.js. Migration `migrations/002_phase2_sales_history.sql`
@@ -72,6 +72,11 @@ Read this first; open only the files a task needs.
   (mysqldump --single-transaction → `C:\EXECOM-Backups\execomlogistics_db-<stamp>.sql.gz`, keep 30 days, backup.log),
   `restore-test.ps1` (loads into execom_restore_test, row counts + stock rule, drops it), `install-backup-task.ps1`
   (scheduled task "EXECOM Database Backup", daily 21:00). Keep the .ps1 files ASCII-only.
+- `tools/seed-demo.php` (CLI, `--password=... [--env=scratch.env] [--days=120]`): ~4 months of demo activity at MAR / MLB / CDO through
+  the domain classes, backdated with MariaDB `SET timestamp`; runs once (refuses when POs / jobs / customer orders
+  exist); demo users maradmin, mlbadmin, cdoadmin, mlbcashier, cdocashier, martech, martech2, mlbtech (password from
+  `--password`, never committed: the GitHub repo is public). The live DB was seeded on 2026-10-04 at the user's request (backup before:
+  `%TEMP%\execom-backups\execomlogistics_db-before-demo-data.sql`): it must be reset before real go-live.
 - Legacy folders (CoffeeSystem, Globalchips 2010 on User, NewEXECOM, NewEXECOM - Copy BACKUP 92726, SystemsMISPYO)
   were moved to `C:\xampp\legacy-apps` (not web-reachable).
 - Audit module `auth` (global, label "Sign-in & Security"): login (branch = home), login_failed (ref = attempted

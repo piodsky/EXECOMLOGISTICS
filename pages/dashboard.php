@@ -29,6 +29,8 @@ $workload = Dashboard::workload();
 $override = Dashboard::overridesToday();
 $transit  = Dashboard::inTransit();
 $low      = Reports::lowStock(8);
+$canInventory = can_open_menu(config('menu')['inventory']);
+$canTransfers = can_open_menu(config('menu')['transfers']);
 $activity = Dashboard::recentActivity(8);
 $jobMax   = max($jobs ?: [0]);
 $canJobs  = Auth::canAny(...JobOrders::VIEW_PERMISSIONS);
@@ -153,7 +155,7 @@ require ROOT_PATH . '/includes/header.php';
                 <thead><tr><th>Product</th><th class="num">On hand</th><th class="num">Low at</th></tr></thead>
                 <tbody>
                 <?php foreach ($low as $p): ?>
-                    <tr><td><?= e($p['name']) ?><small class="muted block"><?= e($p['code']) ?></small></td>
+                    <tr><td><?php if ($canInventory): ?><a class="item-cell__name" href="<?= e(url('pages/product-form.php?id=' . (int) $p['id'])) ?>"><?= e($p['name']) ?></a><?php else: ?><?= e($p['name']) ?><?php endif; ?><small class="muted block"><?= e($p['code']) ?></small></td>
                         <td class="num<?= (int) $p['stock'] === 0 ? ' is-neg' : '' ?>"><?= (int) $p['stock'] ?></td><td class="num"><?= (int) $p['reorder_level'] ?></td></tr>
                 <?php endforeach; ?>
                 <?php if (!$low): ?><tr><td colspan="3" class="empty"><?= icon('check') ?> Every product is above its low-stock level.</td></tr><?php endif; ?>
@@ -166,7 +168,7 @@ require ROOT_PATH . '/includes/header.php';
         <header class="card__head"><h2><?= icon('tag') ?> Today</h2></header>
         <dl class="detail-list dash-today">
             <div><dt>Lower prices &amp; discounts</dt><dd id="dashOverrides"><a href="<?= e(url('pages/report-pricing.php?' . http_build_query(['from' => $today, 'to' => $today]))) ?>"><?= $override['count'] ?> · <?= e(money($override['amount'])) ?> given</a></dd></div>
-            <div><dt>Transfers in transit</dt><dd id="dashTransit"><?= $transit['transfers'] ?> (<?= number_format($transit['units']) ?> units)<?= $transit['late'] > 0 ? ' · <span class="text-danger">' . $transit['late'] . ' over 3 days</span>' : '' ?></dd></div>
+            <div><dt>Transfers in transit</dt><dd id="dashTransit"><?php if ($canTransfers && $transit['transfers'] > 0): ?><a href="<?= e(url('pages/transfers.php?status=released')) ?>"><?= $transit['transfers'] ?> (<?= number_format($transit['units']) ?> units)</a><?php else: ?><?= $transit['transfers'] ?> (<?= number_format($transit['units']) ?> units)<?php endif; ?><?= $transit['late'] > 0 ? ' · <span class="text-danger">' . $transit['late'] . ' over 3 days</span>' : '' ?></dd></div>
         </dl>
         <?php if ($activity): ?>
             <h3 class="dash-sub">Recent activity</h3>

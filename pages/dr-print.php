@@ -20,7 +20,7 @@ if ($d === null) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= e($d['dr_no']) ?> · Delivery Receipt</title>
-    <link rel="icon" href="<?= e(asset('img/favicon.svg')) ?>" type="image/svg+xml">
+    <link rel="icon" href="<?= e(asset('img/favicon.png')) ?>" type="image/png">
     <link rel="stylesheet" href="<?= e(asset('css/print-doc.css')) ?>">
 </head>
 <body class="doc-page">

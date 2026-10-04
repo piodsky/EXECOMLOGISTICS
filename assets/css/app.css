@@ -146,7 +146,7 @@ kbd {
     color: var(--on-dark);
     text-decoration: none;
 }
-.brand__logo { display: block; width: 46px; height: 46px; }
+.brand__logo { display: block; width: 46px; height: 46px; padding: 2px; border-radius: 12px; background: #fff; object-fit: contain; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); } /* EXECOM mark on a white tile */
 .brand__text { display: flex; flex-direction: column; }
 .brand__text strong { font-size: 27px; font-weight: 800; letter-spacing: .6px; line-height: 1; }
 .brand__text small { margin-top: 5px; font-size: 11px; letter-spacing: 7px; color: var(--on-dark-muted); }
@@ -690,6 +690,9 @@ a.stat--link:hover { border-color: var(--accent); transform: translateY(-1px); }
 .item-cell { display: flex; align-items: center; gap: 12px; }
 .item-cell__name { color: var(--text); font-weight: 600; text-decoration: none; }
 .item-cell__name:hover { color: var(--primary); text-decoration: underline; }
+/* The main link of a list row (number / name) looks like a link; the whole row opens it too (app.js .row-link). */
+a.item-cell__name { color: var(--primary); }
+.table tbody tr.row-link { cursor: pointer; }
 .thumb {
     display: grid;
     place-items: center;
@@ -904,7 +907,7 @@ textarea.form-input { resize: vertical; min-height: 84px; }
     color: var(--on-dark);
 }
 .login__brand-inner { max-width: 380px; }
-.login__logo { display: block; width: 80px; height: 80px; }
+.login__logo { display: block; width: 80px; height: 80px; padding: 3px; border-radius: 18px; background: #fff; object-fit: contain; box-shadow: 0 4px 14px rgba(15, 23, 42, .18); }
 .login__brand h1 { margin-top: 18px; font-size: 40px; font-weight: 800; letter-spacing: 1px; }
 .login__sub { margin-top: 6px; letter-spacing: 9px; font-size: 14px; color: var(--on-dark-muted); }
 .login__tagline {
