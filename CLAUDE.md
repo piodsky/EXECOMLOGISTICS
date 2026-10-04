@@ -47,7 +47,24 @@ Read this first; open only the files a task needs.
 - [x] Phase 10b (= v2 phase 7, part 2): job parts (request → issue to job custody → used / returned), billing on the
       job page (a sale that does not deduct parts again), release (paid / warranty / no charge), back-jobs.
       Migration `migrations/010_job_parts_billing.sql`. Built without agents.
-      Next (v2 phase 8): reports & role dashboards.
+- [x] Phase 11 (= v2 phase 8): Dashboard + reports (profit, job orders & technicians, price overrides & discounts,
+      branch comparison). No schema change (no migration). Built without agents.
+      Next (v2 phase 9): audit & security hardening.
+
+## Dashboard & reports (Phase 11) — user decisions
+- Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
+  cashiers (POS) and technicians (Job Orders) keep their landing pages. Loaded on open, Refresh button, no polling.
+  `Dashboard` class: KPIs (today, month, profit with products.cost, stock value at cost with products.cost else price,
+  open jobs), "Needs you" tiles (concrete branch, per permission: transfers approve/release/incoming, counts to
+  approve, RR drafts, parts to issue, jobs ready / unassigned / waiting for the customer), branch rows (All branches),
+  last 7 days, jobs by status + technician workload, low stock, overrides today, transit, recent audit (audit_logs.view).
+- Reports tabs (`includes/reports-nav.php`, period travels with the tabs; shared `includes/report-kit.php` +
+  `includes/report-filter.php`): Sales (`reports.php`), Profit (`report-profit.php`, products.cost; sale level =
+  subtotal − discount − cost_total, uncosted sales footnoted; items before the sale discount, labour no cost), Job
+  Orders (`report-jobs.php`: received / completed / released / back-jobs by event date, avg days, job bill revenue
+  parts + labour, technicians, devices, oldest open), Price Overrides (`report-pricing.php`: lines below suggested
+  + discounts, by cashier), Branches (`report-branches.php`, `Branch::canSeeAll()` only, ignores the scope). Each
+  has `?export=csv`. Queries live in `Reports` (alias `lines` must be backticked in MariaDB).
 - Existing DBs need a migration file in `migrations/`, not a re-import.
 
 ## Job orders (Phase 10a) — user decisions
@@ -367,7 +384,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (396 checks incl. job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (407 checks incl. dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

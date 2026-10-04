@@ -135,6 +135,8 @@ require ROOT_PATH . '/includes/header.php';
     </div>
 </div>
 
+<?php $reportTab = 'sales'; require ROOT_PATH . '/includes/reports-nav.php'; ?>
+
 <!-- One filter row scopes every sales figure below -->
 <section class="card report-filters no-print" aria-label="Report period">
     <nav class="quick-ranges" aria-label="Quick periods">

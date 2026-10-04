@@ -131,7 +131,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -159,12 +159,14 @@ function Text([string]$sel) { Eval "document.querySelector('$sel')?.textContent.
 function Check([bool]$cond, [string]$label) {
     if ($cond) { Write-Output "PASS  $label" } else { Write-Output "FAIL  $label"; $script:fails++ }
 }
-function Login([string]$u, [string]$p, [string]$landing = 'pos.php') {
+# Default landing: POS (cashiers) or Dashboard (admins with reports.view, Phase 11).
+function Login([string]$u, [string]$p, [string]$landing = '') {
     Nav "$Base/login.php"
     [void](Eval 'localStorage.clear()')
     [void](Eval "document.querySelector('[name=username]').value='$u'; document.querySelector('[name=password]').value='$p'; document.querySelector('.login__form').submit()")
     Start-Sleep -Milliseconds 500
-    WaitFor "location.pathname.endsWith('/pages/$landing') && document.readyState==='complete'" "redirect to $landing"
+    $cond = if ($landing) { "location.pathname.endsWith('/pages/$landing')" } else { "/\/pages\/(pos|dashboard)\.php$/.test(location.pathname)" }
+    WaitFor "$cond && document.readyState==='complete'" "redirect to $(if ($landing) { $landing } else { 'home' })"
 }
 function Logout {
     [void](Eval "document.querySelector('form.topbar__logout').submit()")
@@ -479,10 +481,12 @@ try {
     # Ids from database.sql: branch 1 = MAR (main), 4 = DAV; product 2 = Mouse, 11 = Webcam; sales 1-5 are MAR.
     Nav "$Base/pages/pos.php"
     Logout
-    Login 'admin' 'admin123'
+    Login 'admin' 'admin123' 'dashboard.php'
+    Check $true 'admin lands on the Dashboard'
     $sel = Eval "(() => { const s = document.getElementById('branchSelect'); return s ? s.options[s.selectedIndex].textContent : ''; })()"
     Check ($sel -like 'MAR*Maramag City') "admin branch chip shows MAR ($sel)"
     Check ((Eval "[...document.querySelectorAll('#branchSelect option')].map(o => o.value).sort().join(',')") -eq '0,1,2,3,4,5') 'switcher: All (0) + 5 branches'
+    Nav "$Base/pages/pos.php"
     SwitchBranch 0
     WaitFor "location.pathname.endsWith('/pages/pos.php')" 'back on POS'
     Check ((Eval "!!document.getElementById('chooseBranchNotice')") -and (Eval "document.querySelectorAll('.product-card').length") -eq 0) 'POS with All branches asks to choose a branch'
@@ -542,7 +546,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'POS Sales|Sales History|Job Orders|Inventory|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -1485,6 +1489,41 @@ try {
     Nav "$Base/pages/stock-integrity.php"
     Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after job parts (All branches): $(Text '#integritySummary span')"
     SwitchBranch 1
+
+    # ---- Phase 11: dashboard + reports ----
+    Nav "$Base/pages/dashboard.php"
+    Check (Eval "!!document.getElementById('dashToday') && !!document.getElementById('dashProfit') && !!document.getElementById('needsYou') && !document.getElementById('dashBranches')") 'dashboard (super admin, MAR): KPIs incl. profit, Needs You, no branch table'
+    Check ((Eval "document.querySelectorAll('#dashWeek .barlist__row').length") -eq 7 -and (Eval "getComputedStyle(document.querySelector('#dashWeek .bar')).fill") -eq 'rgb(42, 120, 214)') 'dashboard: last 7 days, bars in the chart blue'
+    Shot '43-dashboard'
+    SwitchBranch 0
+    Nav "$Base/pages/dashboard.php"
+    Check ((Eval "document.querySelectorAll('#dashBranches tbody tr').length") -eq 5 -and (Eval "!document.getElementById('needsYou')")) 'dashboard (All branches): 5 branch rows, no Needs You'
+    Nav "$Base/pages/report-branches.php"
+    $net = Sql "SELECT FORMAT(COALESCE(SUM(total), 0), 2) FROM sales WHERE status = 'completed' AND created_at >= CURDATE() - INTERVAL 29 DAY"
+    Check ((Text '#branchNetTotal') -like "*$net") "branch comparison: total of all branches = completed sales, last 30 days ($net)"
+    Nav "$Base/pages/report-pricing.php"
+    $ov = Sql "SELECT COUNT(*) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.status = 'completed' AND si.unit_price < si.suggested_price AND s.created_at >= CURDATE() - INTERVAL 29 DAY"
+    Check ([int]$ov -ge 2 -and (Eval "document.querySelectorAll('#ovLinesTable tbody tr').length") -eq [int]$ov) "price overrides report lists the $ov lowered lines"
+    Nav "$Base/pages/report-profit.php"
+    $pf = Sql "SELECT FORMAT(COALESCE(SUM(subtotal - discount_amount - cost_total), 0), 2) FROM sales WHERE status = 'completed' AND cost_total IS NOT NULL AND created_at >= CURDATE() - INTERVAL 29 DAY"
+    Check ((Text '#profitTotal') -like "*$pf") "profit report (All branches): gross profit $pf ($(Text '#profitTotal'))"
+    Nav "$Base/pages/report-jobs.php"
+    $jr = Sql "SELECT COUNT(*) FROM job_orders WHERE created_at >= CURDATE() - INTERVAL 29 DAY"
+    Check ((Text '#jobsReceived') -eq $jr -and (Eval "document.querySelectorAll('#jobTechnicians tbody tr[data-tech]').length") -ge 1) "jobs report: $jr received + technician rows"
+    $csv = Eval "fetch('$Base/pages/report-jobs.php?export=csv').then(r => r.headers.get('content-type') + '|' + r.status)"
+    Check ($csv -like 'text/csv*|200') "jobs report CSV ($csv)"
+    SwitchBranch 1
+    Logout
+    Login 'davadmin' $script:pw 'dashboard.php'
+    Nav "$Base/pages/reports.php"
+    $tabs = Eval "[...document.querySelectorAll('.report-tab')].map(a => a.dataset.tab).join(',')"
+    Check ($tabs -eq 'sales,profit,jobs,pricing' -and (Status 'pages/report-branches.php') -eq 403) "branch admin lands on the Dashboard; report tabs $tabs; branch comparison 403"
+    Logout
+    Login 'cashier' 'cashier123' 'pos.php'
+    $st = "$(Status 'pages/dashboard.php'),$(Status 'pages/report-profit.php'),$(Status 'pages/report-jobs.php'),$(Status 'pages/report-pricing.php')"
+    Check ($st -eq '403,403,403,403') "cashier still lands on the POS; dashboard and reports 403 ($st)"
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

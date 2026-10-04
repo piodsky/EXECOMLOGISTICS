@@ -8,6 +8,13 @@
 declare(strict_types=1);
 
 return [
+    // Admins (reports.view) land here; cashiers and technicians do not have it and land on POS / Job Orders.
+    'dashboard' => [
+        'label'      => 'Dashboard',
+        'icon'       => 'grid',
+        'url'        => 'pages/dashboard.php',
+        'permission' => 'reports.view',
+    ],
     'pos' => [
         'label'      => 'POS Sales',
         'icon'       => 'home',

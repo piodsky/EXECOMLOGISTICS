@@ -5,7 +5,8 @@
    ===================================================================== */
 
 .reports-root,
-body[data-page="reports"] {
+body[data-page="reports"],
+body[data-page="dashboard"] {
     --series-1: #2a78d6;
     --series-1-hover: #5598e7;
     --chart-grid: #e6ebf2;
@@ -156,3 +157,21 @@ body[data-page="reports"] {
     .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .report-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Report tabs (Phase 11) */
+.report-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.report-tab { display: inline-flex; align-items: center; gap: 8px; margin-bottom: -1px; padding: 10px 16px; border-bottom: 2px solid transparent;
+    color: var(--text-muted); font-weight: 600; text-decoration: none; }
+.report-tab .icon { width: 18px; height: 18px; }
+.report-tab:hover { color: var(--text); }
+.report-tab.is-active { border-bottom-color: var(--primary); color: var(--primary); }
+
+/* Report tables (profit, jobs, overrides, branches) */
+.report-table td.num, .report-table th.num { white-space: nowrap; }
+.report-table .is-neg { color: var(--danger); }
+.report-table tfoot th, .report-table tfoot td { border-top: 2px solid var(--border); font-weight: 700; }
+.kpis--5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.kpi__sub { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+@media (max-width: 1200px) { .kpis--5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .report-table .col-opt { display: none; } }
+@media (max-width: 700px) { .kpis--5 { grid-template-columns: minmax(0, 1fr); } }
+@media print { .report-tabs { display: none !important; } }

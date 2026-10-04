@@ -45,6 +45,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 8 → 9 | `migrations\008_pos_pricing.sql` (POS pricing: actual price, limits, approvals) |
 | Phase 9 → 10a | `migrations\009_job_orders.sql` (job orders & technicians, quotation threshold) |
 | Phase 10a → 10b | `migrations\010_job_parts_billing.sql` (job parts, billing & release, back-jobs) |
+| Phase 10b → 11 | nothing: Dashboard and the new reports use the existing tables (just copy the files) |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql

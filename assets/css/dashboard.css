@@ -1,0 +1,9 @@
+/* Dashboard (Phase 11). Builds on reports.css + stock-docs.css (.op-tiles) + transfers.css (.bt-count). */
+.dash-needs { margin: 0; padding: 0 16px 16px; }
+.dash-workload { margin-top: 12px; }
+.dash-today { margin-bottom: 12px; }
+.dash-sub { margin: 16px 0 8px; font-size: 14px; }
+.dash-activity { display: grid; gap: 8px; margin: 0 0 12px; padding: 0; list-style: none; }
+.dash-activity li { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; font-size: 13px; }
+.dash-activity li small { grid-column: 2; }
+.dash-activity .badge { justify-self: start; }
