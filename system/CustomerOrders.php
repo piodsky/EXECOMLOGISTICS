@@ -168,8 +168,9 @@ final class CustomerOrders
             'SELECT o.*, b.code AS branch_code, b.name AS branch_name, c.phone AS customer_phone, c.tin AS customer_tin,
                     c.is_active AS customer_active, ct.name AS customer_type,
                     cu.full_name AS created_by_name, su.full_name AS submitted_by_name, au.full_name AS confirmed_by_name,
-                    xu.full_name AS closed_by_name
+                    xu.full_name AS closed_by_name, qt.quote_no
                FROM customer_orders o
+               LEFT JOIN quotations qt ON qt.id = o.quotation_id
                JOIN branches b ON b.id = o.branch_id
                JOIN customers c ON c.id = o.customer_id
                LEFT JOIN customer_types ct ON ct.id = c.customer_type_id
@@ -303,6 +304,7 @@ final class CustomerOrders
             'procurement_mode'  => $text('procurement_mode', 60),
             'award_ref'         => $text('award_ref', 100),
             'notes'             => $text('notes', 500),
+            'quotation_id'      => input_int($in, 'quotation_id', 1),
             'items'             => [],
         ];
         $customerIds = array_map('intval', array_column(self::customers(), 'id'));
@@ -409,10 +411,13 @@ final class CustomerOrders
                 $pdo->prepare(
                     'INSERT INTO customer_orders (customer_id, customer_name, customer_address, customer_po_no, customer_po_date, end_user,
                                                   place_of_delivery, delivery_term, due_date, payment_term, procurement_mode, award_ref, notes,
-                                                  branch_id, warehouse_id, location_id, status, created_by)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-                )->execute([...$header, $branchId, $location['warehouse_id'], $location['id'], 'draft', $userId]);
+                                                  branch_id, warehouse_id, location_id, status, created_by, quotation_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                )->execute([...$header, $branchId, $location['warehouse_id'], $location['id'], 'draft', $userId, $d['quotation_id'] ?? null]);
                 $id = (int) $pdo->lastInsertId();
+                if (($d['quotation_id'] ?? null) !== null) { // made from a sent quotation: it is won
+                    Quotations::markWon((int) $d['quotation_id'], $id, $branchId, (int) $d['customer_id']);
+                }
                 $before = null;
             } else {
                 $o = self::lock($id);
@@ -474,6 +479,9 @@ final class CustomerOrders
             $before = self::auditValues($o, self::auditLines($id));
             db()->prepare('DELETE FROM customer_order_lines WHERE order_id = ?')->execute([$id]);
             db()->prepare('DELETE FROM customer_orders WHERE id = ?')->execute([$id]);
+            if ($o['quotation_id'] !== null) {
+                Quotations::reopen((int) $o['quotation_id']);
+            }
             Audit::record('customer_orders', 'delete', 'customer_order', $id, 'Draft Order #' . $id, $before, null, (int) $o['branch_id']);
             return '';
         });

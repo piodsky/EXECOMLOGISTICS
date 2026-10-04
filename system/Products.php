@@ -438,10 +438,11 @@ final class Products
                                UNION ALL SELECT 1 FROM job_order_parts WHERE product_id = ?
                                UNION ALL SELECT 1 FROM purchase_request_lines WHERE product_id = ?
                                UNION ALL SELECT 1 FROM purchase_order_lines WHERE product_id = ?
-                               UNION ALL SELECT 1 FROM customer_order_lines WHERE product_id = ? LIMIT 1');
-        $stmt->execute([$id, $id, $id, $id, $id, $id]);
+                               UNION ALL SELECT 1 FROM customer_order_lines WHERE product_id = ?
+                               UNION ALL SELECT 1 FROM quotation_lines WHERE product_id = ? LIMIT 1');
+        $stmt->execute([$id, $id, $id, $id, $id, $id, $id]);
         if ($stmt->fetchColumn()) {
-            throw new HttpException(409, "{$product['name']} has stock or purchasing documents (transfers, counts, write-offs, branch transfers, job parts, purchase or customer orders), so it can't be deleted. Deactivate it instead to hide it from the POS.");
+            throw new HttpException(409, "{$product['name']} has stock or purchasing documents (transfers, counts, write-offs, branch transfers, job parts, purchase or customer orders, quotations), so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
         $pdo = db();
         $pdo->beginTransaction();

@@ -48,7 +48,8 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 10b → 11 | nothing: Dashboard and the new reports use the existing tables (just copy the files) |
 | Phase 11 → 12 | `migrations\011_security_indexes.sql` (indexes only), then the tools in *Security, database user & backups* below |
 | Phase 12 → 13a | `migrations\012_purchasing.sql` (purchase requests, PO Internal, receiving from a PO; fills the MAR / MLB / CDO letterhead addresses if empty). Run as **root** |
-| Phase 13a → 13b | `migrations_customer_orders.sql` (customer orders / PO Outgoing, delivery receipts, billing on account). Run as **root** |
+| Phase 13a → 13b | `migrations\013_customer_orders.sql` (customer orders / PO Outgoing, delivery receipts, billing on account). Run as **root** |
+| Phase 13b → 13c | `migrations\014_collections_quotations.sql` (quotations, collections of on-account bills with withholding taxes). Run as **root** |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql
@@ -198,6 +199,22 @@ For one-click printing without the dialog, start Edge/Chrome on the POS PC with 
   The bill is a normal sale (Sales History, reports) that does not deduct the stock again; print the **Billing
   Statement**. Voiding the bill makes the receipts billable again.
 - **Order Tracking** shows customer orders still to confirm / deliver / bill and purchase orders still coming in.
+- **Quotations** (first tab): your price quotation for a customer's RFQ / canvass (`QT-<branch>-<year>-NNNNNN`,
+  printed on the letterhead with VAT, validity, delivery / payment terms, warranty). Mark it **sent**; when the customer
+  awards it, **Create Customer PO** fills the order from it (enter their PO number), and the quotation becomes *Won*.
+  Otherwise mark it *Lost* or cancel it. A quotation reserves no stock.
+
+## Collections (bills on account)
+
+- **Receivables**: every bill "On account" that is not fully paid, oldest first, with the total owed and aging tiles
+  (0–30, 31–60, 61–90, over 90 days since the bill).
+- **Record Collection**: choose the customer, enter the payment (cash, check with bank and check date, bank deposit or
+  GCash, with the check / reference no.) and, per bill, the cash applied plus the taxes the customer withheld:
+  **EWT** 1% (goods) / 2% (services) for BIR Form 2307 and **5% final VAT** for government offices (BIR 2306), both
+  on the amount before VAT. "Pay All in Full" fills it in. The receipt `CR-<branch>-<year>-NNNNNN` prints as an
+  acknowledgement (not an official receipt).
+- A collection with taxes withheld waits for the certificate: **2307 Received** records it. A bounced check or a
+  mistake: **Cancel Receipt** (branch admin) opens the bills again. A bill with collections can't be voided.
 
 ## Folder structure
 

@@ -60,7 +60,9 @@ Read this first; open only the files a task needs.
       reservation, Delivery Receipts (stock out, serials, IAR), billing (a sale linked to the order, no second stock
       deduction; cash / GCash / card / on account), order tracking, DR + billing statement prints.
       Migration `migrations/013_customer_orders.sql`. Built without agents.
-- [ ] Phase 13c (optional): quotation / RFQ, collections of on-account bills with withholding tax (BIR 2307).
+- [x] Phase 13c: Quotations (RFQ → quotation → won = customer PO) and Collections of on-account bills (receivables
+      aging, collection receipts with EWT 2307 / VAT withheld 2306, certificate tracking). Migration
+      `migrations/014_collections_quotations.sql`. Built without agents.
 
 ## Security & operations (Phase 12) — user decisions
 - MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
@@ -136,6 +138,30 @@ Read this first; open only the files a task needs.
   Integrity checks `delivery_movements`, `delivered_serials`, `customer_order_lines`. Prints `dr-print.php`,
   `bill-print.php` (billing statement, "not an official receipt"). Dashboard tiles: to confirm / deliver / bill / overdue.
   Customers / products / branches with orders can't be deleted; serial history shows deliveries.
+
+## Quotations & collections (Phase 13c) — user decisions (my suggestions, approved with "go")
+- Quotations = first tab of Customer Orders (`quotations.php`, `quote-form.php`, `quote-view.php`, `quote-print.php`),
+  class `Quotations`, permission `customer_orders.manage` (view: any customer orders permission), audit module
+  `customer_orders` (entity `quotation`). Numbered at create `QT-<BR>-<YEAR>-NNNNNN` (never deleted, cancel instead):
+  draft (edit) → sent (revise = back to draft) → won / lost (reason); draft / sent → cancelled (reason). No stock
+  reserved. `co-form.php?quote=ID` (sent, same branch) prefills the order; `CustomerOrders::saveDraft` with
+  `quotation_id` calls `Quotations::markWon` (same branch + customer); deleting that draft order → `reopen` (sent).
+  `customer_orders.quotation_id`. Lock order customer_orders → quotations.
+- Collections = menu "Collections" (`collections`, icon `wallet`, after Customer Orders), tabs Receivables
+  (`collections.php`, aging 0–30 / 31–60 / 61–90 / 90+ days since the bill) / Collection Receipts
+  (`collection-receipts.php`, totals cash / EWT / VAT withheld) (`includes/collections-nav.php`). Class `Collections`,
+  permissions `collections.manage` (branch_admin, cashier) and `collections.cancel` (branch_admin), audit module
+  `collections`. Receivable = completed sale with payment_type `charge` and `sales.settled_amount` < total.
+- `collection-form.php?customer=ID` (concrete branch; bills of that branch only): date (not future), method cash /
+  check (check no. required) / bank / GCash (reference required), bank, check date; per bill cash + EWT (2307) + VAT
+  withheld (2306), credited ≤ balance (server-checked under the sale row locks). `assets/js/collections.js` fills
+  "Full" with the chosen rates on the amount before VAT (default 1% + 5% for customer type Government). Posted at
+  once `CR-<BR>-<YEAR>-NNNNNN`; form_2307 pending when anything was withheld → received (date). Cancel (reason)
+  subtracts again. `Sales::void` refuses a bill with settled_amount > 0. Lock order collections → sales → sequence.
+- Prints `collection-print.php` (acknowledgement, "not an official receipt"); bill-print shows collections and the
+  balance; sale-view shows Collected / Balance / receipts. Dashboard tiles: bills on account over 30 days,
+  certificates to receive. Integrity check `collections` (settled = posted lines, ≤ total). Customers / products /
+  branches with quotations or collections can't be deleted. Migration `migrations/014_collections_quotations.sql`.
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
@@ -470,7 +496,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (460 checks incl. customer orders (order -> reservation -> DR -> bill on account -> return / close / void), purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (475 checks incl. quotations + collections (quote -> customer PO -> bill on account -> collection with EWT / VAT withheld, 2307, void guard, cancel), customer orders (order -> reservation -> DR -> bill on account -> return / close / void), purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

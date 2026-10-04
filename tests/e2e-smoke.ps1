@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -548,7 +548,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Customer Orders|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Customer Orders|Collections|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -1720,6 +1720,60 @@ try {
     Check ((Eval "!!document.getElementById('trackOut') && !!document.getElementById('trackIn')")) 'order tracking: outgoing customer orders + incoming purchase orders'
     $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'customer_orders'"
     Check ([int]$a -ge 8) "customer order actions are in the audit log ($a)"
+
+    # ---- Phase 13c: quotation -> customer PO -> bill on account -> collection with withholding taxes ----
+    Logout
+    Login 'cashier' 'cashier123' 'pos.php'
+    Nav "$Base/pages/quote-form.php"
+    Submit "window.confirm = () => true; const f = document.getElementById('quoteForm'); f.customer_id.value = '$cust'; f.rfq_no.value = 'RFQ-2026-0311'; f.attention.value = 'BAC Secretariat'; const t = document.querySelectorAll('#docLines tbody[data-line]')[0]; t.querySelector('[data-product]').value = '7'; t.querySelector('[data-qty]').value = '2'; t.querySelector('[data-price-input]').value = '3200'; document.getElementById('addLine').click(); const u = [...document.querySelectorAll('#docLines tbody[data-line]')].pop(); u.querySelector('[data-product]').value = '2'; u.querySelector('[data-qty]').value = '4'; u.querySelector('[data-price-input]').value = '330'; u.querySelector('[data-reason]').value = 'Government price'; document.getElementById('sendQuoteBtn').click()" 'cashier prepares a quotation and marks it sent'
+    $qt = Sql 'SELECT MAX(id) FROM quotations'
+    $qtNo = Sql "SELECT quote_no FROM quotations WHERE id = $qt"
+    Check ($qtNo -like 'QT-MAR-*-000001' -and (Text '#quoteStatus') -eq 'Sent' -and (Sql "SELECT subtotal FROM quotations WHERE id = $qt") -eq '7720.00') "quotation $qtNo sent (2 x 3,200 + 4 x 330 = 7,720 before VAT)"
+    Nav "$Base/pages/quote-print.php?id=$qt"
+    Check ((Text '#quoteNo') -eq $qtNo -and (Text '#quotePrintTotal') -like '*8,646.40' -and (Eval "document.body.textContent.includes('RFQ-2026-0311')")) "printed quotation: number, RFQ, total with VAT ($(Text '#quotePrintTotal'))"
+    Shot '46-quote-print'
+    Nav "$Base/pages/quote-view.php?id=$qt"
+    Nav (Eval "document.getElementById('quoteOrder').href")
+    Check ((Eval "!!document.getElementById('coFromQuote') && document.querySelectorAll('#docLines tbody[data-line]').length === 2")) 'Create Customer PO: order form prefilled from the quotation'
+    Submit "window.confirm = () => true; const f = document.getElementById('coForm'); f.customer_po_no.value = 'DEPED-PO-2026-0099'; document.getElementById('submitCoBtn').click()" 'customer PO from the quotation'
+    $co2 = Sql 'SELECT MAX(id) FROM customer_orders'
+    Check ((Sql "SELECT CONCAT(q.status, ':', q.order_id = o.id, ':', o.quotation_id = q.id, ':', o.subtotal) FROM quotations q JOIN customer_orders o ON o.id = $co2 WHERE q.id = $qt") -eq 'won:1:1:7720.00') 'quotation won by the customer PO (linked both ways, same amount)'
+    Logout
+
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/co-view.php?id=$co2"
+    Submit "window.confirm = () => true; document.getElementById('coConfirm').click()" 'confirm the order from the quotation'
+    Nav "$Base/pages/dr-form.php?order=$co2"
+    Submit "window.confirm = () => true; document.getElementById('releaseDrBtn').click()" 'deliver everything'
+    Nav "$Base/pages/co-view.php?id=$co2"
+    Check ((Text '#coQuote') -eq $qtNo) 'order shows its quotation'
+    Submit "window.confirm = () => true; document.getElementById('coBillBtn').click(); const f = document.getElementById('billForm'); f.payment_type.value = 'charge'; f.requestSubmit()" 'bill on account'
+    $bill2 = Sql "SELECT MAX(id) FROM sales WHERE customer_order_id = $co2"
+    Check ((Sql "SELECT CONCAT(payment_type, ':', total, ':', settled_amount) FROM sales WHERE id = $bill2") -eq 'charge:8646.40:0.00') 'bill on account 8,646.40, nothing collected'
+    Nav "$Base/pages/collections.php"
+    Check ((Eval "!!document.querySelector('#arTable tr[data-bill]') && document.getElementById('arTotal').textContent.includes('8,646.40')")) "receivables: the bill is open ($(Text '#arTotal'))"
+    Shot '47-receivables'
+    Nav "$Base/pages/collection-form.php?customer=$cust"
+    Submit "window.confirm = () => true; document.getElementById('crEwtRate').value = '1'; document.getElementById('crVatRate').value = '5'; document.getElementById('crFillAll').click(); const f = document.getElementById('crForm'); f.method.value = 'check'; f.reference.value = 'LBP-778899'; f.bank_name.value = 'Landbank Maramag'; document.getElementById('crSubmit').click()" 'collect by check with 1% EWT + 5% VAT withheld'
+    $cr = Sql 'SELECT MAX(id) FROM collections'
+    $crNo = Sql "SELECT collection_no FROM collections WHERE id = $cr"
+    Check ($crNo -like 'CR-MAR-*-000001' -and (Sql "SELECT CONCAT(amount_received, ':', ewt_total, ':', vat_withheld_total, ':', form_2307) FROM collections WHERE id = $cr") -eq '8183.20:77.20:386.00:pending') "${crNo}: cash 8,183.20 + EWT 77.20 (1% of 7,720) + VAT 386.00 (5%), 2307 pending"
+    Check ((Sql "SELECT total = settled_amount FROM sales WHERE id = $bill2") -eq '1') 'the bill is fully settled'
+    Nav "$Base/pages/sale-view.php?id=$bill2"
+    Check ((Text '#saleBalance') -like '*0.00') "sale view: balance $(Text '#saleBalance')"
+    Submit "window.confirm = () => true; document.getElementById('voidBtn').click(); const f = document.querySelector('#voidDialog form'); f.reason.value = 'Testing the guard'; f.requestSubmit()" 'try to void a collected bill'
+    Check ((Sql "SELECT status FROM sales WHERE id = $bill2") -eq 'completed' -and (Eval "document.body.textContent.includes('has collections')")) 'a collected bill cannot be voided'
+    Nav "$Base/pages/collection-view.php?id=$cr"
+    Submit "document.getElementById('crFormBtn').click(); document.querySelector('#formDialog form').requestSubmit()" '2307 received'
+    Check ((Sql "SELECT form_2307 FROM collections WHERE id = $cr") -eq 'received') 'withholding certificate recorded'
+    Nav "$Base/pages/collection-print.php?id=$cr"
+    Check ((Text '#crNo') -eq $crNo -and (Text '#crPrintReceived') -like '*8,183.20') 'printed collection receipt'
+    Shot '48-collection-print'
+    Nav "$Base/pages/collection-view.php?id=$cr"
+    Submit "window.confirm = () => true; document.getElementById('crCancelBtn').click(); document.getElementById('crCancelReason').value = 'Check bounced (DAIF)'; document.getElementById('crCancelReason').form.requestSubmit()" 'cancel the collection'
+    Check ((Text '#crStatus') -eq 'Cancelled' -and (Sql "SELECT settled_amount FROM sales WHERE id = $bill2") -eq '0.00') 'cancelled: the bill is open again'
+    $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'collections'"
+    Check ([int]$a -ge 3) "collections are in the audit log ($a)"
     Logout
     Login 'admin' 'admin123' 'dashboard.php'
     SwitchBranch 0

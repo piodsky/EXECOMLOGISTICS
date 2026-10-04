@@ -203,6 +203,8 @@ final class Branches
             'purchase_requests' => 'it has purchase requests',
             'purchase_orders'   => 'it has purchase orders',
             'customer_orders'   => 'it has customer orders',
+            'quotations'        => 'it has quotations',
+            'collections'       => 'it has collections',
         ];
         $stmt = db()->prepare('SELECT 1 FROM stock_transfers WHERE from_branch_id = ? OR to_branch_id = ? LIMIT 1');
         $stmt->execute([$id, $id]);

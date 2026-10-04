@@ -564,7 +564,7 @@ final class Sales
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total, s.job_order_id, s.customer_order_id FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
+            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total, s.job_order_id, s.customer_order_id, s.settled_amount FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
             $stmt->execute([$id, ...$scopeParams]);
             $sale = $stmt->fetch() ?: throw new HttpException(404, 'Sale not found.');
             if ($sale['status'] === 'cancelled') {
@@ -572,6 +572,9 @@ final class Sales
             }
             if ($sale['status'] !== 'completed') {
                 throw new HttpException(409, 'Only completed sales can be voided.');
+            }
+            if (to_cents((string) $sale['settled_amount']) > 0) { // payments were collected on this on-account bill
+                throw new HttpException(409, "Sale No. {$sale['sale_no']} has collections. Cancel them first (Collections), then void the bill.");
             }
 
             // A job order bill: the parts left stock when they were issued and stay installed, so nothing is

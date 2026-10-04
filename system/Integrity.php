@@ -267,6 +267,15 @@ final class Integrity
                    FROM customer_orders o JOIN customer_order_lines l ON l.order_id = o.id
              ) x WHERE (x.qty_delivered <> x.dr_qty OR x.qty_billed <> x.billed_qty) AND {scope} ORDER BY x.order_no, x.product_id", 'x.branch_id');
 
+        // On-account bills: settled_amount = posted collections (cash + taxes withheld), never above the total.
+        $add('collections', 'Bill settled amount differs from its collections (or exceeds the bill)',
+            "SELECT x.sale_no, x.branch_id, x.total, x.settled_amount, x.collected FROM (
+                 SELECT s.sale_no, s.branch_id, s.total, s.settled_amount,
+                        COALESCE((SELECT SUM(cl.amount + cl.ewt_amount + cl.vat_withheld) FROM collection_lines cl
+                                    JOIN collections c ON c.id = cl.collection_id WHERE cl.sale_id = s.id AND c.status = 'posted'), 0) AS collected
+                   FROM sales s WHERE s.settled_amount <> 0 OR EXISTS (SELECT 1 FROM collection_lines cl WHERE cl.sale_id = s.id)
+             ) x WHERE (x.settled_amount <> x.collected OR x.settled_amount > x.total) AND {scope} ORDER BY x.sale_no", 'x.branch_id');
+
         return $checks;
     }
 
