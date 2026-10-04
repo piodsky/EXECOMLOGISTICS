@@ -18,5 +18,6 @@ if ($branchId === null || !Branch::switchTo($branchId)) {
     abort(403, 'You do not have access to that branch.');
 }
 
+Audit::record('auth', 'branch_switch', 'branch', $branchId ?: null, Branch::label(), null, null, $branchId ?: null);
 flash('info', 'Now working in: ' . Branch::label() . '.');
 redirect('pages/' . safe_return($_POST['return'] ?? null, basename(home_path())));

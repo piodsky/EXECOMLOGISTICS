@@ -11,7 +11,7 @@ declare(strict_types=1);
 final class Audit
 {
     /** Company-wide master data: logged without a branch (only access_all users see these rows). */
-    private const GLOBAL_MODULES = ['roles', 'branches', 'settings', 'products', 'master_data', 'suppliers'];
+    private const GLOBAL_MODULES = ['roles', 'branches', 'settings', 'products', 'master_data', 'suppliers', 'auth'];
 
     /** Keys never written to the log. */
     private const SECRET_KEYS = ['password', 'password_hash', 'password_confirm', 'current_password', '_csrf', 'csrf', 'token'];
@@ -32,6 +32,7 @@ final class Audit
         'warehouses'  => 'Warehouses',
         'transfers'   => 'Transfers',
         'job_orders'  => 'Job Orders',
+        'auth'        => 'Sign-in & Security',
     ];
 
     /**

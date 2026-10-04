@@ -1,0 +1,2 @@
+# Maintenance scripts (backups, database users) - never served by the web server.
+Require all denied

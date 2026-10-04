@@ -71,9 +71,10 @@ try {
     if ($sql -notmatch "USE $testDb;" -or $sql -match 'execomlogistics_db') { throw 'database.sql rewrite failed; not importing.' }
     $sqlFile = Join-Path $Out 'e2e-database.sql'
     [IO.File]::WriteAllText($sqlFile, $sql, $utf8)
-    $mysqlArgs = @('-h', (EnvValue 'DB_HOST' '127.0.0.1'), '-P', (EnvValue 'DB_PORT' '3306'), '-u', (EnvValue 'DB_USER' 'root'), '--default-character-set=utf8mb4')
+    # Admin account for the test DB (create / drop / import; the app itself runs as DB_USER, e.g. execom_app).
+    $mysqlArgs = @('-h', (EnvValue 'DB_HOST' '127.0.0.1'), '-P', (EnvValue 'DB_PORT' '3306'), '-u', (EnvValue 'E2E_DB_USER' 'root'), '--default-character-set=utf8mb4')
     try {
-        $env:MYSQL_PWD = EnvValue 'DB_PASS' ''
+        $env:MYSQL_PWD = EnvValue 'E2E_DB_PASS' ''
         $import = Start-Process 'C:\xampp\mysql\bin\mysql.exe' -ArgumentList $mysqlArgs -RedirectStandardInput $sqlFile `
             -RedirectStandardError (Join-Path $Out 'e2e-import.err') -NoNewWindow -Wait -PassThru
     } finally {
@@ -196,7 +197,7 @@ $script:pw = 'Mindanao#2026'
 # Query the TEST database only ($testDb); returns the rows joined by spaces.
 function Sql([string]$q) {
     try {
-        $env:MYSQL_PWD = EnvValue 'DB_PASS' ''
+        $env:MYSQL_PWD = EnvValue 'E2E_DB_PASS' ''
         $o = & 'C:\xampp\mysql\bin\mysql.exe' @mysqlArgs -N -B $testDb -e $q 2>&1
     } finally { Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue }
     return (($o | ForEach-Object { "$_" }) -join ' ').Trim()
@@ -1525,6 +1526,22 @@ try {
     Logout
     Login 'admin' 'admin123' 'dashboard.php'
 
+    # ---- Phase 12: security events, audit export, override audit ----
+    Logout
+    Nav "$Base/login.php"
+    Submit "document.querySelector('[name=username]').value = 'cashier'; document.querySelector('[name=password]').value = 'wrong-pass-123'; document.querySelector('.login__form').submit()" 'failed login'
+    Check ((Text '.alert span') -like '*Invalid username or password*') 'wrong password refused'
+    Login 'admin' 'admin123' 'dashboard.php'
+    $ev = Sql "SELECT CONCAT((SELECT COUNT(*) FROM audit_logs WHERE module = 'auth' AND action = 'login_failed' AND entity_ref = 'cashier' AND new_values LIKE '%wrong password%' AND new_values NOT LIKE '%wrong-pass%'), ':', (SELECT COUNT(*) FROM audit_logs WHERE module = 'auth' AND action = 'login' AND entity_ref = 'admin'), ':', (SELECT COUNT(*) FROM audit_logs WHERE module = 'auth' AND action = 'logout'), ':', (SELECT COUNT(*) FROM audit_logs WHERE module = 'auth' AND action = 'branch_switch'))"
+    $evp = $ev.Split(':')
+    Check ($evp[0] -eq '1' -and [int]$evp[1] -ge 2 -and [int]$evp[2] -ge 1 -and [int]$evp[3] -ge 1) "audit: failed login (no password), logins, logouts, branch switches ($ev)"
+    $po = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'sales' AND action = 'price_override'"
+    Check ([int]$po -ge 3) "audit: POS sales with lowered prices / discounts recorded ($po)"
+    Nav "$Base/pages/audit-log.php?module=auth"
+    Check ((Eval "document.body.textContent.includes('login failed') || document.body.textContent.includes('login_failed')") -and (Eval "!!document.getElementById('auditCsv')")) 'audit log: Sign-in & Security filter shows the failed login; Export CSV'
+    $csv = Eval "fetch(document.getElementById('auditCsv').href).then(r => r.text().then(t => r.headers.get('content-type') + '|' + t.includes('login_failed') + '|' + !t.includes('wrong-pass')))"
+    Check ($csv -like 'text/csv*|true|true') "audit CSV export ($csv)"
+
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"
     Check ($n -gt 30) "icons.svg valid XML ($n icons)"
@@ -1540,6 +1557,18 @@ try {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.CommandLine -like "*$prof*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
+
+# --- FORCE_HTTPS (Phase 12) on the test copy only: http -> https 301 for GET, 308 for POST ---
+try {
+    $envCopy = Join-Path $e2eDir '.env'
+    $saved = [IO.File]::ReadAllText($envCopy)
+    [IO.File]::WriteAllText($envCopy, $saved + "`nFORCE_HTTPS=true`n", (New-Object Text.UTF8Encoding $false))
+    $g = & curl.exe -s -o NUL -w '%{http_code} %{redirect_url}' "$Base/login.php"
+    $p = & curl.exe -s -o NUL -w '%{http_code}' -X POST "$Base/login.php"
+    [IO.File]::WriteAllText($envCopy, $saved, (New-Object Text.UTF8Encoding $false))
+    $h = & curl.exe -s -o NUL -w '%{http_code}' "$Base/login.php"
+    Check ($g -like '301 https://localhost/*/login.php' -and $p -eq '308' -and $h -eq '200') "FORCE_HTTPS: GET 301 to https, POST 308; off again: 200 ($g / $p / $h)"
+} catch { Write-Output "FAIL  FORCE_HTTPS check: $($_.Exception.Message)"; $script:fails++ }
 
 # --- Stock integrity in the test DB (after the browser part) ---
 try {

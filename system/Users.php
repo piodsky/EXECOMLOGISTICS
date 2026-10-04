@@ -120,7 +120,7 @@ final class Users
     // ------------------------------------------------------------------
 
     /** Why a password is not acceptable, or null if it is fine. */
-    public static function passwordProblem(string $password, string $username = ''): ?string
+    public static function passwordProblem(#[SensitiveParameter] string $password, string $username = ''): ?string
     {
         if (strlen($password) < self::MIN_PASSWORD) {
             return 'Use at least ' . self::MIN_PASSWORD . ' characters.';
@@ -377,7 +377,7 @@ final class Users
     }
 
     /** New password hash. Other sessions of that user end on their next request (see Auth::user()). */
-    public static function setPassword(int $id, string $password): void
+    public static function setPassword(int $id, #[SensitiveParameter] string $password): void
     {
         db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')
             ->execute([password_hash($password, PASSWORD_DEFAULT), $id]);
@@ -460,7 +460,7 @@ final class Users
     }
 
     /** Change your own password after confirming the current one. @return array<string,string> field errors */
-    public static function changeOwnPassword(int $id, string $current, string $new, string $confirm): array
+    public static function changeOwnPassword(int $id, #[SensitiveParameter] string $current, #[SensitiveParameter] string $new, #[SensitiveParameter] string $confirm): array
     {
         $stmt = db()->prepare('SELECT username, password_hash FROM users WHERE id = ?');
         $stmt->execute([$id]);

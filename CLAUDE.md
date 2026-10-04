@@ -49,7 +49,31 @@ Read this first; open only the files a task needs.
       Migration `migrations/010_job_parts_billing.sql`. Built without agents.
 - [x] Phase 11 (= v2 phase 8): Dashboard + reports (profit, job orders & technicians, price overrides & discounts,
       branch comparison). No schema change (no migration). Built without agents.
-      Next (v2 phase 9): audit & security hardening.
+- [x] Phase 12 (= v2 phase 9): audit & security hardening — sign-in / security events in the audit log, POS
+      override audit, audit CSV export, dedicated MySQL users, backups + restore test + nightly task, FORCE_HTTPS +
+      HSTS (off until go-live), sensitive parameters, legacy folders moved out of htdocs, indexes
+      (`migrations/011_security_indexes.sql`). Built without agents.
+
+## Security & operations (Phase 12) — user decisions
+- MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
+  localhost / 127.0.0.1); `execom_backup` (SELECT, SHOW VIEW, TRIGGER, LOCK TABLES) for backups. Created / rotated by
+  `tools/setup-db-users.ps1` (random passwords into the live .env). Migrations and imports run as **root**.
+  e2e imports with `E2E_DB_USER` / `E2E_DB_PASS` (default root, no password); the test copy runs as execom_app.
+  Scratch PHP tests on other DBs need `DB_USER=root` + `DB_PASS=` in their scratch env file.
+- `tools/` (web-blocked): `env.ps1` (shared .env reader/writer, Invoke-Mysql with MYSQL_PWD), `backup.ps1`
+  (mysqldump --single-transaction → `C:\EXECOM-Backups\execomlogistics_db-<stamp>.sql.gz`, keep 30 days, backup.log),
+  `restore-test.ps1` (loads into execom_restore_test, row counts + stock rule, drops it), `install-backup-task.ps1`
+  (scheduled task "EXECOM Database Backup", daily 21:00). Keep the .ps1 files ASCII-only.
+- Legacy folders (CoffeeSystem, Globalchips 2010 on User, NewEXECOM, NewEXECOM - Copy BACKUP 92726, SystemsMISPYO)
+  were moved to `C:\xampp\legacy-apps` (not web-reachable).
+- Audit module `auth` (global, label "Sign-in & Security"): login (branch = home), login_failed (ref = attempted
+  username, reason; never the password), login_locked, approval_failed (till approver), logout, branch_switch.
+  `sales.price_override` = POS sale with lowered lines / discount (suggested → actual, reason, approver). Audit log
+  Export CSV (filters, newest 5,000).
+- `FORCE_HTTPS` (.env, default false): `force_https()` in bootstrap redirects http → https (GET 301, other 308) and
+  `send_security_headers()` adds HSTS on https. `zend.exception_ignore_args=1` outside debug; password parameters
+  carry `#[SensitiveParameter]`. Apache ServerTokens / expose_php are documented for go-live (not changed here).
+      Next (v2 phase 10): data migration from the legacy system (if wanted) / go-live.
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
@@ -259,7 +283,7 @@ Read this first; open only the files a task needs.
 - Nothing coffee-related anywhere (names, icons, colors, sample data). CSS tokens are neutral:
   `--navy-*`, `--primary`, `--primary-700/400`, `--accent`, `--surface`, `--surface-2`, `--bg`, `--border`.
 - Company address/phone/TIN in `settings` are placeholders until the user gives real ones (don't invent them).
-- Keep folders clean (`config/ system/ includes/ pages/ api/ assets/ storage/ tests/`, `.env`).
+- Keep folders clean (`config/ system/ includes/ pages/ api/ assets/ storage/ tests/ tools/`, `.env`).
 - **Use the agent workflow** (user request) for every non-trivial task, see below.
 
 ## Agent workflow (`.claude/agents/`)
@@ -384,7 +408,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (407 checks incl. dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (413 checks incl. security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

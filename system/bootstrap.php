@@ -30,9 +30,12 @@ error_reporting(E_ALL);
 ini_set('display_errors', config('app.debug') ? '1' : '0');
 ini_set('log_errors', '1');
 ini_set('error_log', ROOT_PATH . '/storage/logs/php-errors.log');
+// Stack traces in the logs never show argument values (passwords, form data) outside debug mode.
+ini_set('zend.exception_ignore_args', config('app.debug') ? '0' : '1');
 
 date_default_timezone_set((string) config('app.timezone', 'Asia/Manila'));
 mb_internal_encoding('UTF-8');
 
+force_https();
 send_security_headers();
 Session::start();

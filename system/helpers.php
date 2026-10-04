@@ -492,6 +492,25 @@ function handle_exception(Throwable $e): void
     abort(500, $message);
 }
 
+/**
+ * FORCE_HTTPS=true: plain-http requests are redirected to https (GET/HEAD 301, other methods 308 so a form post is
+ * not turned into a GET). Off by default (local XAMPP has no certificate).
+ */
+function force_https(): void
+{
+    if (!config('app.security.force_https', false) || is_https() || PHP_SAPI === 'cli' || headers_sent()) {
+        return;
+    }
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9.\-]+(:\d+)?$/', $host)) {
+        abort(400, 'Bad request.');
+    }
+    $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+    header('Location: https://' . preg_replace('/:\d+$/', '', $host) . (string) ($_SERVER['REQUEST_URI'] ?? '/'),
+        true, in_array($method, ['GET', 'HEAD'], true) ? 301 : 308);
+    exit;
+}
+
 function send_security_headers(): void
 {
     if (headers_sent()) {
@@ -502,6 +521,9 @@ function send_security_headers(): void
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: same-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), payment=()');
+    if (is_https() && config('app.security.force_https', false)) {
+        header('Strict-Transport-Security: max-age=31536000'); // browsers then refuse plain http for a year
+    }
     header(content_security_policy("'none'"));
     // Pages hold sales data: never cache (also stops "Back" after Logout showing a page).
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');

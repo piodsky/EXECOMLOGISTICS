@@ -245,6 +245,26 @@ final class Sales
                 Stock::move($line['id'], $location, -$line['qty'], 'sale', null, $saleId, $userId);
             }
 
+            // Audit lowered prices and discounts (who, how much, reason, approver); plain sales are their own record.
+            $lowered = array_values(array_filter($lines, static fn (array $l): bool => $l['price'] < $l['suggested']));
+            if ($lowered || $discount > 0) {
+                $ids = array_filter([...array_column($lowered, 'approved_by'), $discountApprovedBy]);
+                $names = [];
+                if ($ids) {
+                    $in_  = implode(',', array_fill(0, count($ids), '?'));
+                    $stmt = $pdo->prepare("SELECT id, full_name FROM users WHERE id IN ({$in_})");
+                    $stmt->execute(array_values($ids));
+                    $names = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+                }
+                Audit::record('sales', 'price_override', 'sale', $saleId, $saleNo, null, array_filter([
+                    'lines' => array_map(static fn (array $l): string => "{$l['code']} x{$l['qty']}: " . from_cents($l['suggested']) . ' -> '
+                        . from_cents($l['price']) . ($l['reason'] !== null ? " ({$l['reason']})" : '')
+                        . ($l['approved_by'] ? ' approved by ' . ($names[$l['approved_by']] ?? $l['approved_by']) : ''), $lowered) ?: null,
+                    'discount' => $discount > 0 ? number_format($discountPercent, 2, '.', '') . '% = ' . from_cents($discount)
+                        . ($discountApprovedBy ? ' approved by ' . ($names[$discountApprovedBy] ?? $discountApprovedBy) : '') : null,
+                ], static fn ($v) => $v !== null), $branchId);
+            }
+
             $pdo->commit();
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {

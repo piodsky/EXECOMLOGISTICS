@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009 and 010.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010, 011) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009, 010 and 011.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -408,6 +408,7 @@ CREATE TABLE customers (
   KEY idx_customers_name (name),
   KEY idx_customers_branch (branch_id),
   KEY idx_customers_type (customer_type_id),
+  KEY idx_customers_phone (phone),
   CONSTRAINT fk_customers_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_customers_type FOREIGN KEY (customer_type_id) REFERENCES customer_types (id)
@@ -1042,6 +1043,9 @@ CREATE TABLE job_orders (
   KEY idx_job_orders_released_by (released_by),
   KEY idx_job_orders_sale (sale_id),
   KEY idx_job_orders_parent (parent_job_id),
+  KEY idx_job_orders_branch_created (branch_id, created_at),
+  KEY idx_job_orders_completed (completed_at),
+  KEY idx_job_orders_released (released_at),
   CONSTRAINT fk_job_orders_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_job_orders_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
@@ -1240,6 +1244,7 @@ CREATE TABLE audit_logs (
   KEY idx_audit_module_date (module, occurred_at),
   KEY idx_audit_entity (entity_type, entity_id),
   KEY idx_audit_user_date (user_id, occurred_at),
+  KEY idx_audit_date (occurred_at),
   CONSTRAINT fk_audit_user FOREIGN KEY (user_id) REFERENCES users (id)
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT fk_audit_branch FOREIGN KEY (branch_id) REFERENCES branches (id)

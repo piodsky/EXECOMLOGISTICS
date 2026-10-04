@@ -24,6 +24,8 @@ return [
     'security' => [
         'login_max_attempts' => (int) Env::get('LOGIN_MAX_ATTEMPTS', 5),
         'lockout_minutes'    => (int) Env::get('LOGIN_LOCKOUT_MINUTES', 15),
+        // Go-live over the internet / VPN: redirect http -> https and send HSTS (needs a working certificate).
+        'force_https'        => (bool) Env::get('FORCE_HTTPS', false),
     ],
 
     // Roles and permissions live in the database (roles, role_permissions) and config/permissions.php.

@@ -24,6 +24,7 @@ final class Auth
         $minutes = max(1, (int) config('app.security.lockout_minutes', 15));
 
         if (self::isLockedOut($username, $ip, $max, $minutes)) {
+            self::securityEvent('login_locked', $username, ['minutes' => $minutes]);
             return ['ok' => false, 'error' => "Too many failed attempts. Please wait {$minutes} minutes and try again."];
         }
 
@@ -39,10 +40,12 @@ final class Auth
 
         if (!$valid) {
             self::recordAttempt($username, $ip, false);
+            self::securityEvent('login_failed', $username, ['reason' => $user ? 'wrong password' : 'unknown username']);
             return ['ok' => false, 'error' => 'Invalid username or password.'];
         }
 
         if ((int) $user['is_active'] !== 1) {
+            self::securityEvent('login_failed', $username, ['reason' => 'account disabled']);
             return ['ok' => false, 'error' => 'This account is disabled. Please contact the administrator.'];
         }
         if ($user['role_id'] === null || (int) $user['role_active'] !== 1) {
@@ -64,6 +67,7 @@ final class Auth
             ->execute([$username, $ip]);
         self::recordAttempt($username, $ip, true);
         self::login((int) $user['id']);
+        Audit::record('auth', 'login', 'user', (int) $user['id'], $username, null, null, (int) $user['branch_id']);
 
         return ['ok' => true];
     }
@@ -90,6 +94,7 @@ final class Auth
         $user = $stmt->fetch();
         if (!password_verify($password, $user ? $user['password_hash'] : self::DUMMY_HASH) || $user === false) {
             self::recordAttempt($username, $ip, false);
+            self::securityEvent('approval_failed', $username, ['reason' => 'wrong approver credentials']);
             throw new HttpException(422, 'Invalid username or password.');
         }
         if ((int) $user['is_active'] !== 1 || $user['role_id'] === null || (int) $user['role_active'] !== 1) {
@@ -130,6 +135,9 @@ final class Auth
 
     public static function logout(): void
     {
+        if (($u = self::user()) !== null) {
+            Audit::record('auth', 'logout', 'user', (int) $u['id'], (string) $u['username'], null, null, (int) $u['branch_id']);
+        }
         self::$user        = null;
         self::$loaded      = true;
         self::$permissions = null;
@@ -328,6 +336,19 @@ final class Auth
             return $url;
         }
         return home_url();
+    }
+
+    /**
+     * Failed / blocked sign-in in the audit log (module 'auth', no branch: only users with access to all branches
+     * see it). The attempted username is the reference; the password is never logged.
+     */
+    private static function securityEvent(string $action, string $username, array $details): void
+    {
+        try {
+            Audit::record('auth', $action, 'user', null, mb_substr($username, 0, 60), null, $details, null);
+        } catch (Throwable $e) {
+            log_message('error', 'Audit of ' . $action . ' failed: ' . $e->getMessage()); // never block a sign-in on the log
+        }
     }
 
     private static function isLockedOut(string $username, string $ip, int $max, int $minutes): bool

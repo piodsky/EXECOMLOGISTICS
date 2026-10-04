@@ -46,6 +46,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 9 → 10a | `migrations\009_job_orders.sql` (job orders & technicians, quotation threshold) |
 | Phase 10a → 10b | `migrations\010_job_parts_billing.sql` (job parts, billing & release, back-jobs) |
 | Phase 10b → 11 | nothing: Dashboard and the new reports use the existing tables (just copy the files) |
+| Phase 11 → 12 | `migrations\011_security_indexes.sql` (indexes only), then the tools in *Security, database user & backups* below |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql
@@ -57,10 +58,35 @@ A fresh install (importing `database.sql`) already includes every migration.
 Set `APP_URL=http://<PC-IP>/EXECOMLOGISTICS` in `.env` (for example `http://192.168.1.10/EXECOMLOGISTICS`) and
 allow Apache through Windows Firewall. Links are host-relative, so tablets on the LAN work as well.
 
+### Security, database user & backups
+Run these from `C:\xampp\htdocs\EXECOMLOGISTICS` in PowerShell (XAMPP's MySQL must be running):
+
+| Task | Command |
+|---|---|
+| Dedicated MySQL users (app + backup) with new random passwords, written to `.env`. Run again to rotate the passwords. | `powershell -ExecutionPolicy Bypass -File tools\setup-db-users.ps1` |
+| Back up the database now (to `C:\EXECOM-Backups`, `.sql.gz`, keeps 30 days) | `powershell -ExecutionPolicy Bypass -File tools\backup.ps1` |
+| Prove a backup restores (loads the newest into a scratch DB, checks it, drops it) | `powershell -ExecutionPolicy Bypass -File tools\restore-test.ps1` |
+| Nightly backup at 9 PM (Windows Task Scheduler "EXECOM Database Backup") | `powershell -ExecutionPolicy Bypass -File tools\install-backup-task.ps1` |
+
+- The app user `execom_app` can only read and write data (no schema changes), so **migrations run as `root`**
+  (`mysql.exe -u root execomlogistics_db < migrations\…`). phpMyAdmin keeps using `root` (local PC only).
+- Backups only run while the PC and MySQL are on; check `C:\EXECOM-Backups\backup.log`. Copy backups to another
+  disk / cloud regularly. Restore a backup: create an empty database, then
+  `mysql.exe -u root <database> < backup.sql` (unzip the `.gz` first, e.g. with 7-Zip).
+- Settings → Audit Log has a **Sign-in & Security** filter (sign-ins, failed sign-ins, lockouts, sign-outs, branch
+  switches) and **Export CSV**.
+
 ### Going live checklist
 - `.env`: `APP_ENV=production`, `APP_DEBUG=false`
-- Give MySQL a dedicated user with a strong password (not `root`) and put it in `.env`
-- Use HTTPS if the POS is reachable beyond the office network (session cookies then become `Secure` automatically)
+- MySQL: run `tools\setup-db-users.ps1` on the server, give `root` a password, keep MySQL bound to the server
+  (`bind-address=127.0.0.1` when the app runs on the same machine)
+- HTTPS when branches connect over the internet / VPN: install a certificate in Apache (`conf\extra\httpd-ssl.conf`),
+  then set `FORCE_HTTPS=true` in `.env` (http is redirected to https, browsers remember it for a year; session
+  cookies become `Secure` automatically). Don't turn it on before the certificate works.
+- Hide the Apache / PHP version: in `C:\xampp\apache\conf\extra\httpd-default.conf` set `ServerTokens Prod` and
+  `ServerSignature Off`, in `php.ini` set `expose_php=Off`, then restart Apache
+- Schedule `tools\install-backup-task.ps1` on the server and run `tools\restore-test.ps1` once a month
+- MySQL memory on the central server: `innodb_buffer_pool_size=1G` (or more) in `my.ini`
 - Optional auto-logout: set `SESSION_IDLE_TIMEOUT` (seconds). `0` = stay signed in until Logout.
 
 ## Using the POS

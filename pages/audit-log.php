@@ -61,10 +61,33 @@ $show = static function (mixed $v): string {
     return mb_strlen($s) > 120 ? mb_substr($s, 0, 117) . '…' : $s;
 };
 
+// CSV export of the filtered rows (newest first, at most 5,000), same scope and cost rule as the screen.
+if (($_GET['export'] ?? '') === 'csv') {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="execom-audit-log-' . date('Ymd-His') . '.csv"');
+    $out = fopen('php://output', 'w');
+    fwrite($out, "﻿");
+    fputcsv($out, ['Time', 'User', 'Role', 'Branch', 'Module', 'Action', 'Reference', 'Before', 'After', 'IP address']);
+    $flat = static function (array $v): string {
+        $parts = [];
+        foreach ($v as $k => $x) {
+            $parts[] = $k . '=' . (is_scalar($x) || $x === null ? (string) $x : json_encode($x, JSON_UNESCAPED_UNICODE));
+        }
+        return implode('; ', $parts);
+    };
+    foreach (Audit::search($filters, 5000, 0) as $r) {
+        fputcsv($out, [$r['occurred_at'], csv_cell((string) $r['username']), csv_cell((string) $r['role']), csv_cell((string) ($r['branch_code'] ?? '')),
+            Audit::MODULES[$r['module']] ?? $r['module'], $r['action'], csv_cell((string) $r['entity_ref']),
+            csv_cell($flat($decode($r['old_values']))), csv_cell($flat($decode($r['new_values']))), (string) $r['ip_address']]);
+    }
+    fclose($out);
+    exit;
+}
+
 /** Chip colour per action (the action name is always printed too). */
 $tone = static fn (string $action): string => match ($action) {
     'create', 'activate' => 'success',
-    'delete', 'void' => 'danger',
+    'delete', 'void', 'login_failed', 'login_locked', 'approval_failed' => 'danger',
     'deactivate', 'password_reset' => 'warning',
     default => 'info',
 };
@@ -77,6 +100,9 @@ require ROOT_PATH . '/includes/header.php';
     <div>
         <h1>Settings</h1>
         <p class="muted">Who changed what, and when · <?= e(Branch::label()) ?>.</p>
+    </div>
+    <div class="page-actions">
+        <a class="btn btn--light" id="auditCsv" href="<?= e(url('pages/audit-log.php?' . http_build_query($pgQuery + ['export' => 'csv']))) ?>"><?= icon('download') ?> Export CSV</a>
     </div>
 </div>
 
