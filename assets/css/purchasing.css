@@ -48,3 +48,16 @@
 .co-reason { margin-top: 6px; text-align: left !important; font-size: 13px; }
 .co-hint { min-height: 16px; margin-top: 4px; }
 .pu-track-in { margin-top: 16px; }
+
+/* Collections + quotations (Phase 13c) */
+.ar-aging { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.ar-aging .stat.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
+.form-input--sm { width: auto; padding: 5px 8px; font-size: 13px; }
+.cr-rates { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); }
+.cr-rates label { display: inline-flex; align-items: center; gap: 6px; }
+.cr-pick { margin-bottom: 16px; }
+.cr-pick__form { padding: 0; align-items: flex-end; }
+.cr-pick__field { flex: 1 1 360px; margin: 0; }
+.cr-lines .cr-amt { width: 120px; margin-left: auto; }
+.cr-lines td { vertical-align: top; }
+.cr-sum-total dd { font-weight: 700; color: var(--primary); }

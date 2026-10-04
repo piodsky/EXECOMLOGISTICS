@@ -24,7 +24,8 @@ $stmt = db()->prepare('SELECT dr_no FROM customer_deliveries WHERE sale_id = ? O
 $stmt->execute([$id]);
 $drs   = $stmt->fetchAll(PDO::FETCH_COLUMN);
 $isVoid = $sale['status'] === 'cancelled';
-$due    = $sale['payment_type'] === 'charge' && !$isVoid ? (float) $sale['total'] - (float) $sale['amount_paid'] : 0.0;
+$due    = $sale['payment_type'] === 'charge' && !$isVoid ? from_cents(to_cents($sale['total']) - to_cents($sale['settled_amount'])) : 0.0;
+$paidOn = $sale['payment_type'] === 'charge' && !$isVoid ? array_filter(Collections::forSale($id), static fn (array $c): bool => $c['status'] === 'posted') : [];
 $vat    = rtrim(rtrim((string) $sale['vat_rate'], '0'), '.');
 ?>
 <!doctype html>
@@ -93,7 +94,8 @@ $vat    = rtrim(rtrim((string) $sale['vat_rate'], '0'), '.');
 
     <div class="doc__info">
         <p><span>Payment:</span> <?= e(Sales::ALL_PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?><?= $sale['payment_type'] !== 'charge' ? ' · ' . e(money($sale['amount_paid'])) . ' received' : '' ?></p>
-        <?php if ($due > 0): ?><p id="billDue"><span>Amount due:</span> <?= e(money($due)) ?></p><?php endif; ?>
+        <?php foreach ($paidOn as $col): ?><p><span>Collected:</span> <?= e(money(from_cents(to_cents($col['amount']) + to_cents($col['ewt_amount']) + to_cents($col['vat_withheld'])))) ?> on <?= e(date('m/d/Y', strtotime($col['collection_date']))) ?> (<?= e($col['collection_no']) ?><?= (float) $col['ewt_amount'] + (float) $col['vat_withheld'] > 0 ? ', incl. taxes withheld' : '' ?>)</p><?php endforeach; ?>
+        <?php if ($due > 0): ?><p id="billDue"><span>Amount due:</span> <?= e(money($due)) ?></p><?php elseif ($paidOn): ?><p id="billDue"><span>Amount due:</span> none, paid in full</p><?php endif; ?>
     </div>
 
     <div class="doc__signs">

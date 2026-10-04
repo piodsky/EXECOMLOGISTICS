@@ -54,6 +54,8 @@ return [
     'customer_orders.approve' => ['Customer Orders', 'Confirm customer orders (reserves stock), close or cancel them'],
     'customer_orders.deliver' => ['Customer Orders', 'Release delivery receipts (stock leaves the branch) and record the delivery'],
     'customer_orders.bill'    => ['Customer Orders', 'Bill delivered customer orders (cash, GCash, card or on account)'],
+    'collections.manage'      => ['Collections', 'Record collections of on-account bills (cash, check, bank, withholding taxes)'],
+    'collections.cancel'      => ['Collections', 'Cancel collection receipts (the bills are open again)'],
     'users.view'          => ['Users',     'View users'],
     'users.manage'        => ['Users',     'Add and edit users, reset passwords, activate/deactivate'],
     'users.delete'        => ['Users',     'Delete users'],

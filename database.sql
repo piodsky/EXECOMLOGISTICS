@@ -23,6 +23,10 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS collection_lines;
+DROP TABLE IF EXISTS collections;
+DROP TABLE IF EXISTS quotation_lines;
+DROP TABLE IF EXISTS quotations;
 DROP TABLE IF EXISTS customer_delivery_serials;
 DROP TABLE IF EXISTS customer_delivery_lines;
 DROP TABLE IF EXISTS customer_deliveries;
@@ -516,6 +520,7 @@ CREATE TABLE sales (
   cost_total        DECIMAL(12,2) NULL,
   amount_paid       DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   change_amount     DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  settled_amount    DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at      DATETIME      NULL,
   voided_at         DATETIME      NULL,
@@ -533,6 +538,7 @@ CREATE TABLE sales (
   KEY idx_sales_discount_approved_by (discount_approved_by),
   KEY idx_sales_job_order (job_order_id),
   KEY idx_sales_customer_order (customer_order_id),
+  KEY idx_sales_receivable (payment_type, status, branch_id, customer_id),
   CONSTRAINT fk_sales_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_sales_user FOREIGN KEY (user_id) REFERENCES users (id)
@@ -1361,6 +1367,7 @@ CREATE TABLE customer_orders (
   warehouse_id      INT UNSIGNED  NOT NULL,
   location_id       INT UNSIGNED  NOT NULL,
   customer_id       INT UNSIGNED  NOT NULL,
+  quotation_id      INT UNSIGNED  NULL,
   customer_name     VARCHAR(100)  NOT NULL,
   customer_address  VARCHAR(255)  NULL,
   customer_po_no    VARCHAR(60)   NOT NULL,
@@ -1398,6 +1405,7 @@ CREATE TABLE customer_orders (
   KEY idx_customer_orders_submitted_by (submitted_by),
   KEY idx_customer_orders_confirmed_by (confirmed_by),
   KEY idx_customer_orders_closed_by (closed_by),
+  KEY idx_customer_orders_quotation (quotation_id),
   CONSTRAINT fk_customer_orders_location FOREIGN KEY (location_id, warehouse_id, branch_id)
     REFERENCES storage_locations (id, warehouse_id, branch_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -1528,6 +1536,163 @@ CREATE TABLE customer_delivery_serials (
 ALTER TABLE sales
   ADD CONSTRAINT fk_sales_customer_order FOREIGN KEY (customer_order_id) REFERENCES customer_orders (id)
     ON UPDATE CASCADE ON DELETE RESTRICT;
+
+-- ---------------------------------------------------------------------
+-- Quotations (QT-<branch>-<year>-NNNNNN at create; never deleted)
+--   draft (editable) -> sent -> won (a customer order was made from it:
+--   order_id) / lost (reason) ; draft / sent -> cancelled (reason);
+--   sent -> draft (revise). Prices VAT-exclusive like the orders.
+-- ---------------------------------------------------------------------
+CREATE TABLE quotations (
+  id                INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  quote_no          VARCHAR(30)   NOT NULL,
+  branch_id         INT UNSIGNED  NOT NULL,
+  customer_id       INT UNSIGNED  NOT NULL,
+  customer_name     VARCHAR(100)  NOT NULL,
+  customer_address  VARCHAR(255)  NULL,
+  attention         VARCHAR(100)  NULL,
+  rfq_no            VARCHAR(60)   NULL,
+  rfq_date          DATE          NULL,
+  end_user          VARCHAR(150)  NULL,
+  quote_date        DATE          NOT NULL,
+  valid_until       DATE          NULL,
+  delivery_term     VARCHAR(100)  NULL,
+  payment_term      VARCHAR(100)  NULL,
+  warranty          VARCHAR(100)  NULL,
+  notes             VARCHAR(500)  NULL,
+  status            ENUM('draft','sent','won','lost','cancelled') NOT NULL DEFAULT 'draft',
+  total_qty         INT           NOT NULL DEFAULT 0,
+  subtotal          DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  order_id          INT UNSIGNED  NULL,
+  created_by        INT UNSIGNED  NOT NULL,
+  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  sent_by           INT UNSIGNED  NULL,
+  sent_at           DATETIME      NULL,
+  closed_by         INT UNSIGNED  NULL,
+  closed_at         DATETIME      NULL,
+  close_reason      VARCHAR(255)  NULL,
+  updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_quotations_no (quote_no),
+  KEY idx_quotations_branch (branch_id, status, created_at),
+  KEY idx_quotations_customer (customer_id),
+  KEY idx_quotations_rfq (rfq_no),
+  KEY idx_quotations_order (order_id),
+  KEY idx_quotations_created_by (created_by),
+  KEY idx_quotations_sent_by (sent_by),
+  KEY idx_quotations_closed_by (closed_by),
+  CONSTRAINT fk_quotations_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_quotations_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_quotations_order FOREIGN KEY (order_id) REFERENCES customer_orders (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_quotations_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_quotations_sent_by FOREIGN KEY (sent_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_quotations_closed_by FOREIGN KEY (closed_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE quotation_lines (
+  id               INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  quotation_id     INT UNSIGNED      NOT NULL,
+  product_id       INT UNSIGNED      NOT NULL,
+  quantity         INT               NOT NULL,
+  unit_price       DECIMAL(12,2)     NOT NULL,
+  suggested_price  DECIMAL(12,2)     NOT NULL,
+  price_reason     VARCHAR(255)      NULL,
+  line_total       DECIMAL(14,2)     NOT NULL,
+  sort_order       SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_quotation_lines_product (quotation_id, product_id),
+  KEY idx_quotation_lines_product (product_id),
+  CONSTRAINT fk_quotation_lines_quotation FOREIGN KEY (quotation_id) REFERENCES quotations (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_quotation_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_quotation_lines_qty CHECK (quantity > 0),
+  CONSTRAINT chk_quotation_lines_price CHECK (unit_price >= 0 AND suggested_price >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- customer_orders.quotation_id FK (quotations is created after customer_orders).
+ALTER TABLE customer_orders
+  ADD CONSTRAINT fk_customer_orders_quotation FOREIGN KEY (quotation_id) REFERENCES quotations (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+
+-- ---------------------------------------------------------------------
+-- Collections of on-account bills (collection receipts CR-<branch>-<year>-NNNNNN)
+--   posted at once (one payment of one customer applied to its bills at the
+--   branch: cash + EWT (BIR 2307) + VAT withheld (BIR 2306) per bill; the
+--   bill's sales.settled_amount grows by them) -> cancelled (reason).
+--   form_2307: pending while a withholding certificate is due, received (date).
+-- ---------------------------------------------------------------------
+CREATE TABLE collections (
+  id                     INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  collection_no          VARCHAR(30)   NOT NULL,
+  branch_id              INT UNSIGNED  NOT NULL,
+  customer_id            INT UNSIGNED  NOT NULL,
+  customer_name          VARCHAR(100)  NOT NULL,
+  collection_date        DATE          NOT NULL,
+  method                 ENUM('cash','check','bank','gcash') NOT NULL,
+  reference              VARCHAR(60)   NULL,
+  bank_name              VARCHAR(60)   NULL,
+  check_date             DATE          NULL,
+  amount_received        DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  ewt_total              DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  vat_withheld_total     DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  total_credited         DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  form_2307              ENUM('none','pending','received') NOT NULL DEFAULT 'none',
+  form_2307_received_at  DATE          NULL,
+  form_2307_by           INT UNSIGNED  NULL,
+  notes                  VARCHAR(255)  NULL,
+  status                 ENUM('posted','cancelled') NOT NULL DEFAULT 'posted',
+  created_by             INT UNSIGNED  NOT NULL,
+  created_at             DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  cancelled_by           INT UNSIGNED  NULL,
+  cancelled_at           DATETIME      NULL,
+  cancel_reason          VARCHAR(255)  NULL,
+  updated_at             DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_collections_no (collection_no),
+  KEY idx_collections_branch (branch_id, status, collection_date),
+  KEY idx_collections_customer (customer_id),
+  KEY idx_collections_2307 (form_2307, branch_id),
+  KEY idx_collections_created_by (created_by),
+  KEY idx_collections_cancelled_by (cancelled_by),
+  KEY idx_collections_2307_by (form_2307_by),
+  CONSTRAINT fk_collections_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_collections_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_collections_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_collections_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_collections_2307_by FOREIGN KEY (form_2307_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_collections_amounts CHECK (amount_received >= 0 AND ewt_total >= 0 AND vat_withheld_total >= 0
+                                            AND total_credited = amount_received + ewt_total + vat_withheld_total)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE collection_lines (
+  id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  collection_id  INT UNSIGNED  NOT NULL,
+  sale_id        INT UNSIGNED  NOT NULL,
+  amount         DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  ewt_amount     DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  vat_withheld   DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_collection_lines (collection_id, sale_id),
+  KEY idx_collection_lines_sale (sale_id),
+  CONSTRAINT fk_collection_lines_collection FOREIGN KEY (collection_id) REFERENCES collections (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_collection_lines_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_collection_lines_amounts CHECK (amount >= 0 AND ewt_amount >= 0 AND vat_withheld >= 0
+                                                 AND amount + ewt_amount + vat_withheld > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
@@ -1724,7 +1889,9 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (52, 'customer_orders.manage',  'Customer Orders', 'Enter customer purchase orders (PO Outgoing) and send them for confirmation', 130),
   (53, 'customer_orders.approve', 'Customer Orders', 'Confirm customer orders (reserves stock), close or cancel them', 131),
   (54, 'customer_orders.deliver', 'Customer Orders', 'Release delivery receipts (stock leaves the branch) and record the delivery', 132),
-  (55, 'customer_orders.bill',    'Customer Orders', 'Bill delivered customer orders (cash, GCash, card or on account)', 133);
+  (55, 'customer_orders.bill',    'Customer Orders', 'Bill delivered customer orders (cash, GCash, card or on account)', 133),
+  (56, 'collections.cancel',      'Collections', 'Cancel collection receipts (the bills are open again)', 135),
+  (57, 'collections.manage',      'Collections', 'Record collections of on-account bills (cash, check, bank, withholding taxes)', 134);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -1748,10 +1915,12 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost',
          'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue',
          'job_orders.release', 'purchasing.request', 'purchasing.approve', 'purchasing.order', 'customer_orders.manage',
-         'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill'))
+         'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill', 'collections.manage',
+         'collections.cancel'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create',
-         'job_orders.release', 'purchasing.request', 'customer_orders.manage', 'customer_orders.bill'))
+         'job_orders.release', 'purchasing.request', 'customer_orders.manage', 'customer_orders.bill',
+         'collections.manage'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view', 'job_orders.create',
          'job_orders.update', 'purchasing.request'))
 ORDER BY r.id, p.id;

@@ -232,6 +232,7 @@ require ROOT_PATH . '/includes/header.php';
                 </dd></div>
                 <div><dt>PO no.</dt><dd class="doc-no" id="coPoNo"><?= e($o['customer_po_no']) ?></dd></div>
                 <div><dt>PO date</dt><dd><?= e($day($o['customer_po_date'])) ?></dd></div>
+                <?php if ($o['quote_no']): ?><div><dt>Quotation</dt><dd><a class="doc-no" href="<?= e(url('pages/quote-view.php?id=' . (int) $o['quotation_id'])) ?>" id="coQuote"><?= e($o['quote_no']) ?></a></dd></div><?php endif; ?>
                 <?php if ($o['end_user']): ?><div><dt>End-user</dt><dd><?= e($o['end_user']) ?></dd></div><?php endif; ?>
                 <?php if ($o['procurement_mode']): ?><div><dt>Procurement</dt><dd><?= e($o['procurement_mode']) ?></dd></div><?php endif; ?>
                 <?php if ($o['award_ref']): ?><div><dt>Award / BAC</dt><dd><?= e($o['award_ref']) ?></dd></div><?php endif; ?>

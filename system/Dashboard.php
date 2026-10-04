@@ -75,6 +75,11 @@ final class Dashboard
             }
             $add('Overdue customer orders', 'Past the delivery deadline', $co['overdue'], 'pages/customer-orders.php?status=overdue', 'clock');
         }
+        if (Collections::canView()) {
+            $ar = Collections::workCounts();
+            $add('Bills to collect, over 30 days', 'On account, still unpaid', $ar['overdue'], 'pages/collections.php', 'wallet');
+            $add('Withholding certificates', 'BIR 2307 / 2306 still to receive', $ar['forms'], 'pages/collection-receipts.php?forms=pending', 'file');
+        }
         if (Auth::can('receiving.post')) {
             $add('Receiving drafts', 'Not posted yet', $one("SELECT COUNT(*) FROM receiving_reports WHERE branch_id = ? AND status = 'draft'", [$cur]),
                 'pages/receiving.php?status=draft', 'truck');

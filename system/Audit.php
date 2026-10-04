@@ -34,6 +34,7 @@ final class Audit
         'job_orders'  => 'Job Orders',
         'purchasing'  => 'Purchasing',
         'customer_orders' => 'Customer Orders',
+        'collections'     => 'Collections',
         'auth'        => 'Sign-in & Security',
     ];
 

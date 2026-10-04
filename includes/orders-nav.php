@@ -1,10 +1,11 @@
 <?php
 /**
- * Tabs across the Customer Orders pages: customer POs (PO Outgoing), delivery receipts, order tracking.
+ * Tabs across the Customer Orders pages: quotations, customer POs (PO Outgoing), delivery receipts, order tracking.
  *
- * @var string $ordersTab 'orders' | 'deliveries' | 'tracking'
+ * @var string $ordersTab 'quotes' | 'orders' | 'deliveries' | 'tracking'
  */
 $ordersTabs = [
+    'quotes'     => ['Quotations', 'tag', 'pages/quotations.php'],
     'orders'     => ['PO Outgoing', 'file', 'pages/customer-orders.php'],
     'deliveries' => ['Delivery Receipts', 'truck', 'pages/deliveries.php'],
     'tracking'   => ['Order Tracking', 'clock', 'pages/order-tracking.php'],

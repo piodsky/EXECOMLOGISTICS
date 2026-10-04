@@ -54,6 +54,12 @@ return [
         'url'        => 'pages/customer-orders.php',
         'permission' => ['customer_orders.manage', 'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill'],
     ],
+    'collections' => [
+        'label'      => 'Collections',
+        'icon'       => 'wallet',
+        'url'        => 'pages/collections.php',
+        'permission' => ['collections.manage', 'collections.cancel'],
+    ],
     'receiving' => [
         'label'      => 'Receiving',
         'icon'       => 'truck',

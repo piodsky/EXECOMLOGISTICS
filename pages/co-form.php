@@ -4,7 +4,8 @@
  * Delete Draft. Header = the customer's purchase order (PO no. / date, end-user, place of delivery, terms, deadline,
  * mode of procurement, award / BAC reference); lines = product, quantity, agreed unit price (VAT-exclusive), reason
  * when below the suggested price. PRG with flash_old / flash_errors (line errors keyed items.N.field).
- * pages/co-form.php[?id=5][&return=customer-orders.php]
+ * ?quote=ID (new order only): prefilled from a sent quotation; saving it marks the quotation won.
+ * pages/co-form.php[?id=5 | ?quote=3][&return=customer-orders.php]
  */
 declare(strict_types=1);
 
@@ -18,7 +19,15 @@ if ($id !== null) {
     $o = CustomerOrders::find($id) ?? throw new HttpException(404, 'Customer order not found.');
 }
 $returnTo = safe_return($_POST['return'] ?? $_GET['return'] ?? null, 'customer-orders.php');
-$self     = 'co-form.php?' . http_build_query(array_filter(['id' => $id, 'return' => $returnTo]));
+$quote    = null;
+if ($o === null && ($quoteId = input_int($_GET, 'quote', 1)) !== null) {
+    $quote = Quotations::find($quoteId) ?? throw new HttpException(404, 'Quotation not found.');
+    if (!Quotations::actions($quote)['order']) {
+        flash('error', "No customer PO can be made from {$quote['quote_no']} now (it must be sent, at your current branch).");
+        redirect('pages/quote-view.php?id=' . $quoteId);
+    }
+}
+$self     = 'co-form.php?' . http_build_query(array_filter(['id' => $id, 'quote' => $quote['id'] ?? null, 'return' => $returnTo]));
 $viewPath = static fn (int $oid): string => 'pages/co-view.php?' . http_build_query(['id' => $oid, 'return' => $returnTo]);
 
 if ($o !== null && $o['status'] !== 'draft') {
@@ -90,6 +99,13 @@ $concrete = Branch::isConcrete();
 if (has_old()) {
     $old  = old_input();
     $rows = is_array($old['items'] ?? null) ? array_values($old['items']) : [];
+} elseif ($quote !== null) {
+    $rows = array_map(static fn (array $l): array => [
+        'product_id'   => (string) $l['product_id'],
+        'quantity'     => (string) $l['quantity'],
+        'unit_price'   => (string) $l['unit_price'],
+        'price_reason' => (string) ($l['price_reason'] ?? ''),
+    ], $quote['lines']);
 } elseif ($o !== null) {
     $rows = array_map(static fn (array $l): array => [
         'product_id'   => (string) $l['product_id'],
@@ -119,9 +135,11 @@ $stmt = db()->prepare(
 $stmt->execute([$location['id'] ?? 0, $location['id'] ?? 0, $id ?? 0]);
 $products = $stmt->fetchAll();
 
-$customerId = old('customer_id', (string) ($o['customer_id'] ?? ''));
+$fromQuote = $quote !== null ? ['customer_id' => $quote['customer_id'], 'end_user' => $quote['end_user'], 'delivery_term' => $quote['delivery_term'],
+    'payment_term' => $quote['payment_term'], 'place_of_delivery' => $quote['customer_address'], 'notes' => 'From quotation ' . $quote['quote_no']] : [];
+$customerId = old('customer_id', (string) ($o['customer_id'] ?? $fromQuote['customer_id'] ?? ''));
 $customers  = CustomerOrders::customers($o !== null ? (int) $o['customer_id'] : null);
-$val    = static fn (string $key): string => old($key, (string) ($o[$key] ?? ''));
+$val    = static fn (string $key): string => old($key, (string) ($o[$key] ?? $fromQuote[$key] ?? ''));
 $errors = form_errors();
 $title  = $o ? 'Draft Order #' . $o['id'] : 'New Customer PO';
 $page['title'] = $title;
@@ -193,6 +211,9 @@ $renderLine = static function (string $i, array $row, int $n) use ($products, $r
         <span>Choose a branch in the top bar before saving: an order belongs to one branch.</span>
     </div>
 <?php endif; ?>
+<?php if ($quote !== null): ?>
+    <div class="alert alert--info" role="note" id="coFromQuote"><?= icon('tag') ?><span>From quotation <strong><?= e($quote['quote_no']) ?></strong>: enter the customer's PO number and check the quantities and prices. Saving marks the quotation as won.</span></div>
+<?php endif; ?>
 <?php if ($o !== null && $o['return_note']): ?>
     <div class="alert alert--warning" role="note" id="coReturnNote"><?= icon('alert') ?><span>Returned for changes: <?= e($o['return_note']) ?></span></div>
 <?php endif; ?>
@@ -201,6 +222,7 @@ $renderLine = static function (string $i, array $row, int $n) use ($products, $r
       data-lines-form data-cost-lines data-max-lines="<?= CustomerOrders::MAX_LINES ?>" data-currency="<?= e(config('app.currency')) ?>">
     <?= Csrf::field() ?>
     <input type="hidden" name="return" value="<?= e($returnTo) ?>">
+    <?php if ($quote !== null): ?><input type="hidden" name="quotation_id" value="<?= (int) $quote['id'] ?>"><?php endif; ?>
 
     <div class="form-stack">
         <section class="card card--pad">

@@ -324,10 +324,11 @@ final class Customers
         if ((int) $stmt->fetchColumn() > 0) {
             throw new HttpException(409, "{$customer['name']} has job orders, so they can't be deleted. Deactivate them instead.");
         }
-        $stmt = db()->prepare('SELECT COUNT(*) FROM customer_orders WHERE customer_id = ?');
-        $stmt->execute([$id]);
+        $stmt = db()->prepare('SELECT (SELECT COUNT(*) FROM customer_orders WHERE customer_id = ?) + (SELECT COUNT(*) FROM quotations WHERE customer_id = ?)
+                                     + (SELECT COUNT(*) FROM collections WHERE customer_id = ?)');
+        $stmt->execute([$id, $id, $id]);
         if ((int) $stmt->fetchColumn() > 0) {
-            throw new HttpException(409, "{$customer['name']} has customer orders, so they can't be deleted. Deactivate them instead.");
+            throw new HttpException(409, "{$customer['name']} has customer orders, quotations or collections, so they can't be deleted. Deactivate them instead.");
         }
         $pdo = db();
         $pdo->beginTransaction();

@@ -117,3 +117,4 @@ body.doc-page {
 /* Subtotal / VAT rows above the TOTAL (billing statement) */
 .doc__sum th, .doc__sum td { border-color: #c9d3e3; font-weight: 600; }
 .doc__sum td:first-child { border: 0; background: none; }
+.doc__lead { margin: 14px 0 6px; font-size: 13px; }

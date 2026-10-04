@@ -183,6 +183,14 @@ require ROOT_PATH . '/includes/header.php';
                 <div><dt>Cashier</dt><dd><?= e($sale['cashier_name']) ?></dd></div>
                 <div><dt>Payment</dt><dd><span class="badge"><?= e(Sales::ALL_PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?></span></dd></div>
                 <div><dt>Amount Paid</dt><dd><?= e(money($sale['amount_paid'])) ?></dd></div>
+                <?php if ($sale['payment_type'] === 'charge'): ?>
+                    <div><dt>Collected</dt><dd><?= e(money($sale['settled_amount'])) ?></dd></div>
+                    <div><dt>Balance</dt><dd id="saleBalance" class="<?= $sale['status'] === 'completed' && (float) $sale['total'] > (float) $sale['settled_amount'] ? 'text-danger' : '' ?>"><?= e(money(from_cents($sale['status'] === 'completed' ? to_cents($sale['total']) - to_cents($sale['settled_amount']) : 0))) ?></dd></div>
+                    <?php foreach (Collections::canView() ? Collections::forSale((int) $sale['id']) : [] as $col): ?>
+                        <div class="<?= $col['status'] === 'cancelled' ? 'is-void' : '' ?>"><dt><a href="<?= e(url('pages/collection-view.php?id=' . (int) $col['id'])) ?>"><?= e($col['collection_no']) ?></a></dt>
+                            <dd><?= e(money(from_cents(to_cents($col['amount']) + to_cents($col['ewt_amount']) + to_cents($col['vat_withheld'])))) ?><small class="muted block"><?= e(date('M j, Y', strtotime($col['collection_date']))) ?><?= $col['status'] === 'cancelled' ? ' · cancelled' : '' ?></small></dd></div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
                 <div><dt>Change</dt><dd><?= e(money($sale['change_amount'])) ?></dd></div>
             </dl>
         </section>
