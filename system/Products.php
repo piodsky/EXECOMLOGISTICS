@@ -353,6 +353,14 @@ final class Products
                 if ($stmt->fetchColumn()) {
                     throw new HttpException(422, 'Serial tracking can only change when no units of this product are in transit between branches.');
                 }
+                // Parts issued to a job (custody) are in no location either.
+                $stmt = $pdo->prepare(
+                    "SELECT 1 FROM job_order_parts WHERE product_id = ? AND status = 'issued' AND qty_issued > qty_used + qty_returned LIMIT 1"
+                );
+                $stmt->execute([$id]);
+                if ($stmt->fetchColumn()) {
+                    throw new HttpException(422, 'Serial tracking can only change when no units of this product are issued to a job order.');
+                }
                 // Turning it off once serials exist (any status) would break voids/cancels of those documents.
                 if ((int) $d['track_serial'] === 0) {
                     $stmt = $pdo->prepare('SELECT COUNT(*) FROM product_serials WHERE product_id = ?');
@@ -426,10 +434,11 @@ final class Products
             throw new HttpException(409, "{$product['name']} has receiving history, so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
         $stmt = db()->prepare('SELECT 1 FROM inventory_doc_lines WHERE product_id = ?
-                               UNION ALL SELECT 1 FROM stock_transfer_lines WHERE product_id = ? LIMIT 1');
-        $stmt->execute([$id, $id]);
+                               UNION ALL SELECT 1 FROM stock_transfer_lines WHERE product_id = ?
+                               UNION ALL SELECT 1 FROM job_order_parts WHERE product_id = ? LIMIT 1');
+        $stmt->execute([$id, $id, $id]);
         if ($stmt->fetchColumn()) {
-            throw new HttpException(409, "{$product['name']} has stock documents (transfers, counts, write-offs or branch transfers), so it can't be deleted. Deactivate it instead to hide it from the POS.");
+            throw new HttpException(409, "{$product['name']} has stock documents (transfers, counts, write-offs, branch transfers or job parts), so it can't be deleted. Deactivate it instead to hide it from the POS.");
         }
         $pdo = db();
         $pdo->beginTransaction();

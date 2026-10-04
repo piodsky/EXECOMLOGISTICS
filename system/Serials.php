@@ -181,6 +181,20 @@ final class Serials
         );
         $stmt->execute([$serialId, ...$params]);
         $serial['documents'] = $stmt->fetchAll();
+
+        // Job orders it was issued to (parts): issued / used (installed) / returned.
+        [$scope, $params] = Branch::scopeSql('j.branch_id');
+        $stmt = db()->prepare(
+            "SELECT j.id AS job_id, j.job_no, js.state, jp.issued_at, b.name AS branch_name
+               FROM job_order_part_serials js
+               JOIN job_order_parts jp ON jp.id = js.part_id
+               JOIN job_orders j ON j.id = jp.job_order_id
+               JOIN branches b ON b.id = j.branch_id
+              WHERE js.serial_id = ? AND {$scope}
+              ORDER BY jp.issued_at, jp.id"
+        );
+        $stmt->execute([$serialId, ...$params]);
+        $serial['jobs'] = $stmt->fetchAll();
         return $serial;
     }
 
@@ -232,6 +246,14 @@ final class Serials
             $stmt->execute([$productId]);
             if ($transferNo = $stmt->fetchColumn()) {
                 throw new HttpException(409, "{$p['name']} is in transit on {$transferNo}. Receive it first.");
+            }
+            $stmt = $pdo->prepare(
+                "SELECT j.job_no FROM job_order_parts jp JOIN job_orders j ON j.id = jp.job_order_id
+                  WHERE jp.product_id = ? AND jp.status = 'issued' AND jp.qty_issued > jp.qty_used + jp.qty_returned LIMIT 1"
+            );
+            $stmt->execute([$productId]);
+            if ($jobNo = $stmt->fetchColumn()) {
+                throw new HttpException(409, "{$p['name']} is issued to job order {$jobNo}. Have it used or returned first.");
             }
 
             $stmt = $pdo->prepare(

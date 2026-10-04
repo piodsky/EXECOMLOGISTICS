@@ -68,6 +68,7 @@ $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at'])
         <div><dt>Date</dt><dd><?= e($date->format('M j, Y g:i A')) ?></dd></div>
         <div><dt>Cashier</dt><dd><?= e($sale['cashier_name']) ?></dd></div>
         <div><dt>Customer</dt><dd><?= e($sale['customer_name']) ?></dd></div>
+        <?php if ($sale['job_no'] !== null): ?><div><dt>Job Order</dt><dd id="receiptJob"><?= e($sale['job_no']) ?></dd></div><?php endif; ?>
     </dl>
     <hr>
 

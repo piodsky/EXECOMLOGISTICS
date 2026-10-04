@@ -30,7 +30,9 @@ if (is_post()) {
             throw new HttpException(400, 'Unknown action.');
         }
         [$saleNo, $units] = Sales::void($id, (int) Auth::id(), input_string($_POST, 'reason', 255));
-        flash('success', sprintf('Sale No. %s was voided. %d %s returned to stock.', $saleNo, $units, $units === 1 ? 'item was' : 'items were'));
+        flash('success', $sale['job_no'] !== null
+            ? "Sale No. {$saleNo} was voided. Job order {$sale['job_no']} is back to Completed (not released); the parts stay installed."
+            : sprintf('Sale No. %s was voided. %d %s returned to stock.', $saleNo, $units, $units === 1 ? 'item was' : 'items were'));
     } catch (HttpException $e) {
         flash('error', $e->getMessage());
     }
@@ -166,6 +168,10 @@ require ROOT_PATH . '/includes/header.php';
                         <?= e($sale['customer_name']) ?>
                     <?php endif; ?>
                 </dd></div>
+                <?php if ($sale['job_no'] !== null): ?>
+                    <div><dt>Job order</dt><dd id="saleJob"><?php if (Auth::canAny(...JobOrders::VIEW_PERMISSIONS)): ?><a href="<?= e(url('pages/job-view.php?id=' . (int) $sale['job_order_id'])) ?>"><?= e($sale['job_no']) ?></a><?php else: ?><?= e($sale['job_no']) ?><?php endif; ?>
+                        <small class="muted block">Parts were taken from stock when issued to the job.</small></dd></div>
+                <?php endif; ?>
                 <div><dt>Branch</dt><dd id="saleBranch"><?= e($sale['branch_code'] . ' · ' . $sale['branch_name']) ?></dd></div>
                 <div><dt>Cashier</dt><dd><?= e($sale['cashier_name']) ?></dd></div>
                 <div><dt>Payment</dt><dd><span class="badge"><?= e(Sales::PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?></span></dd></div>

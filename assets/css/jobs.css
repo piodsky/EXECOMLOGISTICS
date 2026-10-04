@@ -44,6 +44,32 @@
 .jo-event__head small { flex-basis: 100%; }
 .jo-event .jo-memo { margin-top: 4px; font-size: 13px; }
 
+/* Parts (Phase 10b) */
+.jo-parts td { vertical-align: top; }
+.jo-parts tbody + tbody { border-top: 1px solid var(--border); }
+.jo-custody { color: var(--warning); font-weight: 700; }
+.jo-part-actions td { padding-top: 0; background: var(--surface-2); }
+.jo-part-form { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 16px 8px 0; vertical-align: top; }
+.jo-part-form .sn-pick { margin: 0; }
+.jo-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.jo-qty { width: 80px; }
+.jo-request { display: grid; grid-template-columns: minmax(220px, 2fr) 90px minmax(160px, 1.5fr) auto; align-items: end; gap: 10px;
+    padding: 14px 16px; border-top: 1px solid var(--border); }
+.jo-request .form-field { margin: 0; }
+
+/* Bill & release */
+.jo-bill { margin-bottom: 12px; }
+.jo-bill td, .jo-bill th { padding: 6px 0; }
+.jo-bill tfoot th { text-align: left; font-weight: 600; }
+.jo-labor { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.jo-labor .form-input { width: 130px; }
+.jo-billform { padding-top: 12px; border-top: 1px solid var(--border); }
+.jo-backjobs { margin-top: 2px; }
+
+@media (max-width: 900px) {
+    .jo-request { grid-template-columns: 1fr 90px; }
+}
+
 /* Printed ticket + claim stub: hidden on screen */
 .jo-ticket { display: none; }
 

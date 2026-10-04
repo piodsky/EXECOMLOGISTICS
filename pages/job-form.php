@@ -17,9 +17,16 @@ if ($job === null) {
     throw new HttpException(403, 'You cannot edit this job order.');
 }
 
+// Back-job (?parent=ID): a new job for a released job's device, prefilled from it (re-checked in JobOrders::create).
+$parentId = $job === null ? input_int($_GET, 'parent', 1) : null;
+$parent   = $parentId !== null ? (JobOrders::find($parentId) ?? throw new HttpException(404, 'Job order not found.')) : null;
+if ($parent !== null && !JobOrders::actions($parent)['back_job']) {
+    throw new HttpException(403, 'A back-job can only be opened for a released job of your branch.');
+}
+
 $returnTo = safe_return($_POST['return'] ?? $_GET['return'] ?? null, 'job-orders.php');
-$self     = 'job-form.php?' . http_build_query(array_filter(['id' => $id, 'return' => $returnTo]));
-$page['title'] = $job === null ? 'New Job Order' : 'Edit ' . $job['job_no'];
+$self     = 'job-form.php?' . http_build_query(array_filter(['id' => $id, 'parent' => $parentId, 'return' => $returnTo]));
+$page['title'] = $job === null ? ($parent !== null ? 'New Back-Job' : 'New Job Order') : 'Edit ' . $job['job_no'];
 
 if (is_post()) {
     Csrf::verifyRequest();
@@ -48,12 +55,14 @@ if (is_post()) {
 }
 
 $concrete = Branch::isConcrete();
-$cur      = static fn (string $k): string => $job !== null && $job[$k] !== null ? (string) $job[$k] : '';
-$val      = static fn (string $k, string $default = ''): string => old($k, $job !== null ? $cur($k) : $default);
+$src      = $job ?? $parent; // a back-job starts from the parent's customer + device (not its problem)
+$cur      = static fn (string $k): string => $src !== null && ($job !== null || !in_array($k, ['problem', 'remarks', 'expected_at', 'job_type_id', 'priority', 'service_location', 'accessories', 'device_condition'], true))
+                                             && $src[$k] !== null ? (string) $src[$k] : '';
+$val      = static fn (string $k, string $default = ''): string => old($k, $src !== null && $cur($k) !== '' ? $cur($k) : ($job !== null ? '' : $default));
 
 $customers = Customers::active();
-if ($job !== null && $job['customer_id'] !== null && !in_array((int) $job['customer_id'], array_map('intval', array_column($customers, 'id')), true)) {
-    $customers[] = ['id' => $job['customer_id'], 'name' => $job['customer_name'] . ' (inactive)', 'phone' => $job['customer_phone']];
+if ($src !== null && $src['customer_id'] !== null && !in_array((int) $src['customer_id'], array_map('intval', array_column($customers, 'id')), true)) {
+    $customers[] = ['id' => $src['customer_id'], 'name' => $src['customer_name'] . ' (inactive)', 'phone' => $src['customer_phone']];
 }
 $deviceTypes = MasterData::options('device-types', $job !== null && $job['device_type_id'] !== null ? (int) $job['device_type_id'] : null);
 $jobTypes    = MasterData::options('job-types', $job !== null && $job['job_type_id'] !== null ? (int) $job['job_type_id'] : null);
@@ -92,8 +101,15 @@ require ROOT_PATH . '/includes/header.php';
 <form class="form-layout" method="post" action="<?= e(url('pages/' . $self)) ?>" novalidate id="jobForm">
     <?= Csrf::field() ?>
     <input type="hidden" name="return" value="<?= e($returnTo) ?>">
+    <?php if ($parent !== null): ?>
+        <input type="hidden" name="parent_job_id" value="<?= (int) $parent['id'] ?>">
+    <?php endif; ?>
 
     <div class="form-stack">
+        <?php if ($parent !== null): ?>
+            <div class="alert alert--info" role="note" id="backJobNote"><?= icon('info') ?>
+                <span>Back-job of <strong><?= e($parent['job_no']) ?></strong> (released <?= e(date('M j, Y', strtotime((string) $parent['released_at']))) ?>): the same device came back. Describe the new problem.</span></div>
+        <?php endif; ?>
         <section class="card card--pad">
             <h2 class="card__title">Customer</h2>
             <div class="form-grid">

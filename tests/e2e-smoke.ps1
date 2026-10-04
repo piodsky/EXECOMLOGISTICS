@@ -1337,7 +1337,7 @@ try {
 
     # ---- Phase 10a: job orders ----
     $jPerm = Sql "SELECT GROUP_CONCAT(CONCAT(r.code, ':', p.perm_key) ORDER BY r.code, p.perm_key) FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id WHERE p.perm_key LIKE 'job_orders.%'"
-    Check ($jPerm -eq 'branch_admin:job_orders.assign,branch_admin:job_orders.create,branch_admin:job_orders.update,branch_admin:job_orders.view,cashier:job_orders.create,cashier:job_orders.view,technician:job_orders.create,technician:job_orders.update') "job order permissions per role ($jPerm)"
+    Check ($jPerm -eq 'branch_admin:job_orders.assign,branch_admin:job_orders.create,branch_admin:job_orders.release,branch_admin:job_orders.update,branch_admin:job_orders.view,cashier:job_orders.create,cashier:job_orders.release,cashier:job_orders.view,technician:job_orders.create,technician:job_orders.update') "job order permissions per role ($jPerm)"
     Nav "$Base/pages/settings.php"
     Submit "const f = document.getElementById('settingsForm'); f.job_quote_threshold.value = 'abc'; f.requestSubmit()" 'bad threshold'
     Check ((Eval "document.querySelector('[name=job_quote_threshold]').getAttribute('aria-invalid')") -eq 'true') 'settings: bad quotation threshold -> field error'
@@ -1418,7 +1418,73 @@ try {
     $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'job_orders'"
     Check ([int]$a -ge 12) "job order actions are in the audit log ($a)"
     Logout
+    # ---- Phase 10b: parts custody, billing, release, back-job ----
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/job-form.php"
+    Submit "const f = document.getElementById('jobForm'); f.customer_name.value = 'Rosa Diaz'; f.customer_phone.value = '0918 222 3344'; f.device_type_id.value = '$dev'; f.problem.value = 'Needs more memory'; f.technician_id.value = '$tech'; f.requestSubmit()" 'create job for parts'
+    $job3 = Sql 'SELECT MAX(id) FROM job_orders'
+    $jo3  = Sql "SELECT job_no FROM job_orders WHERE id = $job3"
+    Logout
+    Login 'martech' $script:pw 'job-orders.php'
+    Nav "$Base/pages/job-view.php?id=$job3"
+    Submit "document.getElementById('startBtn').click()" 'start job 3'
+    Submit "const f = document.getElementById('diagnoseForm'); f.diagnosis.value = 'Add 8GB RAM'; f.estimate.value = '500'; f.requestSubmit()" 'diagnose job 3'
+    Submit "const f = document.getElementById('partsRequestForm'); f.product_id.value = '9'; f.quantity.value = '1'; f.requestSubmit()" 'request RAM'
+    Check ((Sql "SELECT CONCAT(status, ':', qty_requested) FROM job_order_parts WHERE job_order_id = $job3") -eq 'requested:1' -and (Eval "!document.querySelector('[data-issue]')")) 'technician requested 1 RAM and cannot issue it'
+    Logout
+
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/job-orders.php"
+    Check ((Text '[data-work=parts-to-issue]') -eq '1') "branch admin: Parts to Issue tile ($(Text '[data-work=parts-to-issue]'))"
+    $ram0 = [int](LocQty '9' '1')
+    Nav "$Base/pages/job-view.php?id=$job3"
+    Submit "document.querySelector('[data-issue]').click()" 'issue RAM'
+    $ram1 = [int](LocQty '9' '1')
+    Check ($ram1 -eq $ram0 - 1 -and (Sql "SELECT -SUM(quantity) FROM stock_movements WHERE job_order_id = $job3 AND type = 'job_issue'") -eq '1') "issued to job custody: MAR RAM $ram0 -> $ram1, job_issue movement"
+    Logout
+
+    Login 'martech' $script:pw 'job-orders.php'
+    Nav "$Base/pages/job-view.php?id=$job3"
+    Submit "document.querySelector('[data-use]').click()" 'use RAM'
+    Check ((Sql "SELECT CONCAT(qty_used, ':', qty_issued - qty_used - qty_returned) FROM job_order_parts WHERE job_order_id = $job3") -eq '1:0') 'technician recorded the RAM as used (none left in custody)'
+    Submit "document.getElementById('toTestingBtn').click()" 'job 3 to testing'
+    Submit "document.getElementById('completeBtn').click(); document.getElementById('resolutionInput').value = 'Installed 8GB RAM, memtest passed'; document.getElementById('laborInput').value = '350'; document.getElementById('resolutionInput').form.requestSubmit()" 'complete job 3'
+    Check ((Text '#jobStatus') -eq 'Completed' -and (Sql "SELECT labor FROM job_orders WHERE id = $job3") -eq '350.00') 'completed with a labour charge of 350.00'
+    Logout
+
+    Login 'cashier' 'cashier123'
+    Nav "$Base/pages/job-view.php?id=$job3"
+    $sub3 = Sql "SELECT FORMAT(price + 350, 2) FROM products WHERE id = 9"
+    Check ((Text '#billSubtotal') -like "*$sub3" -and (Eval "document.querySelectorAll('#billLines tbody tr').length") -eq 2) "bill preview: RAM + labour = $sub3"
+    Check (Eval "!document.getElementById('warrantyBtn')") 'cashier: no warranty release'
+    Submit "window.confirm = () => true; const f = document.getElementById('billForm'); f.amount_paid.value = '5000'; f.requestSubmit()" 'bill without stub'
+    Check (Eval "!!document.getElementById('err-stub') && document.getElementById('jobStatus').textContent.trim() === 'Completed'") 'bill without the claim stub or a note -> error'
+    $mv = Sql 'SELECT COUNT(*) FROM stock_movements'
+    Submit "window.confirm = () => true; const f = document.getElementById('billForm'); f.amount_paid.value = '5,000'; f.stub.checked = true; f.requestSubmit()" 'bill job 3'
+    $sale3 = Sql "SELECT sale_id FROM job_orders WHERE id = $job3"
+    $chk = Sql "SELECT CONCAT(s.job_order_id = $job3, s.total = ROUND((p.price + 350) * 1.12, 2), (SELECT GROUP_CONCAT(line_type ORDER BY id) FROM sale_items WHERE sale_id = s.id)) FROM sales s JOIN products p ON p.id = 9 WHERE s.id = '$sale3'"
+    Check ((Text '#jobStatus') -eq 'Released' -and $chk -eq '11part,labor' -and (Sql 'SELECT COUNT(*) FROM stock_movements') -eq $mv) "billed + released: sale $sale3 linked, total incl. VAT, part + labour lines, no stock movement ($chk)"
+    Check (Eval "!!document.getElementById('printReceiptBtn') && !!document.getElementById('backJobBtn')") 'released job: Print Receipt + New Back-Job'
+    Shot '42-job-released'
+    Nav "$Base/pages/receipt.php?id=$sale3"
+    Check ((Text '#receiptJob') -eq $jo3 -and (Eval "document.body.textContent.includes('Labour / service')")) "receipt shows the job order + labour line ($(Text '#receiptJob'))"
+    Nav "$Base/pages/job-form.php?parent=$job3"
+    Check (Eval "document.querySelector('[name=customer_name]').value === 'Rosa Diaz' && !!document.getElementById('backJobNote') && document.querySelector('[name=problem]').value === ''") 'back-job form: customer + device from the released job, new problem'
+    Submit "const f = document.getElementById('jobForm'); f.problem.value = 'Memory error again'; f.requestSubmit()" 'create back-job'
+    Check ((Text '#parentJobLink') -eq $jo3) "back-job linked to $jo3"
+    Logout
+
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/job-view.php?id=$job1"
+    Submit "document.getElementById('warrantyBtn').click(); const f = document.querySelector('#warrantyDialog form'); f.stub.checked = true; f.release_note.value = 'Store warranty: SSD replaced free of charge'; f.requestSubmit()" 'warranty release'
+    Check ((Text '#jobStatus') -eq 'Released' -and (Sql "SELECT CONCAT(release_type, '|', COALESCE(sale_id, 0)) FROM job_orders WHERE id = $job1") -eq 'warranty|0') 'branch admin released job 1 under warranty (no sale)'
+    Logout
+
     Login 'admin' 'admin123'
+    SwitchBranch 0
+    Nav "$Base/pages/stock-integrity.php"
+    Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after job parts (All branches): $(Text '#integritySummary span')"
+    SwitchBranch 1
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

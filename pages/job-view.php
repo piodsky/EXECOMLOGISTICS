@@ -19,8 +19,25 @@ $self     = 'job-view.php?' . http_build_query(['id' => $id, 'return' => $return
 if (is_post()) {
     Csrf::verifyRequest();
     $action = input_string($_POST, 'action', 20);
+    $uid    = (int) Auth::id();
+    $partId = input_int($_POST, 'part_id', 1) ?? 0;
     try {
-        flash('success', JobOrders::act($id, $action, $_POST, (int) Auth::id()));
+        $msg = match ($action) {
+            'parts_request'    => JobParts::request($id, $_POST, $uid),
+            'parts_issue'      => JobParts::issue($partId, $_POST, $uid),
+            'parts_use'        => JobParts::useParts($partId, $_POST, $uid),
+            'parts_return'     => JobParts::returnParts($partId, $_POST, $uid),
+            'parts_cancel'     => JobParts::cancel($partId, $uid),
+            'bill'             => (static function () use ($id, $uid): string {
+                $r = JobBilling::bill($id, $_POST, $uid);
+                return "Billed on sale No. {$r['sale_no']}: total " . money(from_cents($r['total_cents']))
+                    . ($r['change_cents'] > 0 ? ', change ' . money(from_cents($r['change_cents'])) : '') . '. The device was released.';
+            })(),
+            'release_warranty' => JobBilling::releaseFree($id, 'warranty', $_POST, $uid),
+            'release_free'     => JobBilling::releaseFree($id, 'no_charge', $_POST, $uid),
+            default            => JobOrders::act($id, $action, $_POST, $uid),
+        };
+        flash('success', $msg);
     } catch (HttpException $e) {
         if ($e->status === 404) {
             throw $e;
@@ -46,6 +63,23 @@ $sold    = $job['sold'];
 $inWarranty = $job['warranty_until'] !== null && $job['warranty_until'] >= substr((string) $job['created_at'], 0, 10);
 $technicians = $act['assign'] ? JobOrders::technicians((int) $job['branch_id']) : [];
 $threshold   = JobOrders::quoteThreshold();
+// Parts + billing (Phase 10b)
+$parts      = JobParts::forJob($id);
+$canRequest = JobParts::canRequest($job);
+$partProducts = $canRequest ? JobParts::products((int) $job['branch_id']) : [];
+$canCost    = Auth::can('products.cost');
+$posLoc     = null;
+$quote      = in_array($status, ['completed', 'released'], true) ? JobBilling::quote($job) : null;
+$billAct    = $quote !== null && $status === 'completed' ? JobBilling::actions($job, $quote) : ['bill' => false, 'no_charge' => false, 'warranty' => false];
+$blocker    = $status === 'completed' ? JobBilling::blocker($job) : null;
+$vatRate    = (float) setting('vat_rate', '12');
+$lineActs   = [];
+foreach ($parts as $p) {
+    $lineActs[(int) $p['id']] = JobParts::lineActions($job, $p);
+    if ($lineActs[(int) $p['id']]['issue'] && (int) $p['track_serial'] === 1 && $posLoc === null) {
+        $posLoc = Branch::defaultLocation((int) $job['branch_id']);
+    }
+}
 $hasStep = $act['take'] || $act['start'] || $act['diagnose'] || $act['decision'] || $act['wait_parts'] || $act['resume']
         || $act['to_testing'] || $act['test_failed'] || $act['complete'];
 $hidden = static function (string $action) use ($returnTo): string {
@@ -73,9 +107,19 @@ require ROOT_PATH . '/includes/header.php';
             <span class="badge <?= e(JobOrders::BADGES[$status] ?? '') ?>" id="jobStatus"><?= e(JobOrders::STATUSES[$status] ?? $status) ?></span>
             <?php if ($job['priority'] !== 'normal'): ?><span class="badge <?= e(JobOrders::PRIORITY_BADGES[$job['priority']]) ?>"><?= e(JobOrders::PRIORITIES[$job['priority']]) ?> priority</span><?php endif; ?>
         </h1>
-        <p class="muted"><?= e($job['branch_code'] . ' · ' . $job['branch_name']) ?> · received <?= e($when($job['created_at'])) ?> by <?= e($job['created_by_name']) ?></p>
+        <p class="muted"><?= e($job['branch_code'] . ' · ' . $job['branch_name']) ?> · received <?= e($when($job['created_at'])) ?> by <?= e($job['created_by_name']) ?>
+            <?php if ($job['parent_job_no'] !== null): ?> · back-job of <a href="<?= e(url('pages/job-view.php?id=' . (int) $job['parent_job_id'])) ?>" id="parentJobLink"><?= e($job['parent_job_no']) ?></a><?php endif; ?></p>
+        <?php if ($job['back_jobs']): ?>
+            <p class="muted jo-backjobs">Back-jobs: <?php foreach ($job['back_jobs'] as $i => $bj): ?><?= $i ? ', ' : '' ?><a href="<?= e(url('pages/job-view.php?id=' . (int) $bj['id'])) ?>"><?= e($bj['job_no']) ?></a> (<?= e(strtolower(JobOrders::STATUSES[$bj['status']] ?? $bj['status'])) ?>)<?php endforeach; ?></p>
+        <?php endif; ?>
     </div>
     <div class="page-actions">
+        <?php if ($job['sale_id'] !== null && Auth::can('sales.view')): ?>
+            <a class="btn btn--success" href="<?= e(url('pages/receipt.php?id=' . (int) $job['sale_id'] . '&autoprint=1')) ?>" target="_blank" rel="noopener" id="printReceiptBtn"><?= icon('receipt') ?> Print Receipt</a>
+        <?php endif; ?>
+        <?php if ($act['back_job']): ?>
+            <a class="btn btn--light" href="<?= e(url('pages/job-form.php?' . http_build_query(['parent' => $id, 'return' => $returnTo]))) ?>" id="backJobBtn"><?= icon('plus') ?> New Back-Job</a>
+        <?php endif; ?>
         <button type="button" class="btn btn--light" data-print id="printTicketBtn"><?= icon('printer') ?> Print Ticket</button>
         <?php if ($act['edit']): ?>
             <a class="btn btn--light" href="<?= e(url('pages/job-form.php?' . http_build_query(['id' => $id, 'return' => $returnTo]))) ?>" id="editJobBtn"><?= icon('edit') ?> Edit</a>
@@ -94,7 +138,11 @@ require ROOT_PATH . '/includes/header.php';
 <?php elseif ($status === 'completed'): ?>
     <div class="alert alert--success doc-note" role="note"><?= icon('check') ?>
         <span><?= $job['approval'] === 'declined' ? 'The customer declined the quotation. Return the device unrepaired.' : 'Repair completed. The device is ready to return to the customer.' ?>
-            Release with payment comes in the next update.</span></div>
+            <?= $blocker !== null ? e($blocker) : 'Bill and release it below.' ?></span></div>
+<?php elseif ($status === 'released'): ?>
+    <div class="alert alert--success doc-note" role="note"><?= icon('check') ?>
+        <span>Released to <?= e($job['released_to']) ?> on <?= e($when($job['released_at'])) ?><?= $job['released_by_name'] ? ' by ' . e($job['released_by_name']) : '' ?>
+            · <?= e(['paid' => 'paid', 'warranty' => 'under warranty (no charge)', 'no_charge' => 'no charge'][$job['release_type']] ?? '') ?><?= $job['sale_no'] ? ' · sale No. ' . e($job['sale_no']) : '' ?>.</span></div>
 <?php elseif ($status === 'new' && !$act['take'] && !$act['assign']): ?>
     <div class="alert alert--warning doc-note" role="note"><?= icon('clock') ?><span>Waiting for a technician to take this job.</span></div>
 <?php elseif (!$hasStep && in_array($status, JobOrders::OPEN, true)): ?>
@@ -241,6 +289,224 @@ require ROOT_PATH . '/includes/header.php';
                         · recorded by <?= e($job['approval_recorded_by_name'] ?? '—') ?></small><?php endif; ?></dd></div>
                 </dl>
                 <?php if ($job['approval_note']): ?><p class="rr-notes"><span class="form-label">Customer's note</span><?= e($job['approval_note']) ?></p><?php endif; ?>
+            </section>
+        <?php endif; ?>
+
+        <?php if ($parts || $canRequest): ?>
+            <section class="card" id="partsCard">
+                <header class="card__head">
+                    <h2><?= icon('box') ?> Parts</h2>
+                    <span class="muted">Issued parts leave the branch stock and stay with the technician until used or returned.</span>
+                </header>
+                <?php if ($parts): ?>
+                    <div class="table-wrap">
+                        <table class="table jo-parts" id="partsTable">
+                            <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th class="num">Requested</th>
+                                <th class="num">Issued</th>
+                                <th class="num">Used</th>
+                                <th class="num">Returned</th>
+                                <th class="num">With technician</th>
+                                <?php if ($canCost): ?><th class="num col-opt">Unit cost</th><?php endif; ?>
+                                <th>Status</th>
+                            </tr>
+                            </thead>
+                            <?php foreach ($parts as $p): ?>
+                                <?php
+                                $pid   = (int) $p['id'];
+                                $la    = $lineActs[$pid];
+                                $track = (int) $p['track_serial'] === 1;
+                                $held  = array_values(array_filter($p['serials'], static fn (array $s): bool => $s['state'] === 'issued'));
+                                ?>
+                                <tbody data-part="<?= $pid ?>">
+                                <tr>
+                                    <td>
+                                        <strong class="block"><?= e($p['product_name']) ?></strong>
+                                        <small class="muted"><?= e($p['product_code']) ?><?= $track ? ' · S/N' : '' ?> · requested by <?= e($p['requested_by_name']) ?><?= $p['issued_by_name'] ? ' · issued by ' . e($p['issued_by_name']) : '' ?></small>
+                                        <?php if ($p['note']): ?><small class="doc-reason block"><?= e($p['note']) ?></small><?php endif; ?>
+                                        <?php if ($p['serials']): ?>
+                                            <ul class="sn-list sn-list--status" aria-label="Serial numbers">
+                                                <?php foreach ($p['serials'] as $s): ?>
+                                                    <li><?= e($s['serial_no']) ?> <small class="muted"><?= e(['issued' => 'with technician', 'used' => 'installed', 'returned' => 'returned'][$s['state']]) ?></small></li>
+                                                <?php endforeach; ?>
+                                            </ul>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="num"><?= (int) $p['qty_requested'] ?></td>
+                                    <td class="num"><?= $p['qty_issued'] !== null ? (int) $p['qty_issued'] : '—' ?></td>
+                                    <td class="num"><?= (int) $p['qty_used'] ?></td>
+                                    <td class="num"><?= (int) $p['qty_returned'] ?></td>
+                                    <td class="num<?= $p['custody'] > 0 ? ' jo-custody' : '' ?>"><?= $p['custody'] ?></td>
+                                    <?php if ($canCost): ?><td class="num col-opt"><?= ($p['unit_cost'] ?? null) !== null ? e(money($p['unit_cost'])) : '—' ?></td><?php endif; ?>
+                                    <td><span class="badge <?= e(['requested' => 'badge--info', 'issued' => 'badge--success', 'cancelled' => 'badge--danger'][$p['status']]) ?>"><?= e(JobParts::STATUSES[$p['status']]) ?></span></td>
+                                </tr>
+                                <?php if (in_array(true, $la, true)): ?>
+                                    <tr class="jo-part-actions">
+                                        <td colspan="<?= $canCost ? 8 : 7 ?>">
+                                            <?php if ($la['issue']): ?>
+                                                <form method="post" action="<?= e($actionUrl) ?>" class="jo-part-form" novalidate>
+                                                    <?= $hidden('parts_issue') ?><input type="hidden" name="part_id" value="<?= $pid ?>">
+                                                    <?php if ($track): ?>
+                                                        <fieldset class="sn-pick">
+                                                            <legend class="form-label">Serial numbers to issue <small class="muted">(up to <?= (int) $p['qty_requested'] ?>)</small></legend>
+                                                            <div class="sn-pick__list">
+                                                                <?php foreach (Serials::available((int) $p['product_id'], (int) $posLoc['id']) as $s): ?>
+                                                                    <label class="sn-check"><input type="checkbox" name="serial_ids[]" value="<?= (int) $s['id'] ?>"> <span class="serial-cell"><?= e($s['serial_no']) ?></span></label>
+                                                                <?php endforeach; ?>
+                                                            </div>
+                                                        </fieldset>
+                                                    <?php else: ?>
+                                                        <label class="jo-inline">Quantity <input class="form-input num jo-qty" type="number" name="quantity" min="1" max="<?= (int) $p['qty_requested'] ?>" value="<?= (int) $p['qty_requested'] ?>"></label>
+                                                    <?php endif; ?>
+                                                    <button type="submit" class="btn btn--primary btn--sm" data-issue="<?= $pid ?>"><?= icon('truck') ?> Issue</button>
+                                                    <?= field_error('qty.' . $pid) . field_error('serials.' . $pid) ?>
+                                                </form>
+                                            <?php endif; ?>
+                                            <?php foreach (['use' => ['parts_use', 'Used', 'check', 'btn--primary'], 'return' => ['parts_return', 'Return to Stock', 'arrow-left', 'btn--light']] as $k => [$a, $lbl, $ic, $cls]): ?>
+                                                <?php if ($la[$k]): ?>
+                                                    <form method="post" action="<?= e($actionUrl) ?>" class="jo-part-form" novalidate>
+                                                        <?= $hidden($a) ?><input type="hidden" name="part_id" value="<?= $pid ?>">
+                                                        <?php if ($track): ?>
+                                                            <span class="sn-pick__list">
+                                                                <?php foreach ($held as $s): ?>
+                                                                    <label class="sn-check"><input type="checkbox" name="serial_ids[]" value="<?= (int) $s['id'] ?>"> <span class="serial-cell"><?= e($s['serial_no']) ?></span></label>
+                                                                <?php endforeach; ?>
+                                                            </span>
+                                                        <?php else: ?>
+                                                            <label class="jo-inline">Qty <input class="form-input num jo-qty" type="number" name="quantity" min="1" max="<?= $p['custody'] ?>" value="<?= $p['custody'] ?>"></label>
+                                                        <?php endif; ?>
+                                                        <button type="submit" class="btn <?= $cls ?> btn--sm" data-<?= $k ?>="<?= $pid ?>"><?= icon($ic) ?> <?= e($lbl) ?></button>
+                                                    </form>
+                                                <?php endif; ?>
+                                            <?php endforeach; ?>
+                                            <?php if ($la['cancel']): ?>
+                                                <form method="post" action="<?= e($actionUrl) ?>" class="jo-part-form" data-confirm="Cancel this parts request?">
+                                                    <?= $hidden('parts_cancel') ?><input type="hidden" name="part_id" value="<?= $pid ?>">
+                                                    <button type="submit" class="btn btn--light btn--sm" data-cancel-part="<?= $pid ?>"><?= icon('x') ?> Cancel Request</button>
+                                                </form>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endif; ?>
+                                </tbody>
+                            <?php endforeach; ?>
+                        </table>
+                    </div>
+                <?php endif; ?>
+                <?php if ($canRequest): ?>
+                    <form method="post" action="<?= e($actionUrl) ?>" class="jo-request" id="partsRequestForm" novalidate>
+                        <?= $hidden('parts_request') ?>
+                        <label class="form-field jo-request__item">
+                            <span class="form-label">Request a part</span>
+                            <select class="form-input" name="product_id"<?= $oldAct === 'parts_request' ? invalid('product_id') : '' ?>>
+                                <option value="">Choose a product…</option>
+                                <?php foreach ($partProducts as $pp): ?>
+                                    <option value="<?= (int) $pp['id'] ?>"<?= $oldAct === 'parts_request' && old('product_id') === (string) $pp['id'] ? ' selected' : '' ?>><?= e($pp['code'] . ' · ' . $pp['name']) ?><?= (int) $pp['track_serial'] === 1 ? ' · S/N' : '' ?> · <?= (int) $pp['qty'] ?> in stock</option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?= $oldAct === 'parts_request' ? field_error('product_id') : '' ?>
+                        </label>
+                        <label class="form-field jo-request__qty">
+                            <span class="form-label">Qty</span>
+                            <input class="form-input num" type="number" name="quantity" min="1" max="<?= JobParts::MAX_QTY ?>" value="<?= e($oldAct === 'parts_request' ? old('quantity', '1') : '1') ?>"<?= $oldAct === 'parts_request' ? invalid('quantity') : '' ?>>
+                        </label>
+                        <label class="form-field jo-request__note">
+                            <span class="form-label">Note <small class="muted">(optional)</small></span>
+                            <input class="form-input" name="note" maxlength="255" value="<?= e($oldAct === 'parts_request' ? old('note') : '') ?>">
+                        </label>
+                        <button type="submit" class="btn btn--light" id="requestPartBtn"><?= icon('plus') ?> Request</button>
+                    </form>
+                <?php endif; ?>
+            </section>
+        <?php endif; ?>
+
+        <?php if ($quote !== null): ?>
+            <section class="card card--pad" id="billCard">
+                <h2 class="card__title"><?= $status === 'released' ? 'Charges' : 'Bill &amp; Release' ?></h2>
+                <?php
+                $sub = $quote['subtotal'];
+                $vatC = (int) round($sub * $vatRate / 100);
+                ?>
+                <table class="table jo-bill" id="billLines">
+                    <tbody>
+                    <?php foreach ($quote['lines'] as $l): ?>
+                        <tr><td><?= e($l['type'] === 'labor' ? 'Labour / service' : $l['code'] . ' · ' . $l['name']) ?></td>
+                            <td class="num"><?= $l['qty'] ?> × <?= e(money(from_cents($l['price']))) ?></td>
+                            <td class="num"><?= e(money(from_cents($l['price'] * $l['qty']))) ?></td></tr>
+                    <?php endforeach; ?>
+                    <?php if (!$quote['lines']): ?><tr><td colspan="3" class="muted">No parts used and no labour charge.</td></tr><?php endif; ?>
+                    </tbody>
+                    <tfoot>
+                    <tr><th colspan="2">Subtotal</th><td class="num" id="billSubtotal"><?= e(money(from_cents($sub))) ?></td></tr>
+                    <?php if ($status === 'completed' && $sub > 0): ?>
+                        <tr class="muted"><th colspan="2">VAT (<?= e(rtrim(rtrim(number_format($vatRate, 2), '0'), '.')) ?>%) before any discount</th><td class="num"><?= e(money(from_cents($vatC))) ?></td></tr>
+                        <tr><th colspan="2">Total before discount</th><td class="num" id="billTotal"><?= e(money(from_cents($sub + $vatC))) ?></td></tr>
+                    <?php endif; ?>
+                    </tfoot>
+                </table>
+
+                <?php if ($act['set_labor']): ?>
+                    <form method="post" action="<?= e($actionUrl) ?>" class="jo-labor" id="laborForm" novalidate>
+                        <?= $hidden('set_labor') ?>
+                        <label class="jo-inline">Labour charge (₱)
+                            <input class="form-input num" name="labor" inputmode="decimal" maxlength="13" value="<?= e($oldAct === 'set_labor' ? old('labor') : number_format((float) ($job['labor'] ?? 0), 2, '.', '')) ?>"<?= $oldAct === 'set_labor' ? invalid('labor') : '' ?>></label>
+                        <button type="submit" class="btn btn--light btn--sm"><?= icon('save') ?> Change</button>
+                        <?= $oldAct === 'set_labor' ? field_error('labor') : '' ?>
+                    </form>
+                <?php endif; ?>
+
+                <?php if ($status === 'completed' && $blocker === null && ($billAct['bill'] || $billAct['no_charge'])): ?>
+                    <form method="post" action="<?= e($actionUrl) ?>" id="billForm" class="jo-billform" novalidate
+                          data-confirm="<?= $billAct['bill'] ? 'Bill this job and release the device?' : 'Release the device with no charge?' ?>">
+                        <?= $hidden($billAct['bill'] ? 'bill' : 'release_free') ?>
+                        <div class="form-grid">
+                            <?php if ($billAct['bill']): ?>
+                                <label class="form-field">
+                                    <span class="form-label">Payment *</span>
+                                    <select class="form-input" name="payment_type" id="billPayment"<?= invalid('payment_type') ?>>
+                                        <?php foreach (Sales::PAYMENT_TYPES as $k => $label): ?>
+                                            <option value="<?= e($k) ?>"<?= old('payment_type', 'cash') === $k ? ' selected' : '' ?>><?= e($label) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </label>
+                                <label class="form-field">
+                                    <span class="form-label">Amount received (cash)</span>
+                                    <input class="form-input num" name="amount_paid" id="billPaid" inputmode="decimal" maxlength="13" value="<?= e(old('amount_paid')) ?>"<?= invalid('amount_paid') ?>>
+                                    <?= field_error('amount_paid') ?>
+                                </label>
+                                <label class="form-field">
+                                    <span class="form-label">Discount (%)</span>
+                                    <input class="form-input num" name="discount_percent" id="billDiscount" inputmode="decimal" maxlength="6" value="<?= e(old('discount_percent', '0')) ?>"<?= invalid('discount_percent') ?>>
+                                    <?= field_error('discount_percent') ?>
+                                </label>
+                            <?php endif; ?>
+                            <label class="form-field">
+                                <span class="form-label">Released to *</span>
+                                <input class="form-input" name="released_to" id="releasedTo" maxlength="100" value="<?= e(old('released_to', (string) $job['customer_name'])) ?>"<?= invalid('released_to') ?>>
+                                <?= field_error('released_to') ?>
+                            </label>
+                            <label class="form-field jo-check">
+                                <input type="checkbox" name="stub" value="1" id="stubCheck"<?= old('stub') === '1' ? ' checked' : '' ?>>
+                                <span>Claim stub presented</span>
+                            </label>
+                            <label class="form-field form-field--full">
+                                <span class="form-label">Note <small class="muted">(required without the claim stub, e.g. "ID checked")</small></span>
+                                <input class="form-input" name="release_note" maxlength="255" value="<?= e(old('release_note')) ?>"<?= invalid('release_note') ?>>
+                                <?= field_error('stub') . field_error('release_note') ?>
+                            </label>
+                        </div>
+                        <div class="form-actions form-actions--inline">
+                            <?php if ($billAct['warranty']): ?>
+                                <button type="button" class="btn btn--light" data-open="warrantyDialog" id="warrantyBtn"><?= icon('shield') ?> Release under Warranty</button>
+                            <?php endif; ?>
+                            <button type="submit" class="btn btn--primary" id="billBtn"><?= icon('check') ?> <?= $billAct['bill'] ? 'Bill &amp; Release' : 'Release (No Charge)' ?></button>
+                        </div>
+                    </form>
+                <?php elseif ($status === 'completed' && $blocker === null && !Auth::can('job_orders.release')): ?>
+                    <p class="muted">A cashier or branch admin bills the job and releases the device.</p>
+                <?php endif; ?>
             </section>
         <?php endif; ?>
 
@@ -405,8 +671,33 @@ require ROOT_PATH . '/includes/header.php';
             <label class="form-field"><span class="form-label">Work done *</span>
                 <textarea class="form-input" name="resolution" id="resolutionInput" maxlength="2000" rows="4" required placeholder="What was repaired or replaced, and the test result"<?= invalid('resolution') ?>><?= e($oldAct === 'complete' ? old('resolution') : '') ?></textarea>
                 <?= field_error('resolution') ?></label>
+            <label class="form-field"><span class="form-label">Labour charge (₱) *</span>
+                <input class="form-input num" name="labor" id="laborInput" inputmode="decimal" maxlength="13"
+                       value="<?= e($oldAct === 'complete' ? old('labor') : JobOrders::suggestedLabor($job)) ?>"<?= $oldAct === 'complete' ? invalid('labor') : '' ?>>
+                <?= $oldAct === 'complete' ? field_error('labor') : '' ?>
+                <p class="form-hint">Suggested: the estimate minus the parts used. 0 when there is no labour charge. Parts used are billed separately.</p></label>
             <footer class="modal__foot"><button type="button" class="btn btn--light" data-close>Back</button>
                 <button type="submit" class="btn btn--primary" id="completeSubmit"><?= icon('check') ?> Complete Job</button></footer>
+        </form>
+    </dialog>
+<?php endif; ?>
+
+<?php if ($billAct['warranty'] && $blocker === null): ?>
+    <dialog class="modal" id="warrantyDialog" aria-labelledby="warrantyTitle"<?= $oldAct === 'release_warranty' ? ' data-reopen' : '' ?>>
+        <form class="modal__body" method="post" action="<?= e($actionUrl) ?>" novalidate>
+            <header class="modal__head"><h2 id="warrantyTitle">Release under Warranty</h2>
+                <button type="button" class="modal__close" data-close aria-label="Close"><?= icon('x') ?></button></header>
+            <?= $hidden('release_warranty') ?>
+            <p class="void-warning"><?= icon('shield') ?><span>No sale is made: <?= e(money(from_cents($quote['subtotal']))) ?> of parts and labour is waived.</span></p>
+            <label class="form-field"><span class="form-label">Released to *</span>
+                <input class="form-input" name="released_to" maxlength="100" value="<?= e($oldAct === 'release_warranty' ? old('released_to') : (string) $job['customer_name']) ?>"></label>
+            <label class="form-field jo-check"><input type="checkbox" name="stub" value="1"> <span>Claim stub presented</span></label>
+            <label class="form-field"><span class="form-label">Warranty reason *</span>
+                <input class="form-input" name="release_note" id="warrantyReason" maxlength="255" placeholder="e.g. Within 1-year store warranty, sale No. 0000123"
+                       value="<?= e($oldAct === 'release_warranty' ? old('release_note') : '') ?>"<?= $oldAct === 'release_warranty' ? invalid('release_note') : '' ?>>
+                <?= $oldAct === 'release_warranty' ? field_error('release_note') . field_error('stub') . field_error('released_to') : '' ?></label>
+            <footer class="modal__foot"><button type="button" class="btn btn--light" data-close>Back</button>
+                <button type="submit" class="btn btn--primary" id="warrantySubmit"><?= icon('shield') ?> Release under Warranty</button></footer>
         </form>
     </dialog>
 <?php endif; ?>

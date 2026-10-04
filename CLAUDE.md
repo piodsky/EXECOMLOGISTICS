@@ -44,8 +44,10 @@ Read this first; open only the files a task needs.
 - [x] Phase 10a (= v2 phase 7, part 1): job orders & technicians — intake, assign / take, diagnosis + estimate,
       quotation approval, repair statuses, timeline + notes, ticket + claim stub print, technician work lists.
       Migration `migrations/009_job_orders.sql`. Built without agents.
-      Next: 10b = parts request / issue / use / return (job custody), billing via the POS (no second deduction),
-      release with payment (or warranty), back-jobs.
+- [x] Phase 10b (= v2 phase 7, part 2): job parts (request → issue to job custody → used / returned), billing on the
+      job page (a sale that does not deduct parts again), release (paid / warranty / no charge), back-jobs.
+      Migration `migrations/010_job_parts_billing.sql`. Built without agents.
+      Next (v2 phase 8): reports & role dashboards.
 - Existing DBs need a migration file in `migrations/`, not a re-import.
 
 ## Job orders (Phase 10a) — user decisions
@@ -71,6 +73,29 @@ Read this first; open only the files a task needs.
   device passwords. Numbers `JO-<BRANCH>-<YEAR>-NNNNNN` (document_sequences 'JO').
 - Guards: customers / device or job types / branches with job orders can't be deleted. `setting()` is cached per
   request (tests: read the DB).
+
+## Job parts, billing & release (Phase 10b) — user decisions
+- `JobParts` (`job_order_parts` = one row per request, `job_order_part_serials`): request (worker, job diagnosing /
+  in_repair / waiting_parts / for_testing) → issue (`job_parts.issue`, branch_admin, never the requester, job open;
+  qty 1..requested or exact serials; stock leaves the branch POS location, movement `job_issue` with
+  `stock_movements.job_order_id`, cost = branch average snapshot on the line; serials → `in_custody`) → use (worker,
+  no movement; serials → `installed`) / return (`job_parts.issue`, job open or completed; `Costing::inbound` at the
+  line cost + `job_return`; serials → `in_stock` at the POS location). Cancel = never-issued requests. Custody =
+  issued − used − returned is in NO location (like transit): products.stock drops at issue.
+- `JobOrders`: complete needs no open requests + a labour charge (`labor`, suggested = estimate − parts used at
+  price, ≥ 0); `set_labor` while completed. Release blockers (`JobBilling::blocker`): open requests or parts in custody.
+- `JobBilling` on the job page (`job_orders.release`: cashier + branch_admin): `bill()` = a normal sale with
+  `sales.job_order_id`, `sale_items.line_type` part (product, current suggested price, cost = issue snapshot) /
+  labor (no product, code LABOR); discount within `Pricing::limits()` (no till approval: above → ask a branch admin);
+  VAT/payment as the POS; NO stock movement; installed serials linked via sale_item_serials (receipt S/N). Job →
+  released (`release_type` paid, `sale_id`). `releaseFree()`: warranty (also `job_orders.assign`, reason required, no
+  sale) or no_charge (only when nothing to bill). Release needs "claim stub presented" or a note (e.g. ID checked);
+  `released_to` defaults to the customer. `Sales::void()` of a bill restocks nothing and re-opens the job
+  (`onSaleVoid` → completed, event bill_voided).
+- Back-job: `job-form.php?parent=ID` (released/closed job of the branch, `job_orders.create`) prefills customer +
+  device; `job_orders.parent_job_id`; both jobs show the link.
+- Integrity checks `job_part_movements` + `custody_serials`; serial tracking can't change / `Serials::register` is
+  refused while units are in custody; products with job parts can't be deleted. Receipt + sale-view show the job.
 
 ## POS pricing (Phase 9) — user decisions
 - Prices are VAT-exclusive (VAT added on top as before). `products.price` = suggested; `sale_items.unit_price` = actual,
@@ -296,7 +321,7 @@ the main session runs each step with the agent named in project-manager's plan.
   (user-form.php uses `$target`).
 
 ## Inventory / Customers behaviour
-- Stock changes ONLY via sales, receiving (RR post/cancel), stock documents (InventoryDocs) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
+- Stock changes ONLY via sales, receiving (RR post/cancel), stock documents (InventoryDocs), branch transfers, job parts (JobParts) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
   every change writes `stock_movements` (type initial/sale/restock/adjustment/void/receiving, signed qty, stock_after).
   The product edit form never edits stock; opening stock is set on create only.
 - Delete is allowed only if never sold / never bought; otherwise deactivate (`is_active=0` hides from POS).
@@ -342,7 +367,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (381 checks incl. job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (396 checks incl. job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

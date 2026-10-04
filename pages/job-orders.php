@@ -18,6 +18,7 @@ $filters = [
     'status'     => $statusIn === null ? 'open' : ($statusIn === 'open' || isset(JobOrders::STATUSES[$statusIn]) ? $statusIn : ''),
     'technician' => in_array($techIn, ['me', 'none'], true) || ctype_digit($techIn) ? $techIn : '',
     'priority'   => is_string($_GET['priority'] ?? null) && isset(JobOrders::PRIORITIES[$_GET['priority']]) ? $_GET['priority'] : '',
+    'parts'      => ($_GET['parts'] ?? '') === 'pending' ? 'pending' : '',
 ];
 // Query string for links: "open" is the default (left out), "" = every status ("all").
 $pgQuery = array_filter(array_diff_key($filters, ['status' => 1]), static fn ($v) => $v !== '');
@@ -38,7 +39,8 @@ $tiles = array_values(array_filter([
     ['Unassigned', 'New jobs nobody has taken yet', 'clipboard', $work['unassigned'], ['status' => 'new', 'technician' => 'none']],
     ['For Approval', "Waiting for the customer's answer", 'clock', $work['for_approval'], ['status' => 'for_approval']],
     ['Waiting for Parts', 'Repairs on hold for parts', 'box', $work['waiting_parts'], ['status' => 'waiting_parts']],
-    ['Completed', 'Ready to return to the customer', 'check', $work['completed'], ['status' => 'completed']],
+    ['Completed', 'Ready to bill and release', 'check', $work['completed'], ['status' => 'completed']],
+    Auth::can('job_parts.issue') ? ['Parts to Issue', 'Open parts requests of technicians', 'truck', $work['parts'], ['parts' => 'pending']] : null,
 ]));
 $assignees = JobOrders::seesAll() ? JobOrders::assignees() : [];
 $today     = date('Y-m-d');

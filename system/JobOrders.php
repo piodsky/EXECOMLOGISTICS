@@ -34,7 +34,8 @@ final class JobOrders
     public const PRIORITIES = ['low' => 'Low', 'normal' => 'Normal', 'high' => 'High', 'urgent' => 'Urgent'];
     public const LOCATIONS  = ['in_shop' => 'In shop', 'on_site' => 'On site'];
     public const METHODS    = ['in_person' => 'In person', 'phone' => 'Phone call', 'sms' => 'SMS / chat', 'email' => 'Email'];
-    public const VIEW_PERMISSIONS = ['job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign'];
+    public const VIEW_PERMISSIONS = ['job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign',
+                                     'job_parts.issue', 'job_orders.release'];
     public const PREFIX = 'JO';
 
     /** action => statuses it starts from (see act()). */
@@ -50,7 +51,8 @@ final class JobOrders
         'test_failed' => ['for_testing'],
         'complete'    => ['for_testing'],
         'cancel'      => ['new', 'assigned'],
-        'note'        => [...self::OPEN, 'completed'],
+        'note'        => [...self::OPEN, 'completed', 'released'],
+        'set_labor'   => ['completed'],
     ];
 
     /** Intake fields (edit diff + audit). */
@@ -68,10 +70,11 @@ final class JobOrders
         }
     }
 
-    /** job_orders.view / assign: every job of the branch; otherwise own, taken in, or unassigned new. */
+    /** job_orders.view / assign / job_parts.issue / job_orders.release: every job of the branch; otherwise own, taken in,
+     *  or unassigned new. */
     public static function seesAll(): bool
     {
-        return Auth::canAny('job_orders.view', 'job_orders.assign');
+        return Auth::canAny('job_orders.view', 'job_orders.assign', 'job_parts.issue', 'job_orders.release');
     }
 
     private static function visibleSql(string $alias = 'j'): array
@@ -121,6 +124,9 @@ final class JobOrders
             $where[]  = 'j.technician_id = ?';
             $params[] = (int) $tech;
         }
+        if (($f['parts'] ?? '') === 'pending') {
+            $where[] = "j.status IN ('" . implode("','", self::OPEN) . "') AND EXISTS (SELECT 1 FROM job_order_parts jp WHERE jp.job_order_id = j.id AND jp.status = 'requested')";
+        }
         $prio = (string) ($f['priority'] ?? '');
         if (isset(self::PRIORITIES[$prio])) {
             $where[]  = 'j.priority = ?';
@@ -165,10 +171,10 @@ final class JobOrders
         return $stmt->fetchAll();
     }
 
-    /** Work list counts for the current branch: mine (open), unassigned, for approval, waiting parts, completed. */
+    /** Work list counts for the current branch: mine (open), unassigned, for approval, waiting parts, completed, parts to issue. */
     public static function workCounts(): array
     {
-        $out = ['mine' => 0, 'unassigned' => 0, 'for_approval' => 0, 'waiting_parts' => 0, 'completed' => 0];
+        $out = ['mine' => 0, 'unassigned' => 0, 'for_approval' => 0, 'waiting_parts' => 0, 'completed' => 0, 'parts' => 0];
         if (!Branch::isConcrete() || !Auth::canAny(...self::VIEW_PERMISSIONS)) {
             return $out;
         }
@@ -176,7 +182,8 @@ final class JobOrders
         $open = "'" . implode("','", self::OPEN) . "'";
         $stmt = db()->prepare(
             "SELECT SUM(j.technician_id = ? AND j.status IN ({$open})), SUM(j.status = 'new' AND j.technician_id IS NULL),
-                    SUM(j.status = 'for_approval'), SUM(j.status = 'waiting_parts'), SUM(j.status = 'completed')
+                    SUM(j.status = 'for_approval'), SUM(j.status = 'waiting_parts'), SUM(j.status = 'completed'),
+                    SUM(j.status IN ({$open}) AND EXISTS (SELECT 1 FROM job_order_parts jp WHERE jp.job_order_id = j.id AND jp.status = 'requested'))
                FROM job_orders j WHERE {$where}"
         );
         $stmt->execute([(int) Auth::id(), ...$params]);
@@ -197,8 +204,8 @@ final class JobOrders
         $stmt = db()->prepare(
             'SELECT j.*, b.code AS branch_code, b.name AS branch_name, b.address AS branch_address, b.contact_no AS branch_contact,
                     t.full_name AS technician_name, cu.full_name AS created_by_name, au.full_name AS approval_recorded_by_name,
-                    co.full_name AS completed_by_name, xu.full_name AS cancelled_by_name,
-                    jt.name AS job_type, dt.name AS device_type
+                    co.full_name AS completed_by_name, xu.full_name AS cancelled_by_name, ru.full_name AS released_by_name,
+                    jt.name AS job_type, dt.name AS device_type, pj.job_no AS parent_job_no, sl.sale_no
                FROM job_orders j
                JOIN branches b ON b.id = j.branch_id
                JOIN users cu ON cu.id = j.created_by
@@ -206,6 +213,9 @@ final class JobOrders
                LEFT JOIN users au ON au.id = j.approval_recorded_by
                LEFT JOIN users co ON co.id = j.completed_by
                LEFT JOIN users xu ON xu.id = j.cancelled_by
+               LEFT JOIN users ru ON ru.id = j.released_by
+               LEFT JOIN job_orders pj ON pj.id = j.parent_job_id
+               LEFT JOIN sales sl ON sl.id = j.sale_id
                LEFT JOIN lookups jt ON jt.id = j.job_type_id
                LEFT JOIN lookups dt ON dt.id = j.device_type_id
               WHERE j.id = ?'
@@ -225,16 +235,19 @@ final class JobOrders
         $stmt->execute([$id]);
         $j['events'] = $stmt->fetchAll();
         $j['sold']   = $j['serial_id'] !== null ? self::soldSerial(null, (int) $j['serial_id']) : null;
+        $stmt = db()->prepare('SELECT id, job_no, status, created_at FROM job_orders WHERE parent_job_id = ? ORDER BY id');
+        $stmt->execute([$id]);
+        $j['back_jobs'] = $stmt->fetchAll();
         return $j;
     }
 
     /**
      * Buttons for the current user: take, assign, start, diagnose, decision, wait_parts, resume, to_testing,
-     * test_failed, complete, cancel, note, edit. Nothing outside the job's branch.
+     * test_failed, complete, cancel, note, set_labor, edit, back_job. Nothing outside the job's branch.
      */
     public static function actions(array $j): array
     {
-        $out = array_fill_keys([...array_keys(self::FROM), 'edit'], false);
+        $out = array_fill_keys([...array_keys(self::FROM), 'edit', 'back_job'], false);
         if (Branch::current() !== (int) $j['branch_id']) {
             return $out;
         }
@@ -246,13 +259,14 @@ final class JobOrders
         $in     = static fn (string $a): bool => in_array($s, self::FROM[$a], true);
         $out['take']   = $in('take') && $j['technician_id'] === null && Auth::can('job_orders.update');
         $out['assign'] = $in('assign') && $sup;
-        foreach (['start', 'diagnose', 'wait_parts', 'resume', 'to_testing', 'test_failed', 'complete'] as $a) {
+        foreach (['start', 'diagnose', 'wait_parts', 'resume', 'to_testing', 'test_failed', 'complete', 'set_labor'] as $a) {
             $out[$a] = $in($a) && $worker;
         }
         $out['decision'] = $in('decision') && ($worker || $desk);
         $out['cancel']   = $in('cancel') && ($sup || ($desk && (int) $j['created_by'] === $uid && $s === 'new'));
         $out['note']     = $in('note') && ($worker || $desk);
         $out['edit']     = in_array($s, self::OPEN, true) && ($sup || $desk);
+        $out['back_job'] = in_array($s, ['released', 'closed'], true) && $desk;
         return $out;
     }
 
@@ -283,6 +297,27 @@ final class JobOrders
         );
         $stmt->execute($params);
         return $stmt->fetchAll();
+    }
+
+    /** Labour charge from the form ('labor', commas allowed; required, 0 = none). */
+    private static function laborInput(array $in): string
+    {
+        $raw = is_string($in['labor'] ?? null) ? str_replace(',', '', trim($in['labor'])) : '';
+        $v   = $raw === '' ? null : input_decimal(['v' => $raw], 'v', 0, 9999999.99, 2);
+        if ($v === null) {
+            throw new HttpException(422, 'Enter the labour charge in pesos (0 when there is none).', ['errors' => ['labor' => 'Enter an amount, e.g. 500.00.']]);
+        }
+        return number_format($v, 2, '.', '');
+    }
+
+    /** Suggested labour at completion: the estimate minus the parts used (at their selling price), never below 0. */
+    public static function suggestedLabor(array $j): string
+    {
+        $stmt = db()->prepare("SELECT COALESCE(SUM(jp.qty_used * p.price), 0) FROM job_order_parts jp JOIN products p ON p.id = jp.product_id
+                                WHERE jp.job_order_id = ? AND jp.status = 'issued'");
+        $stmt->execute([(int) $j['id']]);
+        $cents = to_cents((string) ($j['estimate'] ?? '0')) - to_cents((string) $stmt->fetchColumn());
+        return from_cents(max(0, $cents));
     }
 
     public static function quoteThreshold(): string
@@ -398,23 +433,28 @@ final class JobOrders
         $pdo->beginTransaction();
         try {
             $no = self::nextNumber($branchId);
-            $cols = [...self::INTAKE, 'job_no', 'branch_id', 'status', 'serial_id', 'warranty_until', 'technician_id', 'assigned_at', 'created_by'];
+            $parent = self::parentFor($in, $branchId);
+            $cols = [...self::INTAKE, 'job_no', 'branch_id', 'status', 'serial_id', 'warranty_until', 'technician_id', 'assigned_at', 'created_by', 'parent_job_id'];
             $vals = [];
             foreach (self::INTAKE as $k) {
                 $vals[] = $d[$k];
             }
             array_push($vals, $no, $branchId, $tech !== null ? 'assigned' : 'new', $sold['serial_id'] ?? null, $sold['warranty_until'] ?? null,
-                $tech, $tech !== null ? date('Y-m-d H:i:s') : null, $userId);
+                $tech, $tech !== null ? date('Y-m-d H:i:s') : null, $userId, $parent['id'] ?? null);
             $pdo->prepare('INSERT INTO job_orders (' . implode(', ', $cols) . ') VALUES (' . implode(', ', array_fill(0, count($cols), '?')) . ')')
                 ->execute($vals);
             $id = (int) $pdo->lastInsertId();
-            self::event($id, $userId, 'create', null, 'new', null);
+            self::event($id, $userId, 'create', null, 'new', $parent !== null ? "Back-job of {$parent['job_no']}." : null);
+            if ($parent !== null) {
+                self::event($parent['id'], $userId, 'note', null, null, "Back-job {$no} was opened for this device.");
+            }
             if ($tech !== null) {
                 self::event($id, $userId, 'assign', 'new', 'assigned', 'Assigned to ' . self::userName($tech) . '.');
             }
             Audit::record('job_orders', 'create', 'job_order', $id, $no, null, array_filter([
                 'customer' => $d['customer_name'], 'device' => trim(($d['brand'] ?? '') . ' ' . ($d['model'] ?? '')) ?: null,
                 'serial_no' => $d['serial_no'], 'priority' => $d['priority'], 'technician' => $tech !== null ? self::userName($tech) : null,
+                'back_job_of' => $parent['job_no'] ?? null,
             ], static fn ($v) => $v !== null), $branchId);
             $pdo->commit();
             return ['id' => $id, 'job_no' => $no];
@@ -424,6 +464,25 @@ final class JobOrders
             }
             throw $e;
         }
+    }
+
+    /**
+     * Back-job: 'parent_job_id' = a released / closed job of this branch the user can see (locked), or null.
+     * @return array{id:int, job_no:string}|null
+     */
+    private static function parentFor(array $in, int $branchId): ?array
+    {
+        $pid = input_int($in, 'parent_job_id', 1);
+        if ($pid === null) {
+            return null;
+        }
+        $stmt = db()->prepare('SELECT * FROM job_orders WHERE id = ? FOR UPDATE');
+        $stmt->execute([$pid]);
+        $p = $stmt->fetch();
+        if (!$p || !self::isVisible($p) || (int) $p['branch_id'] !== $branchId || !in_array($p['status'], ['released', 'closed'], true)) {
+            throw new HttpException(422, 'A back-job can only be opened for a released job of this branch.');
+        }
+        return ['id' => (int) $p['id'], 'job_no' => (string) $p['job_no']];
     }
 
     /** Edit the intake details of an open job (job_orders.create or job_orders.assign). */
@@ -612,13 +671,18 @@ final class JobOrders
                     $msg  = "{$no} went back to repair.";
                     break;
                 case 'complete':
+                    if (JobParts::openCounts($id)['pending'] > 0) {
+                        throw new HttpException(409, 'Cancel or wait for the open parts requests before completing the job.');
+                    }
+                    $labor = self::laborInput($in);
                     $res = self::cleanMemo(input_string($in, 'resolution', 2001));
                     if ($res === null || mb_strlen($res) < 3 || mb_strlen($res) > 2000) {
                         throw new HttpException(422, 'Write the work done (3 to 2,000 characters).', ['errors' => ['resolution' => 'Write the work done (3 to 2,000 characters).']]);
                     }
-                    $set  = ['resolution' => $res, 'completed_by' => $userId, 'completed_at' => date('Y-m-d H:i:s')];
+                    $set  = ['resolution' => $res, 'labor' => $labor, 'completed_by' => $userId, 'completed_at' => date('Y-m-d H:i:s')];
                     $to   = 'completed';
-                    $note = 'Work done: ' . $res;
+                    $note = 'Work done: ' . $res . ' Labour: ' . money($labor) . '.';
+                    $audit = ['labor' => $labor];
                     $msg  = "{$no} is completed and ready for release.";
                     break;
                 case 'cancel':
@@ -631,6 +695,16 @@ final class JobOrders
                     $note = 'Cancelled: ' . $reason;
                     $audit = ['reason' => $reason];
                     $msg  = "{$no} was cancelled.";
+                    break;
+                case 'set_labor':
+                    $labor = self::laborInput($in);
+                    if ($j['labor'] !== null && to_cents($j['labor']) === to_cents($labor)) {
+                        throw new HttpException(422, 'The labour charge is already ' . money($labor) . '.', ['errors' => ['labor' => 'Unchanged.']]);
+                    }
+                    $set  = ['labor' => $labor];
+                    $note = 'Labour charge changed from ' . money($j['labor'] ?? 0) . ' to ' . money($labor) . '.' . ($note !== null ? ' ' . $note : '');
+                    $audit = ['labor' => $labor];
+                    $msg  = 'The labour charge is now ' . money($labor) . '.';
                     break;
                 case 'note':
                     $note = $needNote($note, 'Write the note (3 to 2,000 characters).');
@@ -647,7 +721,8 @@ final class JobOrders
             }
             self::event($id, $userId, $action, $to !== $from ? $from : null, $to !== $from ? $to : null, $note);
             if ($action !== 'note') {
-                Audit::record('job_orders', $action, 'job_order', $id, $no, ['status' => $from], ['status' => $to] + $audit, (int) $j['branch_id']);
+                Audit::record('job_orders', $action, 'job_order', $id, $no, ['status' => $from] + ($action === 'set_labor' ? ['labor' => $j['labor']] : []),
+                    ['status' => $to] + $audit, (int) $j['branch_id']);
             }
             $pdo->commit();
             return $msg;
@@ -662,6 +737,20 @@ final class JobOrders
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** Lock the job row (first in the lock order) and require the session to work in its branch. For JobParts / JobBilling. */
+    public static function lockForAction(int $id): array
+    {
+        $j = self::lock($id);
+        self::assertWorkingIn($j);
+        return $j;
+    }
+
+    /** Assigned technician (job_orders.update) or supervisor (job_orders.assign). */
+    public static function isWorker(array $j): bool
+    {
+        return Auth::can('job_orders.assign') || (Auth::can('job_orders.update') && (int) $j['technician_id'] === (int) Auth::id());
+    }
 
     /** Lock the job row; 404 when missing or not visible. */
     private static function lock(int $id): array
@@ -687,13 +776,13 @@ final class JobOrders
         throw new HttpException(422, 'Switch to branch ' . $stmt->fetchColumn() . ' first.');
     }
 
-    private static function event(int $jobId, int $userId, string $action, ?string $from, ?string $to, ?string $note): void
+    public static function event(int $jobId, int $userId, string $action, ?string $from, ?string $to, ?string $note): void
     {
         db()->prepare('INSERT INTO job_order_events (job_order_id, user_id, action, from_status, to_status, note) VALUES (?, ?, ?, ?, ?, ?)')
             ->execute([$jobId, $userId, $action, $from, $to, $note === null ? null : mb_substr($note, 0, 2000)]);
     }
 
-    private static function userName(int $id): string
+    public static function userName(int $id): string
     {
         $stmt = db()->prepare('SELECT full_name FROM users WHERE id = ?');
         $stmt->execute([$id]);

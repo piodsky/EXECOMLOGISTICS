@@ -25,7 +25,7 @@ return [
         'label'      => 'Job Orders',
         'icon'       => 'wrench',
         'url'        => 'pages/job-orders.php',
-        'permission' => ['job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign'],
+        'permission' => ['job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue', 'job_orders.release'],
     ],
     'inventory' => [
         'label'      => 'Inventory',

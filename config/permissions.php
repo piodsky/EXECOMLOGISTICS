@@ -1,7 +1,7 @@
 <?php
 /**
  * Permission registry: key => [module, label].
- * Must match the `permissions` table seed (database.sql / migrations/003-009). Roles get permissions
+ * Must match the `permissions` table seed (database.sql / migrations/003-010). Roles get permissions
  * through `role_permissions`; a role with roles.is_super = 1 holds every key (also future ones).
  * Check with Auth::can('key'); an unknown key is a programming error.
  */
@@ -45,6 +45,8 @@ return [
     'job_orders.create'   => ['Job Orders', 'Take in devices (new job orders) and edit intake details'],
     'job_orders.update'   => ['Job Orders', 'Work on assigned jobs: diagnosis, quotation, repair status, notes'],
     'job_orders.assign'   => ['Job Orders', 'Assign technicians, act on any job of the branch, cancel jobs'],
+    'job_parts.issue'     => ['Job Orders', 'Issue parts to jobs and take back unused parts'],
+    'job_orders.release'  => ['Job Orders', 'Bill completed jobs and release devices to the customer'],
     'users.view'          => ['Users',     'View users'],
     'users.manage'        => ['Users',     'Add and edit users, reset passwords, activate/deactivate'],
     'users.delete'        => ['Users',     'Delete users'],

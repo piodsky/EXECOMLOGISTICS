@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008 and 009.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009 and 010.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,8 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS job_order_part_serials;
+DROP TABLE IF EXISTS job_order_parts;
 DROP TABLE IF EXISTS job_order_events;
 DROP TABLE IF EXISTS job_orders;
 DROP TABLE IF EXISTS stock_transfer_serials;
@@ -489,6 +491,7 @@ CREATE TABLE sales (
   branch_id         INT UNSIGNED  NOT NULL,
   user_id           INT UNSIGNED  NOT NULL,
   customer_id       INT UNSIGNED  NULL,
+  job_order_id      INT UNSIGNED  NULL,
   payment_type      ENUM('cash','gcash','card') NOT NULL DEFAULT 'cash',
   status            ENUM('held','completed','cancelled') NOT NULL DEFAULT 'completed',
   subtotal          DECIMAL(10,2) NOT NULL DEFAULT 0.00,
@@ -516,6 +519,7 @@ CREATE TABLE sales (
   KEY idx_sales_branch_status_date (branch_id, status, created_at),
   KEY idx_sales_branch_user_date (branch_id, user_id, created_at),
   KEY idx_sales_discount_approved_by (discount_approved_by),
+  KEY idx_sales_job_order (job_order_id),
   CONSTRAINT fk_sales_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_sales_user FOREIGN KEY (user_id) REFERENCES users (id)
@@ -534,6 +538,7 @@ CREATE TABLE sale_items (
   id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   sale_id       INT UNSIGNED  NOT NULL,
   product_id    INT UNSIGNED  NULL,
+  line_type     ENUM('item','part','labor') NOT NULL DEFAULT 'item',
   product_code  VARCHAR(20)   NOT NULL,
   product_name  VARCHAR(100)  NOT NULL,
   unit_price    DECIMAL(10,2) NOT NULL,
@@ -666,7 +671,7 @@ CREATE TABLE product_serials (
   branch_id          INT UNSIGNED NOT NULL,
   warehouse_id       INT UNSIGNED NOT NULL,
   location_id        INT UNSIGNED NOT NULL,
-  status             ENUM('in_stock','sold','removed','in_transit') NOT NULL DEFAULT 'in_stock',
+  status             ENUM('in_stock','sold','removed','in_transit','in_custody','installed') NOT NULL DEFAULT 'in_stock',
   receiving_item_id  INT UNSIGNED NULL,
   created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1005,11 +1010,19 @@ CREATE TABLE job_orders (
   approval_recorded_by INT UNSIGNED  NULL,
   approval_at          DATETIME      NULL,
   resolution           VARCHAR(2000) NULL,
+  labor                DECIMAL(12,2) NULL,
   completed_by         INT UNSIGNED  NULL,
   completed_at         DATETIME      NULL,
   cancelled_by         INT UNSIGNED  NULL,
   cancelled_at         DATETIME      NULL,
   cancel_reason        VARCHAR(255)  NULL,
+  release_type         ENUM('paid','warranty','no_charge') NULL,
+  released_to          VARCHAR(100)  NULL,
+  release_note         VARCHAR(255)  NULL,
+  released_by          INT UNSIGNED  NULL,
+  released_at          DATETIME      NULL,
+  sale_id              INT UNSIGNED  NULL,
+  parent_job_id        INT UNSIGNED  NULL,
   created_by           INT UNSIGNED  NOT NULL,
   created_at           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at           DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1026,6 +1039,9 @@ CREATE TABLE job_orders (
   KEY idx_job_orders_approval_by (approval_recorded_by),
   KEY idx_job_orders_completed_by (completed_by),
   KEY idx_job_orders_cancelled_by (cancelled_by),
+  KEY idx_job_orders_released_by (released_by),
+  KEY idx_job_orders_sale (sale_id),
+  KEY idx_job_orders_parent (parent_job_id),
   CONSTRAINT fk_job_orders_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_job_orders_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
@@ -1046,8 +1062,16 @@ CREATE TABLE job_orders (
     ON UPDATE CASCADE ON DELETE SET NULL,
   CONSTRAINT fk_job_orders_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
     ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_job_orders_released_by FOREIGN KEY (released_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_job_orders_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_job_orders_parent FOREIGN KEY (parent_job_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT chk_job_orders_estimate CHECK (estimate IS NULL OR estimate >= 0),
-  CONSTRAINT chk_job_orders_assigned CHECK (status IN ('new','cancelled') OR technician_id IS NOT NULL)
+  CONSTRAINT chk_job_orders_assigned CHECK (status IN ('new','cancelled') OR technician_id IS NOT NULL),
+  CONSTRAINT chk_job_orders_labor CHECK (labor IS NULL OR labor >= 0),
+  CONSTRAINT chk_job_orders_released CHECK ((status IN ('released','closed')) = (release_type IS NOT NULL))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Timeline: every status change (from_status -> to_status) and note.
@@ -1069,6 +1093,66 @@ CREATE TABLE job_order_events (
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Job parts (migration 010): requested -> issued (job custody) -> used / returned.
+CREATE TABLE job_order_parts (
+  id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  job_order_id  INT UNSIGNED  NOT NULL,
+  product_id    INT UNSIGNED  NOT NULL,
+  status        ENUM('requested','issued','cancelled') NOT NULL DEFAULT 'requested',
+  qty_requested INT           NOT NULL,
+  qty_issued    INT           NULL,
+  qty_used      INT           NOT NULL DEFAULT 0,
+  qty_returned  INT           NOT NULL DEFAULT 0,
+  unit_cost     DECIMAL(12,4) NULL,
+  note          VARCHAR(255)  NULL,
+  requested_by  INT UNSIGNED  NOT NULL,
+  requested_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  issued_by     INT UNSIGNED  NULL,
+  issued_at     DATETIME      NULL,
+  cancelled_by  INT UNSIGNED  NULL,
+  cancelled_at  DATETIME      NULL,
+  updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_job_parts_job (job_order_id, status),
+  KEY idx_job_parts_product (product_id),
+  KEY idx_job_parts_requested_by (requested_by),
+  KEY idx_job_parts_issued_by (issued_by),
+  KEY idx_job_parts_cancelled_by (cancelled_by),
+  CONSTRAINT fk_job_parts_job FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_parts_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_parts_requested_by FOREIGN KEY (requested_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_parts_issued_by FOREIGN KEY (issued_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_parts_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT chk_job_parts_requested CHECK (qty_requested > 0),
+  CONSTRAINT chk_job_parts_issued CHECK (qty_issued IS NULL OR qty_issued BETWEEN 1 AND qty_requested),
+  CONSTRAINT chk_job_parts_status CHECK ((status = 'issued') = (qty_issued IS NOT NULL)),
+  CONSTRAINT chk_job_parts_custody CHECK (qty_used >= 0 AND qty_returned >= 0 AND qty_used + qty_returned <= COALESCE(qty_issued, 0)),
+  CONSTRAINT chk_job_parts_cost CHECK (unit_cost IS NULL OR unit_cost >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Serials issued on a parts line: issued (in custody) -> used (installed) | returned (back in stock).
+CREATE TABLE job_order_part_serials (
+  part_id   INT UNSIGNED NOT NULL,
+  serial_id INT UNSIGNED NOT NULL,
+  state     ENUM('issued','used','returned') NOT NULL DEFAULT 'issued',
+  PRIMARY KEY (part_id, serial_id),
+  KEY idx_job_part_serials_serial (serial_id),
+  CONSTRAINT fk_job_part_serials_part FOREIGN KEY (part_id) REFERENCES job_order_parts (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_job_part_serials_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- sales.job_order_id is added here because job_orders is created after sales.
+ALTER TABLE sales
+  ADD CONSTRAINT fk_sales_job_order FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+
 -- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
@@ -1082,10 +1166,11 @@ CREATE TABLE stock_movements (
   receiving_id        INT UNSIGNED    NULL,
   inventory_doc_id    INT UNSIGNED    NULL,
   stock_transfer_id   INT UNSIGNED    NULL,
+  job_order_id        INT UNSIGNED    NULL,
   branch_id           INT UNSIGNED    NOT NULL,
   warehouse_id        INT UNSIGNED    NOT NULL,
   location_id         INT UNSIGNED    NOT NULL,
-  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count','transfer_out','transfer_in') NOT NULL,
+  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count','transfer_out','transfer_in','job_issue','job_return') NOT NULL,
   quantity            INT             NOT NULL,
   stock_after         INT             NOT NULL,
   location_qty_after  INT             NULL,
@@ -1100,6 +1185,7 @@ CREATE TABLE stock_movements (
   KEY idx_movements_receiving (receiving_id),
   KEY idx_movements_inventory_doc (inventory_doc_id),
   KEY idx_movements_stock_transfer (stock_transfer_id),
+  KEY idx_movements_job_order (job_order_id),
   CONSTRAINT fk_movements_location FOREIGN KEY (location_id, warehouse_id, branch_id)
     REFERENCES storage_locations (id, warehouse_id, branch_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -1114,6 +1200,8 @@ CREATE TABLE stock_movements (
   CONSTRAINT fk_movements_inventory_doc FOREIGN KEY (inventory_doc_id) REFERENCES inventory_docs (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_movements_stock_transfer FOREIGN KEY (stock_transfer_id) REFERENCES stock_transfers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_movements_job_order FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1241,7 +1329,9 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (43, 'job_orders.view',     'Job Orders', 'View all job orders of the branch',                       105),
   (44, 'job_orders.create',   'Job Orders', 'Take in devices (new job orders) and edit intake details', 106),
   (45, 'job_orders.update',   'Job Orders', 'Work on assigned jobs: diagnosis, quotation, repair status, notes', 107),
-  (46, 'job_orders.assign',   'Job Orders', 'Assign technicians, act on any job of the branch, cancel jobs', 108);
+  (46, 'job_orders.assign',   'Job Orders', 'Assign technicians, act on any job of the branch, cancel jobs', 108),
+  (47, 'job_parts.issue',     'Job Orders', 'Issue parts to jobs and take back unused parts',          109),
+  (48, 'job_orders.release',  'Job Orders', 'Bill completed jobs and release devices to the customer',  110);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -1263,9 +1353,11 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'inventory.integrity', 'inventory.transfer', 'inventory.damage', 'inventory.issue', 'counts.create',
          'counts.approve', 'warehouses.manage', 'transfers.request', 'transfers.approve', 'transfers.release',
          'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost',
-         'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign'))
+         'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue',
+         'job_orders.release'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
-         'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create'))
+         'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create',
+         'job_orders.release'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view', 'job_orders.create',
          'job_orders.update'))
 ORDER BY r.id, p.id;

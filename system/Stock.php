@@ -2,7 +2,7 @@
 /**
  * The only writer of stock. Used by Products (opening stock, adjustments), Sales (sale, void),
  * Receiving (RR post / cancel), InventoryDocs (transfers, issues, write-offs, counts) and
- * Transfers (branch-to-branch release / receive).
+ * Transfers (branch-to-branch release / receive) and JobParts (parts issued to / returned from job custody).
  *
  * Stock::move() changes one product at one storage location:
  *   stock_balances.qty (per location)  +  products.stock (company total)  +  one stock_movements row.
@@ -13,9 +13,10 @@ declare(strict_types=1);
 
 final class Stock
 {
-    /** stock_movements.type values (transfer / issue / write_off / count: InventoryDocs; transfer_out / transfer_in: Transfers). */
+    /** stock_movements.type values (transfer / issue / write_off / count: InventoryDocs; transfer_out / transfer_in: Transfers;
+     *  job_issue / job_return: JobParts). */
     public const TYPES = ['initial', 'sale', 'restock', 'adjustment', 'void', 'receiving', 'transfer', 'issue', 'write_off', 'count',
-                          'transfer_out', 'transfer_in'];
+                          'transfer_out', 'transfer_in', 'job_issue', 'job_return'];
 
     /** Quantity at a location, locking the balance row (0 when there is none yet). */
     public static function balance(int $productId, int $locationId): int
@@ -36,12 +37,13 @@ final class Stock
      * @param ?int   $receivingId receiving_reports.id (type 'receiving': RR post and cancel)
      * @param ?int   $docId  inventory_docs.id (types transfer / issue / write_off / count)
      * @param ?int   $transferId stock_transfers.id (types transfer_out / transfer_in)
+     * @param ?int   $jobOrderId job_orders.id (types job_issue / job_return)
      * @return array{location_qty:int, stock:int} levels after the change
      * @throws HttpException 409 when the location would go below zero
      */
     public static function move(int $productId, array $location, int $delta, string $type, ?string $note,
                                 ?int $saleId = null, ?int $userId = null, ?int $receivingId = null,
-                                ?int $docId = null, ?int $transferId = null): array
+                                ?int $docId = null, ?int $transferId = null, ?int $jobOrderId = null): array
     {
         self::assertTransaction();
         if (!in_array($type, self::TYPES, true)) {
@@ -81,11 +83,11 @@ final class Stock
         $total = (int) $stmt->fetchColumn();
 
         $pdo->prepare(
-            'INSERT INTO stock_movements (product_id, user_id, sale_id, receiving_id, inventory_doc_id, stock_transfer_id, branch_id,
-                                          warehouse_id, location_id, type, quantity, stock_after, location_qty_after, note)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO stock_movements (product_id, user_id, sale_id, receiving_id, inventory_doc_id, stock_transfer_id, job_order_id,
+                                          branch_id, warehouse_id, location_id, type, quantity, stock_after, location_qty_after, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )->execute([
-            $productId, $userId ?? Auth::id(), $saleId, $receivingId, $docId, $transferId,
+            $productId, $userId ?? Auth::id(), $saleId, $receivingId, $docId, $transferId, $jobOrderId,
             $location['branch_id'], $location['warehouse_id'], $location['id'],
             $type, $delta, $total, $new,
             $note !== null ? mb_substr($note, 0, 255) : null,

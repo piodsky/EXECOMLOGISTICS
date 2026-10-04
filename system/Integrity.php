@@ -197,6 +197,29 @@ final class Integrity
                 AND {scope}
               ORDER BY ps.id", 'ps.branch_id');
 
+        // Job parts: issued = -job_issue movements, returned = job_return movements (per job and product).
+        $add('job_part_movements', 'Job order parts differ from their stock movements',
+            "SELECT x.job_no, x.branch_id, x.product_id, x.issued, x.issue_moves, x.returned, x.return_moves FROM (
+                 SELECT j.job_no, j.branch_id, jp.product_id, SUM(COALESCE(jp.qty_issued, 0)) AS issued, SUM(jp.qty_returned) AS returned,
+                        -COALESCE((SELECT SUM(m.quantity) FROM stock_movements m WHERE m.job_order_id = j.id
+                                     AND m.product_id = jp.product_id AND m.type = 'job_issue'), 0) AS issue_moves,
+                        COALESCE((SELECT SUM(m.quantity) FROM stock_movements m WHERE m.job_order_id = j.id
+                                    AND m.product_id = jp.product_id AND m.type = 'job_return'), 0) AS return_moves
+                   FROM job_orders j JOIN job_order_parts jp ON jp.job_order_id = j.id
+                  GROUP BY j.id, jp.product_id
+             ) x WHERE (x.issued <> x.issue_moves OR x.returned <> x.return_moves) AND {scope} ORDER BY x.job_no, x.product_id", 'x.branch_id');
+
+        // A serial is with a technician exactly while it is 'issued' on a job parts line.
+        $add('custody_serials', 'Serial with a technician without an open job part (or the reverse)',
+            "SELECT ps.id AS serial_id, ps.serial_no, ps.product_id, ps.branch_id, ps.status, j.job_no
+               FROM product_serials ps
+               LEFT JOIN job_order_part_serials js ON js.serial_id = ps.id AND js.state = 'issued'
+               LEFT JOIN job_order_parts jp ON jp.id = js.part_id
+               LEFT JOIN job_orders j ON j.id = jp.job_order_id
+              WHERE ((ps.status = 'in_custody') <> (js.serial_id IS NOT NULL)) AND (ps.status = 'in_custody' OR js.serial_id IS NOT NULL)
+                AND {scope}
+              ORDER BY ps.id", 'ps.branch_id');
+
         return $checks;
     }
 

@@ -24,8 +24,10 @@ $stmt = db()->prepare('SELECT id, code, name, is_active FROM products WHERE trac
 $stmt->execute([1]);
 $products = $stmt->fetchAll();
 
-$statusLabel = ['in_stock' => 'In stock', 'sold' => 'Sold', 'removed' => 'Removed', 'in_transit' => 'In transit'];
-$statusBadge = ['in_stock' => 'badge--success', 'sold' => 'badge--info', 'removed' => 'badge--danger', 'in_transit' => 'badge--warning'];
+$statusLabel = ['in_stock' => 'In stock', 'sold' => 'Sold', 'removed' => 'Removed', 'in_transit' => 'In transit',
+                'in_custody' => 'With technician', 'installed' => 'Installed (repair)'];
+$statusBadge = ['in_stock' => 'badge--success', 'sold' => 'badge--info', 'removed' => 'badge--danger', 'in_transit' => 'badge--warning',
+                'in_custody' => 'badge--warning', 'installed' => 'badge--info'];
 $showBranch  = Branch::current() === Branch::ALL;
 $listQuery   = array_filter(['search' => $search, 'product' => $productId], static fn ($v) => $v !== '' && $v !== null);
 $selfUrl     = static fn (array $extra = []): string => url('pages/serials.php') . (($listQuery + $extra) ? '?' . http_build_query($listQuery + $extra) : '');
@@ -183,6 +185,19 @@ require ROOT_PATH . '/includes/header.php';
                 'ts' => $doc['posted_at'], 'badge' => $badge, 'label' => $label,
                 'text' => $doc['doc_no'] . ' · ' . $what,
                 'url' => $canDocs ? url('pages/stock-doc-view.php?id=' . (int) $doc['doc_id']) : null,
+            ];
+        }
+        $canJobs = Auth::canAny(...JobOrders::VIEW_PERMISSIONS);
+        foreach ($history['jobs'] ?? [] as $job) {
+            [$badge, $what] = match ($job['state']) {
+                'used'     => ['badge--info', 'issued to the job and installed in the customer\'s device'],
+                'returned' => ['badge--success', 'issued to the job, returned unused to stock'],
+                default    => ['badge--warning', 'issued to the job; with the technician'],
+            };
+            $events[] = [
+                'ts' => $job['issued_at'], 'badge' => $badge, 'label' => 'Job part',
+                'text' => $job['job_no'] . ' · ' . $what,
+                'url' => $canJobs ? url('pages/job-view.php?id=' . (int) $job['job_id']) : null,
             ];
         }
         usort($events, static fn (array $a, array $b): int => strcmp((string) $a['ts'], (string) $b['ts']));

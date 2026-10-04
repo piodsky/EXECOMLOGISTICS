@@ -358,7 +358,7 @@ final class Sales
         [$scope, $params] = Branch::scopeSql('s.branch_id');
         $stmt = db()->prepare(
             "SELECT s.*, u.full_name AS cashier_name, COALESCE(c.name, 'Walk-in Customer') AS customer_name,
-                    v.full_name AS voided_by_name, da.full_name AS discount_approved_by_name,
+                    v.full_name AS voided_by_name, da.full_name AS discount_approved_by_name, jo.job_no,
                     b.code AS branch_code, b.name AS branch_name, b.address AS branch_address,
                     b.contact_no AS branch_contact, b.tin_branch_code AS branch_tin
                FROM sales s
@@ -367,6 +367,7 @@ final class Sales
                LEFT JOIN customers c ON c.id = s.customer_id
                LEFT JOIN users v ON v.id = s.voided_by
                LEFT JOIN users da ON da.id = s.discount_approved_by
+               LEFT JOIN job_orders jo ON jo.id = s.job_order_id
               WHERE s.id = ? AND {$scope}"
         );
         $stmt->execute([$id, ...$params]);
@@ -377,7 +378,7 @@ final class Sales
         unset($sale['cost_total']); // receipts / sale view never carry cost: see costs()
 
         $stmt = db()->prepare(
-            'SELECT si.id, si.product_id, si.product_code, si.product_name, si.unit_price, si.suggested_price, si.price_reason,
+            'SELECT si.id, si.product_id, si.line_type, si.product_code, si.product_name, si.unit_price, si.suggested_price, si.price_reason,
                     si.quantity, si.line_total, pa.full_name AS price_approved_by_name
                FROM sale_items si LEFT JOIN users pa ON pa.id = si.price_approved_by
               WHERE si.sale_id = ? ORDER BY si.id'
@@ -520,7 +521,8 @@ final class Sales
 
     /**
      * Void a completed sale (sales.cancel): mark it cancelled and put every item back in stock
-     * at the sale's branch (logged as 'void' in stock_movements) — all or nothing.
+     * at the sale's branch (logged as 'void' in stock_movements) — all or nothing. A job order bill restocks
+     * nothing (the parts are installed) and re-opens the job.
      * Returns [sale_no, units returned].
      */
     public static function void(int $id, int $userId, string $reason): array
@@ -537,7 +539,7 @@ final class Sales
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
+            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total, s.job_order_id FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
             $stmt->execute([$id, ...$scopeParams]);
             $sale = $stmt->fetch() ?: throw new HttpException(404, 'Sale not found.');
             if ($sale['status'] === 'cancelled') {
@@ -547,15 +549,20 @@ final class Sales
                 throw new HttpException(409, 'Only completed sales can be voided.');
             }
 
+            // A job order bill: the parts left stock when they were issued and stay installed, so nothing is
+            // restocked; the job goes back to completed (JobBilling::onSaleVoid).
+            $jobNo = $sale['job_order_id'] !== null
+                ? JobBilling::onSaleVoid($id, (int) $sale['job_order_id'], $userId, $reason) : null;
+
             // Units to return per product (products deleted since then have product_id NULL),
             // with the cost snapshots (NULL = sold before costing existed).
             $stmt = $pdo->prepare(
                 'SELECT si.product_id, si.product_name, si.quantity, si.unit_cost,
                         EXISTS (SELECT 1 FROM sale_item_serials sis WHERE sis.sale_item_id = si.id) AS has_serials
                    FROM sale_items si
-                  WHERE si.sale_id = ? AND si.product_id IS NOT NULL ORDER BY si.product_id, si.id'
+                  WHERE si.sale_id = ? AND si.product_id IS NOT NULL AND ? IS NULL ORDER BY si.product_id, si.id'
             );
-            $stmt->execute([$id]);
+            $stmt->execute([$id, $sale['job_order_id']]);
             $returns = [];
             $costs   = []; // product_id => list of {qty, cost}, or null when any snapshot is missing
             $lines   = []; // product_id => list of {name, has_serials} (serial-tracking check)
@@ -607,7 +614,8 @@ final class Sales
             Audit::record('sales', 'void', 'sale', $id, $sale['sale_no'],
                 ['status' => 'completed', 'total' => $sale['total']],
                 ['status' => 'cancelled', 'reason' => $reason, 'units_returned' => $units]
-                    + ($serials ? ['serials_returned' => $serials] : []),
+                    + ($serials ? ['serials_returned' => $serials] : [])
+                    + ($sale['job_order_id'] !== null ? ['job_reopened' => $jobNo] : []),
                 (int) $sale['branch_id']);
 
             $pdo->commit();
