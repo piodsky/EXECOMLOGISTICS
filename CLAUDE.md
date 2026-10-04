@@ -63,6 +63,10 @@ Read this first; open only the files a task needs.
 - [x] Phase 13c: Quotations (RFQ → quotation → won = customer PO) and Collections of on-account bills (receivables
       aging, collection receipts with EWT 2307 / VAT withheld 2306, certificate tracking). Migration
       `migrations/014_collections_quotations.sql`. Built without agents.
+- [x] Phase 13d: Billing & Payables after the old NewEXECOM modules — customer credit terms / limit, due dates + aging by
+      days overdue, on account at the POS and on job bills (`sales.charge`), check register (on hand → deposited →
+      cleared / bounced), statement of account; Payables: supplier invoices from receiving reports, disbursement
+      vouchers (EWT), issued checks, DV print. Migration `migrations/015_billing_payables.sql`. Built without agents.
 
 ## Security & operations (Phase 12) — user decisions
 - MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
@@ -162,6 +166,28 @@ Read this first; open only the files a task needs.
   balance; sale-view shows Collected / Balance / receipts. Dashboard tiles: bills on account over 30 days,
   certificates to receive. Integrity check `collections` (settled = posted lines, ≤ total). Customers / products /
   branches with quotations or collections can't be deleted. Migration `migrations/014_collections_quotations.sql`.
+
+## Billing & payables (Phase 13d) — after the old NewEXECOM Billing / Collections / Payables / Disbursements
+- Menu "Billing & Collections" (key `collections`): tabs Bills (`collections.php`: due date, days overdue, aging
+  not yet due / 1–30 / 31–60 / 61–90 / 90+ overdue, filter unpaid / paid / all), Collection Receipts, Checks Received
+  (`checks.php`), Statement of Account (`soa.php` + `soa-print.php`). `sales.due_date` on every on-account bill.
+- Credit customers: `customers.credit_days` (0 = cash only) + `credit_limit` (NULL = none), edited on the customer
+  form only with `sales.charge` (branch_admin). On account at the POS (`pos.php` option, checkout API) and on job bills
+  needs `sales.charge` + a credit customer + the new bill within the limit (`Collections::chargeTerms`, locks the
+  customer row); customer order bills stay allowed for any customer, due after the terms or 30 days.
+- Check collections: `collections.check_status` on_hand → deposited (date) → cleared (date) (collections.manage);
+  bounced (collections.cancel) cancels the collection (`check_status` bounced, bills open again). Dashboard tile
+  "Checks to deposit".
+- Menu "Payables" (`payables`, icon `clipboard`): `payables.php` (aging, receiving reports to invoice, supplier
+  invoices) / `disbursements.php`; `ap-form.php?rr=`, `ap-view.php`, `dv-form.php?supplier=`, `dv-view.php`,
+  `dv-print.php` (voucher, amount in words, 4 signatures), JS `assets/js/payables.js`. Class `Payables`; needs
+  `payables.manage` / `.cancel` (branch_admin) AND `products.cost`. Audit module `payables` WITHOUT amounts.
+- Supplier invoice `AP-<BR>-<YEAR>-NNNNNN`: one live per posted RR of the branch (supplier invoice no., date, due =
+  date + `suppliers.terms_days`, amount default RR total) → paid when posted DV lines (cash + EWT) reach the amount;
+  cancel only with nothing paid. An RR with a live invoice can't be cancelled. DV `DV-<BR>-<YEAR>-NNNNNN` pays one
+  supplier's open invoices (cash + optional EWT, base = amount before VAT); checks issued → cleared; cancel reopens.
+  Lock order receiving_reports → supplier_invoices → sequence; disbursements → supplier_invoices. Integrity check
+  `payables`. Dashboard tiles: supplier invoices overdue / due in 7 days, receiving reports to invoice.
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
@@ -496,7 +522,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (475 checks incl. quotations + collections (quote -> customer PO -> bill on account -> collection with EWT / VAT withheld, 2307, void guard, cancel), customer orders (order -> reservation -> DR -> bill on account -> return / close / void), purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (489 checks incl. billing + payables (credit terms, POS on account, check register, statement, supplier invoice -> disbursement voucher with EWT, check cleared), quotations + collections (quote -> customer PO -> bill on account -> collection with EWT / VAT withheld, 2307, void guard, cancel), customer orders (order -> reservation -> DR -> bill on account -> return / close / void), purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

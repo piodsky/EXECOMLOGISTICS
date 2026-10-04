@@ -103,6 +103,7 @@ require ROOT_PATH . '/includes/header.php';
                     <?php foreach (Sales::PAYMENT_TYPES as $value => $label): ?>
                         <option value="<?= e($value) ?>"><?= e($label) ?></option>
                     <?php endforeach; ?>
+                    <?php if (Auth::can('sales.charge')): ?><option value="charge">On account (credit customer)</option><?php endif; ?>
                 </select>
             </div>
         </div>

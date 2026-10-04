@@ -205,6 +205,8 @@ final class Branches
             'customer_orders'   => 'it has customer orders',
             'quotations'        => 'it has quotations',
             'collections'       => 'it has collections',
+            'supplier_invoices' => 'it has supplier invoices',
+            'disbursements'     => 'it has disbursements',
         ];
         $stmt = db()->prepare('SELECT 1 FROM stock_transfers WHERE from_branch_id = ? OR to_branch_id = ? LIMIT 1');
         $stmt->execute([$id, $id]);

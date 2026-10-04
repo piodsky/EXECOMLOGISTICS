@@ -79,6 +79,13 @@ final class Dashboard
             $ar = Collections::workCounts();
             $add('Bills to collect, over 30 days', 'On account, still unpaid', $ar['overdue'], 'pages/collections.php', 'wallet');
             $add('Withholding certificates', 'BIR 2307 / 2306 still to receive', $ar['forms'], 'pages/collection-receipts.php?forms=pending', 'file');
+            $add('Checks to deposit', 'Check date reached, still on hand', $ar['checks'], 'pages/checks.php', 'wallet');
+        }
+        if (Payables::canView()) {
+            $ap = Payables::workCounts();
+            $add('Supplier invoices overdue', 'Past the due date, unpaid', $ap['overdue'], 'pages/payables.php?status=overdue', 'clipboard');
+            $add('Supplier invoices due in 7 days', 'Prepare the payment', $ap['due_soon'], 'pages/payables.php', 'clock');
+            $add('Receiving reports to invoice', "Enter the supplier's invoice", $ap['to_invoice'], 'pages/payables.php#toInvoice', 'truck');
         }
         if (Auth::can('receiving.post')) {
             $add('Receiving drafts', 'Not posted yet', $one("SELECT COUNT(*) FROM receiving_reports WHERE branch_id = ? AND status = 'draft'", [$cur]),

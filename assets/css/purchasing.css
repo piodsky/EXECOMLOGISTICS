@@ -61,3 +61,6 @@
 .cr-lines .cr-amt { width: 120px; margin-left: auto; }
 .cr-lines td { vertical-align: top; }
 .cr-sum-total dd { font-weight: 700; color: var(--primary); }
+.ar-paid td { color: var(--text-muted); }
+.chk-form { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.ap-list { margin-top: 16px; }

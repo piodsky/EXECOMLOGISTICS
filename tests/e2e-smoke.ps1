@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -548,7 +548,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Customer Orders|Collections|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Customer Orders|Billing & Collections|Payables|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -1774,6 +1774,57 @@ try {
     Check ((Text '#crStatus') -eq 'Cancelled' -and (Sql "SELECT settled_amount FROM sales WHERE id = $bill2") -eq '0.00') 'cancelled: the bill is open again'
     $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'collections'"
     Check ([int]$a -ge 3) "collections are in the audit log ($a)"
+
+    # ---- Phase 13d: credit terms, POS on account, check register, statement, payables + disbursement ----
+    Nav "$Base/pages/customer-form.php?id=$cust"
+    Submit "const f = document.getElementById('custCreditDays').form; f.credit_days.value = '30'; f.credit_limit.value = '50,000'; f.requestSubmit()" 'branch admin sets credit terms'
+    Check ((Sql "SELECT CONCAT(credit_days, ':', credit_limit) FROM customers WHERE id = $cust") -eq '30:50000.00') 'credit terms saved: 30 days, limit 50,000'
+    Nav "$Base/pages/pos.php"
+    $r = Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: 3, qty: 1}], customer_id: $cust, payment_type: 'charge', discount_percent: '0', amount_paid: null}}).then(d => 'ok:' + d.sale.sale_no, e => e.status + ':' + e.message)"
+    $chargeSale = Sql "SELECT MAX(id) FROM sales WHERE payment_type = 'charge' AND customer_order_id IS NULL"
+    Check ($r -like 'ok:*' -and (Sql "SELECT CONCAT(amount_paid, ':', due_date = CURDATE() + INTERVAL 30 DAY) FROM sales WHERE id = '$chargeSale'") -eq '0.00:1') "POS sale on account, due in 30 days ($r)"
+    $r = Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: 3, qty: 1}], customer_id: null, payment_type: 'charge', discount_percent: '0', amount_paid: null}}).then(d => 'ok', e => e.status + ':' + e.message)"
+    Check ($r -like '422:*registered customer*') "walk-in cannot buy on account ($r)"
+    Nav "$Base/pages/collections.php?aging=current"
+    Check ((Eval "document.querySelectorAll('#arTable tr[data-bill]').length >= 1")) 'bills not yet due listed'
+    Nav "$Base/pages/collection-form.php?customer=$cust"
+    Submit "window.confirm = () => true; document.getElementById('crEwtRate').value = '0'; document.getElementById('crVatRate').value = '0'; document.getElementById('crFillAll').click(); const f = document.getElementById('crForm'); f.method.value = 'check'; f.reference.value = 'MBTC-4455'; f.bank_name.value = 'Metrobank'; document.getElementById('crSubmit').click()" 'collect everything by check'
+    $cr2 = Sql 'SELECT MAX(id) FROM collections'
+    Check ((Sql "SELECT check_status FROM collections WHERE id = $cr2") -eq 'on_hand') 'the check is on hand'
+    Nav "$Base/pages/checks.php"
+    Submit "document.querySelector('tr[data-check=""MBTC-4455""] [data-check-act=deposit]').click()" 'deposit the check'
+    Nav "$Base/pages/checks.php?check=deposited"
+    Submit "document.querySelector('tr[data-check=""MBTC-4455""] [data-check-act=clear]').click()" 'check cleared'
+    Check ((Sql "SELECT CONCAT(check_status, ':', deposited_at IS NOT NULL, ':', cleared_at IS NOT NULL) FROM collections WHERE id = $cr2") -eq 'cleared:1:1') 'check register: on hand -> deposited -> cleared'
+    Nav "$Base/pages/soa.php"
+    Check ((Eval "!!document.getElementById('soaTable')")) 'statement of account list'
+    Nav "$Base/pages/soa-print.php?customer=$cust"
+    Check ((Text '#soaCustomer') -eq 'DepEd Bukidnon' -and (Eval "!!document.getElementById('soaDue')")) "printed statement of account (due $(Text '#soaDue'))"
+    Shot '49-soa-print'
+
+    Nav "$Base/pages/payables.php"
+    $rrToInv = Eval "(document.querySelector('[data-invoice-rr]') || {}).dataset ? document.querySelector('[data-invoice-rr]').dataset.invoiceRr : ''"
+    Check ($rrToInv -ne '') "payables: receiving reports to invoice ($rrToInv)"
+    Shot '50-payables'
+    Nav "$Base/pages/ap-form.php?rr=$rrToInv"
+    Submit "window.confirm = () => true; const f = document.getElementById('apForm'); f.invoice_no.value = 'SI-E2E-0001'; document.getElementById('apSubmit').click()" 'record the supplier invoice'
+    $ap = Sql 'SELECT MAX(id) FROM supplier_invoices'
+    $apNo = Sql "SELECT ap_no FROM supplier_invoices WHERE id = $ap"
+    $apSup = Sql "SELECT supplier_id FROM supplier_invoices WHERE id = $ap"
+    Check ($apNo -like 'AP-MAR-*-000001' -and (Sql "SELECT amount = (SELECT total_cost FROM receiving_reports WHERE id = $rrToInv) FROM supplier_invoices WHERE id = $ap") -eq '1' -and (Text '#apStatus') -eq 'Unpaid') "$apNo recorded at the receiving report total"
+    Nav "$Base/pages/dv-form.php?supplier=$apSup"
+    Submit "window.confirm = () => true; document.getElementById('dvEwtRate').value = '1'; [...document.querySelectorAll('#dvLines tr[data-dv-line]')].forEach(r => { if (r.textContent.includes('$apNo')) r.querySelector('[data-dv-full]').click(); }); const f = document.getElementById('dvForm'); f.method.value = 'check'; f.reference.value = 'BDO-000777'; f.bank_name.value = 'BDO Maramag'; document.getElementById('dvSubmit').click()" 'pay the supplier by check with 1% EWT'
+    $dv = Sql 'SELECT MAX(id) FROM disbursements'
+    $dvNo = Sql "SELECT dv_no FROM disbursements WHERE id = $dv"
+    Check ($dvNo -like 'DV-MAR-*-000001' -and (Sql "SELECT status FROM supplier_invoices WHERE id = $ap") -eq 'paid' -and (Sql "SELECT ewt_total > 0 AND check_status = 'issued' FROM disbursements WHERE id = $dv") -eq '1') "${dvNo}: invoice paid, EWT withheld, check issued"
+    Nav "$Base/pages/dv-print.php?id=$dv"
+    Check ((Text '#dvNo') -eq $dvNo -and (Eval "document.body.textContent.includes('Pesos and')")) 'printed disbursement voucher with the amount in words'
+    Shot '51-dv-print'
+    Nav "$Base/pages/dv-view.php?id=$dv"
+    Submit "document.getElementById('dvClearBtn').click(); document.querySelector('#clearDialog form').requestSubmit()" 'check cleared'
+    Check ((Sql "SELECT check_status FROM disbursements WHERE id = $dv") -eq 'cleared') 'issued check cleared'
+    $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'payables'"
+    Check ([int]$a -ge 3) "payables are in the audit log ($a)"
     Logout
     Login 'admin' 'admin123' 'dashboard.php'
     SwitchBranch 0

@@ -55,10 +55,16 @@ return [
         'permission' => ['customer_orders.manage', 'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill'],
     ],
     'collections' => [
-        'label'      => 'Collections',
+        'label'      => 'Billing & Collections',
         'icon'       => 'wallet',
         'url'        => 'pages/collections.php',
         'permission' => ['collections.manage', 'collections.cancel'],
+    ],
+    'payables' => [
+        'label'      => 'Payables',
+        'icon'       => 'clipboard',
+        'url'        => 'pages/payables.php',
+        'permission' => ['payables.manage', 'payables.cancel'],
     ],
     'receiving' => [
         'label'      => 'Receiving',

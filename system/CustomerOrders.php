@@ -749,6 +749,7 @@ final class CustomerOrders
             } else {
                 $paidCents = $payment === 'charge' ? 0 : $total;
             }
+            $dueDate = $payment === 'charge' ? Collections::chargeTerms((int) $o['customer_id'], $total, false) : null; // orders: terms or 30 days
             $change = $payment === 'cash' ? $paidCents - $total : 0;
 
             $pdo->prepare(
@@ -762,7 +763,7 @@ final class CustomerOrders
             ]);
             $saleId = (int) $pdo->lastInsertId();
             $saleNo = Sales::formatNumber($saleId);
-            $pdo->prepare('UPDATE sales SET sale_no = ? WHERE id = ?')->execute([$saleNo, $saleId]);
+            $pdo->prepare('UPDATE sales SET sale_no = ?, due_date = ? WHERE id = ?')->execute([$saleNo, $dueDate, $saleId]);
 
             $item = $pdo->prepare(
                 'INSERT INTO sale_items (sale_id, product_id, line_type, product_code, product_name, unit_price, suggested_price, price_reason,

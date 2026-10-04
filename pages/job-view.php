@@ -470,7 +470,7 @@ require ROOT_PATH . '/includes/header.php';
                                 <label class="form-field">
                                     <span class="form-label">Payment *</span>
                                     <select class="form-input" name="payment_type" id="billPayment"<?= invalid('payment_type') ?>>
-                                        <?php foreach (Sales::PAYMENT_TYPES as $k => $label): ?>
+                                        <?php foreach (Sales::PAYMENT_TYPES + (Auth::can('sales.charge') ? ['charge' => 'On account (credit customer)'] : []) as $k => $label): ?>
                                             <option value="<?= e($k) ?>"<?= old('payment_type', 'cash') === $k ? ' selected' : '' ?>><?= e($label) ?></option>
                                         <?php endforeach; ?>
                                     </select>

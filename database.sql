@@ -23,6 +23,9 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS disbursement_lines;
+DROP TABLE IF EXISTS disbursements;
+DROP TABLE IF EXISTS supplier_invoices;
 DROP TABLE IF EXISTS collection_lines;
 DROP TABLE IF EXISTS collections;
 DROP TABLE IF EXISTS quotation_lines;
@@ -414,6 +417,8 @@ CREATE TABLE customers (
   address           VARCHAR(255) NULL,
   customer_type_id  INT UNSIGNED NULL,
   tin               VARCHAR(20)  NULL,
+  credit_days       SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  credit_limit      DECIMAL(14,2) NULL,
   branch_id         INT UNSIGNED NOT NULL,
   is_active         TINYINT(1)   NOT NULL DEFAULT 1,
   created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -469,6 +474,7 @@ CREATE TABLE suppliers (
   phone          VARCHAR(30)  NULL,
   email          VARCHAR(120) NULL,
   payment_terms  VARCHAR(60)  NULL,
+  terms_days     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   notes          VARCHAR(255) NULL,
   is_active      TINYINT(1)   NOT NULL DEFAULT 1,
   created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -521,6 +527,7 @@ CREATE TABLE sales (
   amount_paid       DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   change_amount     DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   settled_amount    DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  due_date          DATE          NULL,
   created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at      DATETIME      NULL,
   voided_at         DATETIME      NULL,
@@ -1639,6 +1646,9 @@ CREATE TABLE collections (
   reference              VARCHAR(60)   NULL,
   bank_name              VARCHAR(60)   NULL,
   check_date             DATE          NULL,
+  check_status           ENUM('none','on_hand','deposited','cleared','bounced') NOT NULL DEFAULT 'none',
+  deposited_at           DATE          NULL,
+  cleared_at             DATE          NULL,
   amount_received        DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   ewt_total              DECIMAL(14,2) NOT NULL DEFAULT 0.00,
   vat_withheld_total     DECIMAL(14,2) NOT NULL DEFAULT 0.00,
@@ -1662,6 +1672,7 @@ CREATE TABLE collections (
   KEY idx_collections_created_by (created_by),
   KEY idx_collections_cancelled_by (cancelled_by),
   KEY idx_collections_2307_by (form_2307_by),
+  KEY idx_collections_checks (check_status, branch_id, check_date),
   CONSTRAINT fk_collections_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_collections_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
@@ -1692,6 +1703,113 @@ CREATE TABLE collection_lines (
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT chk_collection_lines_amounts CHECK (amount >= 0 AND ewt_amount >= 0 AND vat_withheld >= 0
                                                  AND amount + ewt_amount + vat_withheld > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Supplier invoices (accounts payable, AP-<branch>-<year>-NNNNNN), one live per posted
+-- receiving report: open -> paid (paid_amount = posted disbursement lines, cash +
+-- EWT withheld); open with nothing paid -> cancelled (reason).
+-- ---------------------------------------------------------------------
+CREATE TABLE supplier_invoices (
+  id               INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  ap_no            VARCHAR(30)   NOT NULL,
+  branch_id        INT UNSIGNED  NOT NULL,
+  supplier_id      INT UNSIGNED  NOT NULL,
+  receiving_id     INT UNSIGNED  NOT NULL,
+  invoice_no       VARCHAR(60)   NOT NULL,
+  invoice_date     DATE          NOT NULL,
+  due_date         DATE          NOT NULL,
+  amount           DECIMAL(14,2) NOT NULL,
+  paid_amount      DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  status           ENUM('open','paid','cancelled') NOT NULL DEFAULT 'open',
+  notes            VARCHAR(255)  NULL,
+  created_by       INT UNSIGNED  NOT NULL,
+  created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  cancelled_by     INT UNSIGNED  NULL,
+  cancelled_at     DATETIME      NULL,
+  cancel_reason    VARCHAR(255)  NULL,
+  updated_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_supplier_invoices_no (ap_no),
+  KEY idx_supplier_invoices_branch (branch_id, status, due_date),
+  KEY idx_supplier_invoices_supplier (supplier_id, status),
+  KEY idx_supplier_invoices_receiving (receiving_id),
+  KEY idx_supplier_invoices_created_by (created_by),
+  KEY idx_supplier_invoices_cancelled_by (cancelled_by),
+  CONSTRAINT fk_supplier_invoices_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_supplier_invoices_supplier FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_supplier_invoices_receiving FOREIGN KEY (receiving_id) REFERENCES receiving_reports (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_supplier_invoices_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_supplier_invoices_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_supplier_invoices_amounts CHECK (amount > 0 AND paid_amount >= 0 AND paid_amount <= amount)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Disbursement vouchers (DV-<branch>-<year>-NNNNNN): one payment to one supplier applied
+-- to its open invoices at the branch (cash + EWT per invoice) -> cancelled (reason).
+-- check_status for checks issued: issued -> cleared.
+-- ---------------------------------------------------------------------
+CREATE TABLE disbursements (
+  id               INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  dv_no            VARCHAR(30)   NOT NULL,
+  branch_id        INT UNSIGNED  NOT NULL,
+  supplier_id      INT UNSIGNED  NOT NULL,
+  supplier_name    VARCHAR(120)  NOT NULL,
+  payment_date     DATE          NOT NULL,
+  method           ENUM('cash','check','bank','gcash') NOT NULL,
+  reference        VARCHAR(60)   NULL,
+  bank_name        VARCHAR(60)   NULL,
+  check_date       DATE          NULL,
+  check_status     ENUM('none','issued','cleared') NOT NULL DEFAULT 'none',
+  cleared_at       DATE          NULL,
+  amount_paid      DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  ewt_total        DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  total_settled    DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  particulars      VARCHAR(255)  NULL,
+  status           ENUM('posted','cancelled') NOT NULL DEFAULT 'posted',
+  created_by       INT UNSIGNED  NOT NULL,
+  created_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  cancelled_by     INT UNSIGNED  NULL,
+  cancelled_at     DATETIME      NULL,
+  cancel_reason    VARCHAR(255)  NULL,
+  updated_at       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_disbursements_no (dv_no),
+  KEY idx_disbursements_branch (branch_id, status, payment_date),
+  KEY idx_disbursements_supplier (supplier_id),
+  KEY idx_disbursements_checks (check_status, branch_id),
+  KEY idx_disbursements_created_by (created_by),
+  KEY idx_disbursements_cancelled_by (cancelled_by),
+  CONSTRAINT fk_disbursements_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_disbursements_supplier FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_disbursements_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_disbursements_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_disbursements_amounts CHECK (amount_paid >= 0 AND ewt_total >= 0 AND total_settled = amount_paid + ewt_total)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE disbursement_lines (
+  id               INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  disbursement_id  INT UNSIGNED  NOT NULL,
+  invoice_id       INT UNSIGNED  NOT NULL,
+  amount           DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  ewt_amount       DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_disbursement_lines (disbursement_id, invoice_id),
+  KEY idx_disbursement_lines_invoice (invoice_id),
+  CONSTRAINT fk_disbursement_lines_disbursement FOREIGN KEY (disbursement_id) REFERENCES disbursements (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_disbursement_lines_invoice FOREIGN KEY (invoice_id) REFERENCES supplier_invoices (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_disbursement_lines_amounts CHECK (amount >= 0 AND ewt_amount >= 0 AND amount + ewt_amount > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -1891,7 +2009,10 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (54, 'customer_orders.deliver', 'Customer Orders', 'Release delivery receipts (stock leaves the branch) and record the delivery', 132),
   (55, 'customer_orders.bill',    'Customer Orders', 'Bill delivered customer orders (cash, GCash, card or on account)', 133),
   (56, 'collections.cancel',      'Collections', 'Cancel collection receipts (the bills are open again)', 135),
-  (57, 'collections.manage',      'Collections', 'Record collections of on-account bills (cash, check, bank, withholding taxes)', 134);
+  (57, 'collections.manage',      'Collections', 'Record collections of on-account bills (cash, check, bank, withholding taxes)', 134),
+  (58, 'payables.cancel',         'Payables', 'Cancel supplier invoices and disbursement vouchers', 138),
+  (59, 'payables.manage',         'Payables', 'Record supplier invoices and pay them (disbursement vouchers); shows costs', 137),
+  (60, 'sales.charge',            'Collections', 'Sell on account at the POS and on job bills (credit customers, within their limit)', 136);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -1916,7 +2037,7 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue',
          'job_orders.release', 'purchasing.request', 'purchasing.approve', 'purchasing.order', 'customer_orders.manage',
          'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill', 'collections.manage',
-         'collections.cancel'))
+         'collections.cancel', 'sales.charge', 'payables.manage', 'payables.cancel'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create',
          'job_orders.release', 'purchasing.request', 'customer_orders.manage', 'customer_orders.bill',

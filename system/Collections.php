@@ -3,7 +3,9 @@
  * Collections = accounts receivable of "On account" bills (sales.payment_type 'charge', status completed), audit
  * module 'collections'.
  *
- *   receivable  a charge sale with balance = total - settled_amount > 0 (aging by days since the bill)
+ *   receivable  a charge sale with balance = total - settled_amount > 0, due on sales.due_date (aging by days overdue).
+ *               On account needs a credit customer (customers.credit_days > 0, within credit_limit) at the POS and on job
+ *               bills (sales.charge); customer order bills are due after the customer's terms or 30 days (chargeTerms).
  *   collection  one payment of one customer at a branch (collections.manage, working in the branch), posted at once:
  *               CR-<branch>-<year>-NNNNNN; method cash / check / bank / GCash + reference; per bill the cash
  *               applied, the expanded withholding tax (BIR 2307) and the final VAT withheld (BIR 2306) the customer
@@ -11,6 +13,7 @@
  *   cancel      collections.cancel, reason: the bills are open again.
  *   2307        a collection with taxes withheld waits for the certificate (form_2307 pending -> received + date).
  * A bill with collections can't be voided (Sales::void checks settled_amount).
+ * Checks received: check_status on_hand -> deposited -> cleared; bounced = the collection is cancelled (bills open again).
  * Lock order: collections row -> sales (ORDER BY id) -> document_sequences.
  */
 declare(strict_types=1);
@@ -24,13 +27,19 @@ final class Collections
     public const VIEW_PERMISSIONS = ['collections.manage', 'collections.cancel'];
     public const PREFIX    = 'CR';
     public const MAX_LINES = 100;
-    /** Aging buckets: key => [label, min days, max days|null]. */
+    /** Aging buckets by days overdue (today - due date): key => [label, min days|null, max days|null]. */
     public const AGING = [
-        'current' => ['0–30 days', 0, 30],
-        'd31'     => ['31–60 days', 31, 60],
-        'd61'     => ['61–90 days', 61, 90],
-        'd90'     => ['Over 90 days', 91, null],
+        'current' => ['Not yet due', null, 0],
+        'd1'      => ['1–30 days overdue', 1, 30],
+        'd31'     => ['31–60 days overdue', 31, 60],
+        'd61'     => ['61–90 days overdue', 61, 90],
+        'd90'     => ['Over 90 days overdue', 91, null],
     ];
+    public const BILL_STATUSES  = ['open' => 'Unpaid / partial', 'paid' => 'Paid', 'all' => 'All bills'];
+    public const CHECK_STATUSES = ['on_hand' => 'On hand', 'deposited' => 'Deposited', 'cleared' => 'Cleared', 'bounced' => 'Bounced'];
+    public const CHECK_BADGES   = ['on_hand' => 'badge--warning', 'deposited' => 'badge--info', 'cleared' => 'badge--success', 'bounced' => 'badge--danger'];
+    /** Days overdue (SQL, sales alias s): positive = late. */
+    private const OVERDUE = 'DATEDIFF(CURDATE(), COALESCE(s.due_date, DATE(s.created_at)))';
 
     public static function canView(): bool
     {
@@ -55,11 +64,17 @@ final class Collections
     // Receivables (open on-account bills)
     // ------------------------------------------------------------------
 
-    /** @param array{search?:string, customer?:?int, aging?:string} $f */
+    /** @param array{search?:string, customer?:?int, aging?:string, bills?:string} $f bills: open (default) / paid / all */
     private static function receivableWhere(array $f, bool $withAging = true): array
     {
         [$scope, $params] = Branch::scopeSql('s.branch_id');
-        $where = [$scope, "s.payment_type = 'charge'", "s.status = 'completed'", 's.total > s.settled_amount'];
+        $where = [$scope, "s.payment_type = 'charge'", "s.status = 'completed'"];
+        $bills = (string) ($f['bills'] ?? 'open');
+        if ($bills === 'paid' && $withAging) {
+            $where[] = 's.total <= s.settled_amount';
+        } elseif ($bills !== 'all' || !$withAging) {
+            $where[] = 's.total > s.settled_amount';
+        }
         if (($f['customer'] ?? null) !== null) {
             $where[]  = 's.customer_id = ?';
             $params[] = (int) $f['customer'];
@@ -67,10 +82,13 @@ final class Collections
         $aging = (string) ($f['aging'] ?? '');
         if ($withAging && isset(self::AGING[$aging])) {
             [, $min, $max] = self::AGING[$aging];
-            $where[]  = 'DATEDIFF(CURDATE(), DATE(s.created_at)) >= ?';
-            $params[] = $min;
+            $where[] = 's.total > s.settled_amount';
+            if ($min !== null) {
+                $where[]  = self::OVERDUE . ' >= ?';
+                $params[] = $min;
+            }
             if ($max !== null) {
-                $where[]  = 'DATEDIFF(CURDATE(), DATE(s.created_at)) <= ?';
+                $where[]  = self::OVERDUE . ' <= ?';
                 $params[] = $max;
             }
         }
@@ -105,10 +123,10 @@ final class Collections
         $stmt = db()->prepare(
             'SELECT s.id, s.sale_no, s.created_at, s.total, s.settled_amount, s.total - s.settled_amount AS balance, s.customer_id,
                     c.name AS customer_name, co.id AS order_id, co.order_no, co.customer_po_no, co.payment_term,
-                    s.branch_id, b.code AS branch_code, b.name AS branch_name, DATEDIFF(CURDATE(), DATE(s.created_at)) AS days
+                    s.branch_id, b.code AS branch_code, b.name AS branch_name, s.due_date, ' . self::OVERDUE . ' AS days
               ' . self::RECEIVABLE_FROM . "
               WHERE {$where}
-              ORDER BY s.created_at, s.id
+              ORDER BY s.total <= s.settled_amount, s.due_date, s.id
               LIMIT ? OFFSET ?"
         );
         $stmt->execute([...$params, $limit, $offset]);
@@ -121,7 +139,7 @@ final class Collections
         self::requireView();
         [$where, $params] = self::receivableWhere($f, false);
         $stmt = db()->prepare(
-            'SELECT DATEDIFF(CURDATE(), DATE(s.created_at)) AS days, s.total - s.settled_amount AS balance ' . self::RECEIVABLE_FROM . " WHERE {$where}"
+            'SELECT ' . self::OVERDUE . ' AS days, s.total - s.settled_amount AS balance ' . self::RECEIVABLE_FROM . " WHERE {$where}"
         );
         $stmt->execute($params);
         $out = ['buckets' => array_map(static fn (): array => ['count' => 0, 'cents' => 0], self::AGING), 'count' => 0, 'cents' => 0];
@@ -139,7 +157,7 @@ final class Collections
     public static function bucket(int $days): string
     {
         foreach (self::AGING as $key => [, $min, $max]) {
-            if ($days >= $min && ($max === null || $days <= $max)) {
+            if (($min === null || $days >= $min) && ($max === null || $days <= $max)) {
                 return $key;
             }
         }
@@ -169,12 +187,12 @@ final class Collections
             return [];
         }
         $stmt = db()->prepare(
-            "SELECT s.id, s.sale_no, s.created_at, s.total, s.vat_amount, s.settled_amount, s.total - s.settled_amount AS balance,
-                    co.order_no, co.customer_po_no, DATEDIFF(CURDATE(), DATE(s.created_at)) AS days
+            "SELECT s.id, s.sale_no, s.created_at, s.due_date, s.total, s.vat_amount, s.settled_amount, s.total - s.settled_amount AS balance,
+                    co.order_no, co.customer_po_no, " . self::OVERDUE . " AS days
                FROM sales s LEFT JOIN customer_orders co ON co.id = s.customer_order_id
               WHERE s.branch_id = ? AND s.customer_id = ? AND s.payment_type = 'charge' AND s.status = 'completed'
                 AND s.total > s.settled_amount
-              ORDER BY s.created_at, s.id LIMIT " . self::MAX_LINES
+              ORDER BY s.due_date, s.id LIMIT " . self::MAX_LINES
         );
         $stmt->execute([(int) Branch::current(), $customerId]);
         return $stmt->fetchAll();
@@ -183,20 +201,24 @@ final class Collections
     /** Work counts for the current branch: open bills, overdue (> 30 days), certificates to receive. */
     public static function workCounts(): array
     {
-        $out = ['open' => 0, 'overdue' => 0, 'forms' => 0];
+        $out = ['open' => 0, 'overdue' => 0, 'forms' => 0, 'checks' => 0];
         if (!Branch::isConcrete() || !self::canView()) {
             return $out;
         }
         $cur  = (int) Branch::current();
         $stmt = db()->prepare(
-            "SELECT COUNT(*), SUM(DATEDIFF(CURDATE(), DATE(created_at)) > 30) FROM sales
+            "SELECT COUNT(*), SUM(due_date < CURDATE()) FROM sales
               WHERE branch_id = ? AND payment_type = 'charge' AND status = 'completed' AND total > settled_amount"
         );
         $stmt->execute([$cur]);
         [$open, $over] = $stmt->fetch(PDO::FETCH_NUM) ?: [0, 0];
-        $stmt = db()->prepare("SELECT COUNT(*) FROM collections WHERE branch_id = ? AND status = 'posted' AND form_2307 = 'pending'");
+        $stmt = db()->prepare(
+            "SELECT SUM(form_2307 = 'pending'), SUM(check_status = 'on_hand' AND check_date <= CURDATE())
+               FROM collections WHERE branch_id = ? AND status = 'posted'"
+        );
         $stmt->execute([$cur]);
-        return ['open' => (int) $open, 'overdue' => (int) $over, 'forms' => (int) $stmt->fetchColumn()];
+        [$forms, $checks] = $stmt->fetch(PDO::FETCH_NUM) ?: [0, 0];
+        return ['open' => (int) $open, 'overdue' => (int) $over, 'forms' => (int) $forms, 'checks' => (int) $checks];
     }
 
     // ------------------------------------------------------------------
@@ -465,9 +487,12 @@ final class Collections
                                           amount_received, ewt_total, vat_withheld_total, total_credited, form_2307, notes, status, created_by)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )->execute([$no, $branchId, (int) $customer['id'], mb_substr((string) $customer['name'], 0, 100), $d['collection_date'], $d['method'],
-                $d['reference'], $d['bank_name'], $d['check_date'], from_cents($totals['amount']), from_cents($totals['ewt']), from_cents($totals['vat']),
+                $d['reference'], $d['bank_name'], $d['method'] === 'check' ? ($d['check_date'] ?? $d['collection_date']) : null, from_cents($totals['amount']), from_cents($totals['ewt']), from_cents($totals['vat']),
                 from_cents($credited), $totals['ewt'] + $totals['vat'] > 0 ? 'pending' : 'none', $d['notes'], 'posted', $userId]);
             $id = (int) $pdo->lastInsertId();
+            if ($d['method'] === 'check') { // a check stays "on hand" until it is deposited and cleared
+                $pdo->prepare("UPDATE collections SET check_status = 'on_hand' WHERE id = ?")->execute([$id]);
+            }
             $line = $pdo->prepare('INSERT INTO collection_lines (collection_id, sale_id, amount, ewt_amount, vat_withheld) VALUES (?, ?, ?, ?, ?)');
             $settle = $pdo->prepare('UPDATE sales SET settled_amount = settled_amount + ? WHERE id = ?');
             $bills = [];
@@ -491,11 +516,12 @@ final class Collections
         }
     }
 
-    public static function cancel(int $id, ?string $reason, int $userId): string
+    /** Cancel (collections.cancel, reason): the bills are open again. $bounced marks a check collection's check bounced. */
+    public static function cancel(int $id, ?string $reason, int $userId, bool $bounced = false): string
     {
         self::requirePermission('collections.cancel', 'You do not have permission to cancel collections.');
         $reason = CustomerOrders::cleanReason($reason, 'reason');
-        return self::transition($id, static function (array $c) use ($id, $reason, $userId): string {
+        return self::transition($id, static function (array $c) use ($id, $reason, $userId, $bounced): string {
             if ($c['status'] !== 'posted') {
                 throw new HttpException(409, "{$c['collection_no']} is already cancelled.");
             }
@@ -514,8 +540,9 @@ final class Collections
                 }
                 $upd->execute([$lines[$sid], (int) $sid]);
             }
-            db()->prepare('UPDATE collections SET status = ?, cancelled_by = ?, cancelled_at = NOW(), cancel_reason = ? WHERE id = ?')
-                ->execute(['cancelled', $userId, $reason, $id]);
+            db()->prepare('UPDATE collections SET status = ?, cancelled_by = ?, cancelled_at = NOW(), cancel_reason = ?,
+                                  check_status = IF(?, \'bounced\', check_status) WHERE id = ?')
+                ->execute(['cancelled', $userId, $reason, $bounced ? 1 : 0, $id]);
             Audit::record('collections', 'cancel', 'collection', $id, (string) $c['collection_no'], ['status' => 'posted'],
                 ['status' => 'cancelled', 'reason' => $reason], (int) $c['branch_id']);
             return (string) $c['collection_no'];
@@ -540,6 +567,185 @@ final class Collections
                 ['form_2307' => 'received', 'received_at' => $when], (int) $c['branch_id']);
             return (string) $c['collection_no'];
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Credit terms (on-account sales)
+    // ------------------------------------------------------------------
+
+    /** Open on-account balance of a customer, all branches. */
+    public static function customerBalance(int $customerId): int
+    {
+        $stmt = db()->prepare(
+            "SELECT COALESCE(SUM(total - settled_amount), 0) FROM sales
+              WHERE customer_id = ? AND payment_type = 'charge' AND status = 'completed' AND total > settled_amount"
+        );
+        $stmt->execute([$customerId]);
+        return to_cents((string) $stmt->fetchColumn());
+    }
+
+    /**
+     * Inside a sale transaction, before an on-account bill is written: locks the customer row and returns the due date.
+     * $requireCredit (POS / job bills): the customer must be a credit customer (credit_days > 0) and the new bill must
+     * fit in the credit limit. Customer order bills: due after the customer's terms, or 30 days. @throws HttpException 422
+     */
+    public static function chargeTerms(?int $customerId, int $totalCents, bool $requireCredit): string
+    {
+        if ($customerId === null) {
+            throw new HttpException(422, 'On account needs a registered customer. Choose the customer first.');
+        }
+        $stmt = db()->prepare('SELECT name, credit_days, credit_limit FROM customers WHERE id = ? FOR UPDATE');
+        $stmt->execute([$customerId]);
+        $c = $stmt->fetch() ?: throw new HttpException(422, 'Customer not found.');
+        $days = (int) $c['credit_days'];
+        if ($requireCredit) {
+            if ($days < 1) {
+                throw new HttpException(422, "{$c['name']} is a cash customer: set credit terms on the customer first (branch admin), or take payment now.");
+            }
+            if ($c['credit_limit'] !== null) {
+                $open = self::customerBalance($customerId);
+                $limit = to_cents((string) $c['credit_limit']);
+                if ($open + $totalCents > $limit) {
+                    throw new HttpException(422, "Over the credit limit of {$c['name']}: " . money(from_cents($limit)) . ' (open now '
+                        . money(from_cents($open)) . ', this bill ' . money(from_cents($totalCents)) . '). Collect first or take payment now.');
+                }
+            }
+        }
+        return date('Y-m-d', strtotime('+' . ($days > 0 ? $days : 30) . ' days'));
+    }
+
+    // ------------------------------------------------------------------
+    // Checks received (post-dated check register)
+    // ------------------------------------------------------------------
+
+    /** @param array{check?:string, search?:string} $f check = on_hand (default) / deposited / cleared / bounced / all */
+    private static function checkWhere(array $f): array
+    {
+        [$scope, $params] = Branch::scopeSql('c.branch_id');
+        $where = [$scope, "c.method = 'check'"];
+        $st = (string) ($f['check'] ?? 'on_hand');
+        if (isset(self::CHECK_STATUSES[$st])) {
+            $where[]  = 'c.check_status = ?' . ($st === 'bounced' ? '' : " AND c.status = 'posted'");
+            $params[] = $st;
+        } else {
+            $where[] = "c.check_status <> 'none'";
+        }
+        $q = (string) ($f['search'] ?? '');
+        if ($q !== '') {
+            $like = like_pattern($q);
+            $where[] = '(c.collection_no LIKE ? OR c.customer_name LIKE ? OR c.reference LIKE ? OR c.bank_name LIKE ?)';
+            array_push($params, $like, $like, $like, $like);
+        }
+        return [implode(' AND ', $where), $params];
+    }
+
+    public static function checkCount(array $f): int
+    {
+        self::requireView();
+        [$where, $params] = self::checkWhere($f);
+        $stmt = db()->prepare("SELECT COUNT(*) FROM collections c WHERE {$where}");
+        $stmt->execute($params);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** Checks by check date (earliest first); amount = cash part of the collection. */
+    public static function checks(array $f, int $limit, int $offset): array
+    {
+        self::requireView();
+        [$where, $params] = self::checkWhere($f);
+        $stmt = db()->prepare(
+            "SELECT c.id, c.collection_no, c.customer_name, c.reference, c.bank_name, c.check_date, c.check_status, c.deposited_at,
+                    c.cleared_at, c.amount_received, c.status, c.branch_id, b.code AS branch_code, b.name AS branch_name
+               FROM collections c JOIN branches b ON b.id = c.branch_id
+              WHERE {$where}
+              ORDER BY c.check_date, c.id
+              LIMIT ? OFFSET ?"
+        );
+        $stmt->execute([...$params, $limit, $offset]);
+        return $stmt->fetchAll();
+    }
+
+    /** on_hand -> deposited (date) -> cleared (date); bounced = cancel the collection (collections.cancel). */
+    public static function checkAction(int $id, string $action, ?string $date, ?string $reason, int $userId): string
+    {
+        if ($action === 'bounce') {
+            $stmt = db()->prepare('SELECT method, check_status FROM collections WHERE id = ?');
+            $stmt->execute([$id]);
+            $row = $stmt->fetch() ?: throw new HttpException(404, 'Collection not found.');
+            if ($row['method'] !== 'check' || !in_array($row['check_status'], ['on_hand', 'deposited'], true)) {
+                throw new HttpException(409, 'Only a check on hand or deposited can bounce.');
+            }
+            $why = trim((string) $reason);
+            return self::cancel($id, 'Check bounced' . ($why !== '' ? ': ' . $why : ''), $userId, true);
+        }
+        self::requirePermission('collections.manage', 'You do not have permission to record collections.');
+        $when = input_date(['d' => (string) $date], 'd');
+        if ($when === null || $when > date('Y-m-d')) {
+            throw new HttpException(422, 'Enter the date (not in the future).', ['errors' => ['check_date' => 'Enter a valid date.']]);
+        }
+        [$from, $to, $col] = match ($action) {
+            'deposit' => ['on_hand', 'deposited', 'deposited_at'],
+            'clear'   => ['deposited', 'cleared', 'cleared_at'],
+            default   => throw new HttpException(400, 'Unknown action.'),
+        };
+        return self::transition($id, static function (array $c) use ($id, $from, $to, $col, $when): string {
+            if ($c['status'] !== 'posted' || $c['check_status'] !== $from) {
+                throw new HttpException(409, "The check of {$c['collection_no']} is " . strtolower(self::CHECK_STATUSES[$c['check_status']] ?? $c['check_status']) . '.');
+            }
+            db()->prepare("UPDATE collections SET check_status = ?, {$col} = ? WHERE id = ?")->execute([$to, $when, $id]);
+            Audit::record('collections', 'check_' . $to, 'collection', $id, (string) $c['collection_no'], ['check' => $from],
+                ['check' => $to, 'date' => $when, 'check_no' => $c['reference']], (int) $c['branch_id']);
+            return (string) $c['collection_no'];
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Statement of account
+    // ------------------------------------------------------------------
+
+    /** Open balance per customer in the branch scope (largest first): bills, balance, overdue part, earliest due date. */
+    public static function balancesByCustomer(string $search = ''): array
+    {
+        self::requireView();
+        [$scope, $params] = Branch::scopeSql('s.branch_id');
+        $where = "s.payment_type = 'charge' AND s.status = 'completed' AND s.total > s.settled_amount AND {$scope}";
+        if ($search !== '') {
+            $where .= ' AND c.name LIKE ?';
+            $params[] = like_pattern($search);
+        }
+        $stmt = db()->prepare(
+            "SELECT c.id, c.name, ct.name AS type_name, c.credit_days, c.credit_limit, COUNT(*) AS bills,
+                    SUM(s.total - s.settled_amount) AS balance,
+                    SUM(CASE WHEN s.due_date < CURDATE() THEN s.total - s.settled_amount ELSE 0 END) AS overdue,
+                    MIN(s.due_date) AS first_due
+               FROM sales s JOIN customers c ON c.id = s.customer_id LEFT JOIN customer_types ct ON ct.id = c.customer_type_id
+              WHERE {$where}
+              GROUP BY c.id, c.name, ct.name, c.credit_days, c.credit_limit
+              ORDER BY balance DESC LIMIT 500"
+        );
+        $stmt->execute($params);
+        return $stmt->fetchAll();
+    }
+
+    /** Customer + open bills (current branch scope) + payments in the last 90 days. */
+    public static function statement(int $customerId): ?array
+    {
+        self::requireView();
+        $c = Customers::find($customerId);
+        if ($c === null) {
+            return null;
+        }
+        $c['bills'] = self::receivables(['customer' => $customerId], self::MAX_LINES * 5, 0);
+        [$scope, $params] = Branch::scopeSql('c.branch_id');
+        $stmt = db()->prepare(
+            "SELECT c.collection_no, c.collection_date, c.method, c.reference, c.amount_received, c.ewt_total, c.vat_withheld_total, c.total_credited
+               FROM collections c
+              WHERE c.customer_id = ? AND c.status = 'posted' AND c.collection_date >= CURDATE() - INTERVAL 90 DAY AND {$scope}
+              ORDER BY c.collection_date, c.id"
+        );
+        $stmt->execute([$customerId, ...$params]);
+        $c['payments'] = $stmt->fetchAll();
+        return $c;
     }
 
     private static function transition(int $id, callable $fn): string

@@ -38,7 +38,7 @@ require ROOT_PATH . '/includes/header.php';
 
 <div class="page-head">
     <div>
-        <h1>Collections</h1>
+        <h1>Billing &amp; Collections</h1>
         <p class="muted">Collection receipts: payments received on bills on account, with the taxes the customers withheld.</p>
     </div>
     <div class="page-actions">

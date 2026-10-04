@@ -81,7 +81,7 @@ foreach ($serialsById as $list) {
 
 // --- Payment, customer, discount ---
 $paymentType = is_string($data['payment_type'] ?? null) ? $data['payment_type'] : '';
-if (!array_key_exists($paymentType, Sales::PAYMENT_TYPES)) {
+if (!array_key_exists($paymentType, Sales::PAYMENT_TYPES) && !($paymentType === 'charge' && Auth::can('sales.charge'))) {
     throw new HttpException(422, 'Choose a valid payment type.');
 }
 

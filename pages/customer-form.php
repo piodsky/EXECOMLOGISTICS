@@ -124,6 +124,19 @@ require ROOT_PATH . '/includes/header.php';
                        value="<?= e($val('tin')) ?>"<?= invalid('tin') ?><?= $ro ?>>
                 <?= field_error('tin') ?>
             </label>
+            <?php $roCredit = $canEdit && Auth::can('sales.charge') ? '' : ' readonly'; ?>
+            <label class="form-field">
+                <span class="form-label">Credit terms (days)</span>
+                <input class="form-input num" type="number" name="credit_days" min="0" max="365" step="1" id="custCreditDays" value="<?= e($val('credit_days') ?: '0') ?>"<?= invalid('credit_days') ?><?= $roCredit ?>>
+                <?= field_error('credit_days') ?>
+                <small class="form-hint">0 = cash only. More than 0 allows "On account" at the POS and on job bills; the bill is due after these days.</small>
+            </label>
+            <label class="form-field">
+                <span class="form-label">Credit limit</span>
+                <input class="form-input num" name="credit_limit" inputmode="decimal" maxlength="15" placeholder="No limit" id="custCreditLimit" value="<?= e($val('credit_limit')) ?>"<?= invalid('credit_limit') ?><?= $roCredit ?>>
+                <?= field_error('credit_limit') ?>
+                <?php if ($customer && Collections::canView()): ?><small class="form-hint" id="custOpenBalance">Open on account: <?= e(money(from_cents(Collections::customerBalance((int) $customer['id'])))) ?></small><?php endif; ?>
+            </label>
         </div>
 
         <h3 class="form-section-title">Contact Persons</h3>
