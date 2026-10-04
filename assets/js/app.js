@@ -201,6 +201,21 @@
         }
     });
 
+    // ---- List rows open their record ------------------------------------
+    // A click anywhere on a list row (not on its own links, buttons or fields) follows the row's main link.
+    const ROW_LINK = 'a.item-cell__name';
+    document.querySelectorAll('.table tbody tr').forEach((tr) => {
+        if (tr.querySelectorAll(ROW_LINK).length === 1) tr.classList.add('row-link');
+    });
+    document.addEventListener('click', (e) => {
+        const tr = e.target.closest('tr.row-link');
+        if (!tr || e.button !== 0 || e.target.closest('a, button, input, select, textarea, label, form, summary, dialog')) return;
+        if (String(window.getSelection ? window.getSelection() : '').length) return; // selecting text
+        const href = tr.querySelector(ROW_LINK).href;
+        if (e.ctrlKey || e.metaKey) window.open(href, '_blank', 'noopener');
+        else window.location.href = href;
+    });
+
     // Escape closes the dropdown and the mobile sidebar.
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;

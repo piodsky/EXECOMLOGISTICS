@@ -113,3 +113,7 @@ body.doc-page {
     .doc__meta { grid-template-columns: minmax(0, 1fr); gap: 8px; }
     .doc__signs { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Subtotal / VAT rows above the TOTAL (billing statement) */
+.doc__sum th, .doc__sum td { border-color: #c9d3e3; font-weight: 600; }
+.doc__sum td:first-child { border: 0; background: none; }

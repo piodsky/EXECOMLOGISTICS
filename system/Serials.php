@@ -195,6 +195,20 @@ final class Serials
         );
         $stmt->execute([$serialId, ...$params]);
         $serial['jobs'] = $stmt->fetchAll();
+
+        // Customer orders it was delivered on (delivery receipts; cancelled = back in stock).
+        [$scope, $params] = Branch::scopeSql('d.branch_id');
+        $stmt = db()->prepare(
+            "SELECT d.id AS delivery_id, d.dr_no, d.status, d.released_at, d.cancelled_at, o.customer_name, o.order_no
+               FROM customer_delivery_serials x
+               JOIN customer_delivery_lines l ON l.id = x.line_id
+               JOIN customer_deliveries d ON d.id = l.delivery_id
+               JOIN customer_orders o ON o.id = d.order_id
+              WHERE x.serial_id = ? AND {$scope}
+              ORDER BY d.released_at, d.id"
+        );
+        $stmt->execute([$serialId, ...$params]);
+        $serial['deliveries'] = $stmt->fetchAll();
         return $serial;
     }
 

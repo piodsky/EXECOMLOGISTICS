@@ -200,6 +200,20 @@ require ROOT_PATH . '/includes/header.php';
                 'url' => $canJobs ? url('pages/job-view.php?id=' . (int) $job['job_id']) : null,
             ];
         }
+        $canOrders = Auth::canAny(...CustomerOrders::VIEW_PERMISSIONS);
+        foreach ($history['deliveries'] ?? [] as $dr) {
+            $events[] = [
+                'ts' => $dr['released_at'], 'badge' => 'badge--info', 'label' => 'Delivered',
+                'text' => $dr['dr_no'] . ' · ' . $dr['order_no'] . ' · ' . $dr['customer_name'],
+                'url' => $canOrders ? url('pages/dr-view.php?id=' . (int) $dr['delivery_id']) : null,
+            ];
+            if ($dr['status'] === 'cancelled') {
+                $events[] = [
+                    'ts' => $dr['cancelled_at'], 'badge' => 'badge--success', 'label' => 'Returned',
+                    'text' => $dr['dr_no'] . ' was cancelled; the unit went back to stock.', 'url' => null,
+                ];
+            }
+        }
         usort($events, static fn (array $a, array $b): int => strcmp((string) $a['ts'], (string) $b['ts']));
         ?>
         <ol class="serial-events">

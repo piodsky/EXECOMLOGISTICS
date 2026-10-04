@@ -13,7 +13,7 @@ $filters = [
     'from'    => input_date($_GET, 'from'),
     'to'      => input_date($_GET, 'to'),
     'status'  => is_string($_GET['status'] ?? null) && array_key_exists($_GET['status'], $statuses) ? $_GET['status'] : 'all',
-    'payment' => is_string($_GET['payment'] ?? null) && array_key_exists($_GET['payment'], Sales::PAYMENT_TYPES) ? $_GET['payment'] : '',
+    'payment' => is_string($_GET['payment'] ?? null) && array_key_exists($_GET['payment'], Sales::ALL_PAYMENT_TYPES) ? $_GET['payment'] : '',
     'cashier' => input_int($_GET, 'cashier', 1),
 ];
 if ($filters['from'] !== null && $filters['to'] !== null && $filters['from'] > $filters['to']) {
@@ -123,7 +123,7 @@ require ROOT_PATH . '/includes/header.php';
         </select>
         <select class="form-input" name="payment" aria-label="Payment type">
             <option value="">All payments</option>
-            <?php foreach (Sales::PAYMENT_TYPES as $value => $label): ?>
+            <?php foreach (Sales::ALL_PAYMENT_TYPES as $value => $label): ?>
                 <option value="<?= e($value) ?>"<?= $filters['payment'] === $value ? ' selected' : '' ?>><?= e($label) ?></option>
             <?php endforeach; ?>
         </select>
@@ -177,7 +177,7 @@ require ROOT_PATH . '/includes/header.php';
                     <?php if ($showBranch): ?><td class="col-opt"><span class="badge badge--branch" title="<?= e($s['branch_name']) ?>"><?= e($s['branch_code']) ?></span></td><?php endif; ?>
                     <td class="col-opt"><?= e($s['cashier_name']) ?></td>
                     <td class="num col-opt"><?= (int) $s['items'] ?></td>
-                    <td><span class="badge"><?= e(Sales::PAYMENT_TYPES[$s['payment_type']] ?? $s['payment_type']) ?></span></td>
+                    <td><span class="badge"><?= e(Sales::ALL_PAYMENT_TYPES[$s['payment_type']] ?? $s['payment_type']) ?></span></td>
                     <td class="num sale-total"><?= e(money($s['total'])) ?></td>
                     <td><span class="badge <?= $void ? 'badge--danger' : 'badge--success' ?>"><?= e(Sales::STATUSES[$s['status']]) ?></span></td>
                     <td class="actions-col">

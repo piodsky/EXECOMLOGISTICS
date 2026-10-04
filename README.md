@@ -48,6 +48,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 10b → 11 | nothing: Dashboard and the new reports use the existing tables (just copy the files) |
 | Phase 11 → 12 | `migrations\011_security_indexes.sql` (indexes only), then the tools in *Security, database user & backups* below |
 | Phase 12 → 13a | `migrations\012_purchasing.sql` (purchase requests, PO Internal, receiving from a PO; fills the MAR / MLB / CDO letterhead addresses if empty). Run as **root** |
+| Phase 13a → 13b | `migrations_customer_orders.sql` (customer orders / PO Outgoing, delivery receipts, billing on account). Run as **root** |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql
@@ -181,6 +182,22 @@ For one-click printing without the dialog, start Edge/Chrome on the POS PC with 
   posting it adds the stock as before. The PO shows ordered / received / still due and every delivery, and becomes
   *Received* when everything arrived. *Close* a partly received PO when the rest won't come; *Cancel* one that
   received nothing.
+
+## Customer Orders (stock out)
+
+- **PO Outgoing**: enter the purchase order a government office, company or school sent you (customer, their PO no.
+  and date, end-user, place of delivery, terms, deadline, mode of procurement, award / BAC reference) with the agreed
+  prices (VAT is added on the bill; a price below the suggested price needs a reason).
+- A branch admin who did not prepare it **confirms** it: it gets its `CO-<branch>-<year>-NNNNNN` number and its items
+  are **reserved** at the branch. Reserved units can't be sold at the POS or used by any other stock-out (job parts,
+  transfers, write-offs, adjustments) until they are delivered, or the order is closed / cancelled.
+- **Delivery Receipt**: release what goes on each trip (partial deliveries are fine; serial numbers are chosen); the
+  stock leaves the branch then. Print the DR, and **Mark Delivered** with who received it and the IAR no. A DR that
+  was not billed can be returned to stock.
+- **Bill**: tick the delivery receipts and choose cash / GCash / card, or **On account** for customers who pay later.
+  The bill is a normal sale (Sales History, reports) that does not deduct the stock again; print the **Billing
+  Statement**. Voiding the bill makes the receipts billable again.
+- **Order Tracking** shows customer orders still to confirm / deliver / bill and purchase orders still coming in.
 
 ## Folder structure
 

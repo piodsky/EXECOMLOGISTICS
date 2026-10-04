@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009, 010, 011 and 012.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012 and 013.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,11 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS customer_delivery_serials;
+DROP TABLE IF EXISTS customer_delivery_lines;
+DROP TABLE IF EXISTS customer_deliveries;
+DROP TABLE IF EXISTS customer_order_lines;
+DROP TABLE IF EXISTS customer_orders;
 DROP TABLE IF EXISTS purchase_order_request_lines;
 DROP TABLE IF EXISTS purchase_order_lines;
 DROP TABLE IF EXISTS purchase_orders;
@@ -498,7 +503,8 @@ CREATE TABLE sales (
   user_id           INT UNSIGNED  NOT NULL,
   customer_id       INT UNSIGNED  NULL,
   job_order_id      INT UNSIGNED  NULL,
-  payment_type      ENUM('cash','gcash','card') NOT NULL DEFAULT 'cash',
+  customer_order_id INT UNSIGNED  NULL,
+  payment_type      ENUM('cash','gcash','card','charge') NOT NULL DEFAULT 'cash',
   status            ENUM('held','completed','cancelled') NOT NULL DEFAULT 'completed',
   subtotal          DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   discount_percent  DECIMAL(5,2)  NOT NULL DEFAULT 0.00,
@@ -526,6 +532,7 @@ CREATE TABLE sales (
   KEY idx_sales_branch_user_date (branch_id, user_id, created_at),
   KEY idx_sales_discount_approved_by (discount_approved_by),
   KEY idx_sales_job_order (job_order_id),
+  KEY idx_sales_customer_order (customer_order_id),
   CONSTRAINT fk_sales_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_sales_user FOREIGN KEY (user_id) REFERENCES users (id)
@@ -681,7 +688,7 @@ CREATE TABLE product_serials (
   branch_id          INT UNSIGNED NOT NULL,
   warehouse_id       INT UNSIGNED NOT NULL,
   location_id        INT UNSIGNED NOT NULL,
-  status             ENUM('in_stock','sold','removed','in_transit','in_custody','installed') NOT NULL DEFAULT 'in_stock',
+  status             ENUM('in_stock','sold','removed','in_transit','in_custody','installed','delivered') NOT NULL DEFAULT 'in_stock',
   receiving_item_id  INT UNSIGNED NULL,
   created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1337,6 +1344,192 @@ ALTER TABLE receiving_items
     ON UPDATE CASCADE ON DELETE RESTRICT;
 
 -- ---------------------------------------------------------------------
+-- Customer orders (PO Outgoing)
+--   draft (no number) -> pending (for confirmation) -> confirmed (order_no
+--   CO-<branch>-<year>-NNNNNN, never by its preparer; reserves qty_ordered -
+--   qty_delivered of every line at location_id) -> partial -> delivered ->
+--   completed (everything delivered and billed). closed = the rest will not be
+--   delivered (reason; frees the reservation). cancelled = confirmed, nothing
+--   delivered (reason). pending -> draft (returned with a note).
+--   Prices are VAT-exclusive like the POS; suggested_price = products.price
+--   when the line was saved, price_reason when lower.
+-- ---------------------------------------------------------------------
+CREATE TABLE customer_orders (
+  id                INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  order_no          VARCHAR(30)   NULL,
+  branch_id         INT UNSIGNED  NOT NULL,
+  warehouse_id      INT UNSIGNED  NOT NULL,
+  location_id       INT UNSIGNED  NOT NULL,
+  customer_id       INT UNSIGNED  NOT NULL,
+  customer_name     VARCHAR(100)  NOT NULL,
+  customer_address  VARCHAR(255)  NULL,
+  customer_po_no    VARCHAR(60)   NOT NULL,
+  customer_po_date  DATE          NULL,
+  end_user          VARCHAR(150)  NULL,
+  place_of_delivery VARCHAR(255)  NULL,
+  delivery_term     VARCHAR(100)  NULL,
+  due_date          DATE          NULL,
+  payment_term      VARCHAR(100)  NULL,
+  procurement_mode  VARCHAR(60)   NULL,
+  award_ref         VARCHAR(100)  NULL,
+  notes             VARCHAR(500)  NULL,
+  status            ENUM('draft','pending','confirmed','partial','delivered','completed','closed','cancelled') NOT NULL DEFAULT 'draft',
+  total_qty         INT           NOT NULL DEFAULT 0,
+  subtotal          DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  created_by        INT UNSIGNED  NOT NULL,
+  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  submitted_by      INT UNSIGNED  NULL,
+  submitted_at      DATETIME      NULL,
+  return_note       VARCHAR(255)  NULL,
+  confirmed_by      INT UNSIGNED  NULL,
+  confirmed_at      DATETIME      NULL,
+  closed_by         INT UNSIGNED  NULL,
+  closed_at         DATETIME      NULL,
+  close_reason      VARCHAR(255)  NULL,
+  updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_customer_orders_no (order_no),
+  KEY idx_customer_orders_branch (branch_id, status, created_at),
+  KEY idx_customer_orders_location (location_id, warehouse_id, branch_id),
+  KEY idx_customer_orders_customer (customer_id),
+  KEY idx_customer_orders_po (customer_po_no),
+  KEY idx_customer_orders_due (due_date),
+  KEY idx_customer_orders_created_by (created_by),
+  KEY idx_customer_orders_submitted_by (submitted_by),
+  KEY idx_customer_orders_confirmed_by (confirmed_by),
+  KEY idx_customer_orders_closed_by (closed_by),
+  CONSTRAINT fk_customer_orders_location FOREIGN KEY (location_id, warehouse_id, branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_orders_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_orders_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_orders_submitted_by FOREIGN KEY (submitted_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_orders_confirmed_by FOREIGN KEY (confirmed_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_orders_closed_by FOREIGN KEY (closed_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_customer_orders_no CHECK ((order_no IS NULL) = (status IN ('draft','pending')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE customer_order_lines (
+  id               INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  order_id         INT UNSIGNED      NOT NULL,
+  product_id       INT UNSIGNED      NOT NULL,
+  qty_ordered      INT               NOT NULL,
+  qty_delivered    INT               NOT NULL DEFAULT 0,
+  qty_billed       INT               NOT NULL DEFAULT 0,
+  unit_price       DECIMAL(12,2)     NOT NULL,
+  suggested_price  DECIMAL(12,2)     NOT NULL,
+  price_reason     VARCHAR(255)      NULL,
+  line_total       DECIMAL(14,2)     NOT NULL,
+  sort_order       SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_customer_order_lines_product (order_id, product_id),
+  KEY idx_customer_order_lines_product (product_id),
+  CONSTRAINT fk_customer_order_lines_order FOREIGN KEY (order_id) REFERENCES customer_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_order_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_customer_order_lines_qty CHECK (qty_ordered > 0 AND qty_delivered BETWEEN 0 AND qty_ordered
+                                                 AND qty_billed BETWEEN 0 AND qty_delivered),
+  CONSTRAINT chk_customer_order_lines_price CHECK (unit_price >= 0 AND suggested_price >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Delivery receipts
+--   released (stock left the order's location: movement 'delivery', cost =
+--   branch average snapshot; serials 'delivered') -> delivered (received by,
+--   date, acceptance / IAR reference). released and not billed -> cancelled
+--   (goods back to stock: 'delivery_return'). sale_id = the bill.
+-- ---------------------------------------------------------------------
+CREATE TABLE customer_deliveries (
+  id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  dr_no           VARCHAR(30)   NOT NULL,
+  order_id        INT UNSIGNED  NOT NULL,
+  branch_id       INT UNSIGNED  NOT NULL,
+  warehouse_id    INT UNSIGNED  NOT NULL,
+  location_id     INT UNSIGNED  NOT NULL,
+  status          ENUM('released','delivered','cancelled') NOT NULL DEFAULT 'released',
+  delivered_by    VARCHAR(100)  NULL,
+  notes           VARCHAR(255)  NULL,
+  total_qty       INT           NOT NULL DEFAULT 0,
+  total_cost      DECIMAL(14,2) NULL,
+  sale_id         INT UNSIGNED  NULL,
+  released_by     INT UNSIGNED  NOT NULL,
+  released_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  received_by     VARCHAR(150)  NULL,
+  received_date   DATE          NULL,
+  acceptance_ref  VARCHAR(60)   NULL,
+  confirmed_by    INT UNSIGNED  NULL,
+  confirmed_at    DATETIME      NULL,
+  cancelled_by    INT UNSIGNED  NULL,
+  cancelled_at    DATETIME      NULL,
+  cancel_reason   VARCHAR(255)  NULL,
+  updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_customer_deliveries_no (dr_no),
+  KEY idx_customer_deliveries_order (order_id, status),
+  KEY idx_customer_deliveries_branch (branch_id, status, released_at),
+  KEY idx_customer_deliveries_location (location_id, warehouse_id, branch_id),
+  KEY idx_customer_deliveries_sale (sale_id),
+  KEY idx_customer_deliveries_released_by (released_by),
+  KEY idx_customer_deliveries_confirmed_by (confirmed_by),
+  KEY idx_customer_deliveries_cancelled_by (cancelled_by),
+  CONSTRAINT fk_customer_deliveries_order FOREIGN KEY (order_id) REFERENCES customer_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_deliveries_location FOREIGN KEY (location_id, warehouse_id, branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_deliveries_sale FOREIGN KEY (sale_id) REFERENCES sales (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_deliveries_released_by FOREIGN KEY (released_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_deliveries_confirmed_by FOREIGN KEY (confirmed_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_deliveries_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE customer_delivery_lines (
+  id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  delivery_id    INT UNSIGNED  NOT NULL,
+  order_line_id  INT UNSIGNED  NOT NULL,
+  product_id     INT UNSIGNED  NOT NULL,
+  qty            INT           NOT NULL,
+  unit_cost      DECIMAL(12,4) NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_customer_delivery_lines (delivery_id, order_line_id),
+  KEY idx_customer_delivery_lines_order_line (order_line_id),
+  KEY idx_customer_delivery_lines_product (product_id),
+  CONSTRAINT fk_customer_delivery_lines_delivery FOREIGN KEY (delivery_id) REFERENCES customer_deliveries (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_delivery_lines_order_line FOREIGN KEY (order_line_id) REFERENCES customer_order_lines (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_delivery_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_customer_delivery_lines_qty CHECK (qty > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE customer_delivery_serials (
+  line_id    INT UNSIGNED NOT NULL,
+  serial_id  INT UNSIGNED NOT NULL,
+  PRIMARY KEY (line_id, serial_id),
+  KEY idx_customer_delivery_serials_serial (serial_id),
+  CONSTRAINT fk_customer_delivery_serials_line FOREIGN KEY (line_id) REFERENCES customer_delivery_lines (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_customer_delivery_serials_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- sales.customer_order_id FK (customer_orders is created after sales).
+ALTER TABLE sales
+  ADD CONSTRAINT fk_sales_customer_order FOREIGN KEY (customer_order_id) REFERENCES customer_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+
+-- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
 --   the change; location_qty_after is the level at (branch, warehouse, location).
@@ -1350,10 +1543,11 @@ CREATE TABLE stock_movements (
   inventory_doc_id    INT UNSIGNED    NULL,
   stock_transfer_id   INT UNSIGNED    NULL,
   job_order_id        INT UNSIGNED    NULL,
+  customer_delivery_id INT UNSIGNED   NULL,
   branch_id           INT UNSIGNED    NOT NULL,
   warehouse_id        INT UNSIGNED    NOT NULL,
   location_id         INT UNSIGNED    NOT NULL,
-  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count','transfer_out','transfer_in','job_issue','job_return') NOT NULL,
+  type                ENUM('initial','sale','restock','adjustment','void','receiving','transfer','issue','write_off','count','transfer_out','transfer_in','job_issue','job_return','delivery','delivery_return') NOT NULL,
   quantity            INT             NOT NULL,
   stock_after         INT             NOT NULL,
   location_qty_after  INT             NULL,
@@ -1369,6 +1563,7 @@ CREATE TABLE stock_movements (
   KEY idx_movements_inventory_doc (inventory_doc_id),
   KEY idx_movements_stock_transfer (stock_transfer_id),
   KEY idx_movements_job_order (job_order_id),
+  KEY idx_movements_customer_delivery (customer_delivery_id),
   CONSTRAINT fk_movements_location FOREIGN KEY (location_id, warehouse_id, branch_id)
     REFERENCES storage_locations (id, warehouse_id, branch_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -1385,6 +1580,8 @@ CREATE TABLE stock_movements (
   CONSTRAINT fk_movements_stock_transfer FOREIGN KEY (stock_transfer_id) REFERENCES stock_transfers (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_movements_job_order FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_movements_customer_delivery FOREIGN KEY (customer_delivery_id) REFERENCES customer_deliveries (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1523,7 +1720,11 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (48, 'job_orders.release',  'Job Orders', 'Bill completed jobs and release devices to the customer',  110),
   (49, 'purchasing.request',  'Purchasing', 'Create purchase requests (PR) for items the branch needs',  120),
   (50, 'purchasing.approve',  'Purchasing', 'Approve or reject purchase requests and purchase orders',   121),
-  (51, 'purchasing.order',    'Purchasing', 'Prepare purchase orders to suppliers (PO Internal), close or cancel them', 122);
+  (51, 'purchasing.order',    'Purchasing', 'Prepare purchase orders to suppliers (PO Internal), close or cancel them', 122),
+  (52, 'customer_orders.manage',  'Customer Orders', 'Enter customer purchase orders (PO Outgoing) and send them for confirmation', 130),
+  (53, 'customer_orders.approve', 'Customer Orders', 'Confirm customer orders (reserves stock), close or cancel them', 131),
+  (54, 'customer_orders.deliver', 'Customer Orders', 'Release delivery receipts (stock leaves the branch) and record the delivery', 132),
+  (55, 'customer_orders.bill',    'Customer Orders', 'Bill delivered customer orders (cash, GCash, card or on account)', 133);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -1546,10 +1747,11 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'counts.approve', 'warehouses.manage', 'transfers.request', 'transfers.approve', 'transfers.release',
          'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost',
          'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue',
-         'job_orders.release', 'purchasing.request', 'purchasing.approve', 'purchasing.order'))
+         'job_orders.release', 'purchasing.request', 'purchasing.approve', 'purchasing.order', 'customer_orders.manage',
+         'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create',
-         'job_orders.release', 'purchasing.request'))
+         'job_orders.release', 'purchasing.request', 'customer_orders.manage', 'customer_orders.bill'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view', 'job_orders.create',
          'job_orders.update', 'purchasing.request'))
 ORDER BY r.id, p.id;

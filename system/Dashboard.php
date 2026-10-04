@@ -62,6 +62,19 @@ final class Dashboard
             }
             $add('Overdue deliveries', 'Purchase orders past the expected date', $po['overdue'], 'pages/purchase-orders.php?status=overdue', 'clock');
         }
+        if (Auth::canAny(...CustomerOrders::VIEW_PERMISSIONS)) {
+            $co = CustomerOrders::workCounts();
+            if (Auth::can('customer_orders.approve')) {
+                $add('Customer orders to confirm', 'Confirming reserves the stock', $co['confirm'], 'pages/customer-orders.php?status=pending', 'file');
+            }
+            if (Auth::can('customer_orders.deliver')) {
+                $add('Customer orders to deliver', 'Confirmed, stock reserved', $co['deliver'], 'pages/customer-orders.php?status=open', 'truck');
+            }
+            if (Auth::can('customer_orders.bill')) {
+                $add('Deliveries to bill', 'Delivered, not billed yet', $co['bill'], 'pages/customer-orders.php?status=to_bill', 'receipt');
+            }
+            $add('Overdue customer orders', 'Past the delivery deadline', $co['overdue'], 'pages/customer-orders.php?status=overdue', 'clock');
+        }
         if (Auth::can('receiving.post')) {
             $add('Receiving drafts', 'Not posted yet', $one("SELECT COUNT(*) FROM receiving_reports WHERE branch_id = ? AND status = 'draft'", [$cur]),
                 'pages/receiving.php?status=draft', 'truck');

@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -548,7 +548,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Customer Orders|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -1645,6 +1645,86 @@ try {
     SwitchBranch 0
     Nav "$Base/pages/stock-integrity.php"
     Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after purchasing (All branches): $(Text '#integritySummary span')"
+    SwitchBranch 1
+
+    # ---- Phase 13b: customer orders (PO Outgoing -> reservation -> delivery -> billing) ----
+    $cust = Sql "SELECT id FROM customers WHERE name = 'DepEd Bukidnon'"
+    Logout
+    Login 'cashier' 'cashier123' 'pos.php'
+    Nav "$Base/pages/co-form.php"
+    Submit "window.confirm = () => true; const f = document.getElementById('coForm'); f.customer_id.value = '$cust'; f.customer_po_no.value = 'LGU-PO-2026-0457'; f.end_user.value = 'Engineering Office'; f.procurement_mode.value = 'Small Value Procurement'; f.due_date.value = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10); const t = document.querySelectorAll('#docLines tbody[data-line]')[0]; t.querySelector('[data-product]').value = '4'; t.querySelector('[data-qty]').value = '5'; t.querySelector('[data-price-input]').value = '4,400'; t.querySelector('[data-reason]').value = 'Awarded bid price'; document.getElementById('addLine').click(); const u = [...document.querySelectorAll('#docLines tbody[data-line]')].pop(); u.querySelector('[data-product]').value = '8'; u.querySelector('[data-qty]').value = '1'; u.querySelector('[data-price-input]').value = '6500'; document.getElementById('submitCoBtn').click()" 'cashier enters a customer PO'
+    $co1 = Sql 'SELECT MAX(id) FROM customer_orders'
+    Check ((Text '#coStatus') -eq 'For Confirmation' -and (Sql "SELECT CONCAT(order_no IS NULL, ':', subtotal, ':', customer_po_no) FROM customer_orders WHERE id = $co1") -eq '1:28500.00:LGU-PO-2026-0457' -and (Eval "!document.getElementById('coConfirm')")) "customer PO for confirmation (subtotal 28,500, no number yet); the cashier cannot confirm it"
+    Logout
+
+    Login 'maradmin' $script:pw
+    $m0 = [int](LocQty '4' '1'); $p0 = [int](LocQty '8' '1')
+    Nav "$Base/pages/customer-orders.php"
+    Check ((Text '[data-work=to-confirm]') -eq '1') "branch admin: To Confirm tile ($(Text '[data-work=to-confirm]'))"
+    Nav "$Base/pages/co-view.php?id=$co1"
+    Submit "window.confirm = () => true; document.getElementById('coConfirm').click()" 'confirm customer order'
+    $coNo = Sql "SELECT order_no FROM customer_orders WHERE id = $co1"
+    Check ($coNo -like 'CO-MAR-*-000001' -and (Text '#coStatus') -eq 'Confirmed' -and (Eval "!!document.getElementById('coReservedNote')")) "confirmed as ${coNo}: stock reserved"
+    $posStock = Eval "fetch('$Base/api/pos/products.php').then(r => r.json()).then(d => d.products.find(p => p.id === 4).stock + ':' + d.products.find(p => p.id === 8).stock)"
+    Check ($posStock -eq "$($m0 - 5):$($p0 - 1)") "POS shows only free stock: Monitor $m0 - 5 reserved, Printer $p0 - 1 ($posStock)"
+    $r = Eval "BB.api('pos/checkout.php', {method: 'POST', body: {items: [{product_id: 4, qty: $($m0 - 4)}], customer_id: null, payment_type: 'cash', discount_percent: '0', amount_paid: '9999999.00'}}).then(d => 'ok', e => e.status + ':' + e.message)"
+    Check ($r -like '409:*only*left*') "POS cannot sell reserved units ($r)"
+    Nav "$Base/pages/dr-form.php?order=$co1"
+    Submit "window.confirm = () => true; const rows = [...document.querySelectorAll('#drLines tbody tr')]; const m = rows.find(r => r.textContent.includes('Monitor')); m.querySelector('[data-pick-qty]').value = '3'; const p = rows.find(r => r.textContent.includes('Printer')); p.querySelector('.sn-check input').click(); document.getElementById('releaseDrBtn').click()" 'release DR 1'
+    $dr1 = Sql 'SELECT MAX(id) FROM customer_deliveries'
+    $drNo = Sql "SELECT dr_no FROM customer_deliveries WHERE id = $dr1"
+    $m1 = [int](LocQty '4' '1'); $p1 = [int](LocQty '8' '1')
+    Check ($drNo -like 'DR-MAR-*-000001' -and $m1 -eq $m0 - 3 -and $p1 -eq $p0 - 1 -and (Sql "SELECT COUNT(*) FROM product_serials ps JOIN customer_delivery_serials x ON x.serial_id = ps.id WHERE ps.status = 'delivered'") -eq '1') "$drNo released: Monitor $m0 -> $m1, Printer $p0 -> $p1, serial delivered"
+    Check ((Sql "SELECT status FROM customer_orders WHERE id = $co1") -eq 'partial' -and (Sql "SELECT -SUM(quantity) FROM stock_movements WHERE customer_delivery_id = $dr1 AND type = 'delivery'") -eq '4') 'order partially delivered; delivery movements recorded'
+    Submit "document.getElementById('drDeliveredBtn').click(); const f = document.querySelector('#deliveredDialog form'); f.received_by.value = 'Engr. Ramon Cruz, Supply Officer'; f.acceptance_ref.value = 'IAR-2026-118'; f.requestSubmit()" 'mark DR delivered'
+    Check ((Text '#drStatus') -eq 'Delivered' -and (Sql "SELECT acceptance_ref FROM customer_deliveries WHERE id = $dr1") -eq 'IAR-2026-118') 'DR recorded as delivered with the IAR no.'
+    Nav "$Base/pages/dr-print.php?id=$dr1"
+    Check ((Text '#drNo') -eq $drNo -and (Eval "document.body.textContent.includes('LGU-PO-2026-0457') && document.body.textContent.includes('S/N:') && document.body.textContent.includes('Engr. Ramon Cruz')")) 'printed DR: number, customer PO, serial number, receiver'
+    Shot '45-dr-print'
+    Nav "$Base/pages/co-view.php?id=$co1"
+    Logout
+
+    Login 'cashier' 'cashier123' 'pos.php'
+    Nav "$Base/pages/co-view.php?id=$co1"
+    $mvb = Sql 'SELECT COUNT(*) FROM stock_movements'
+    Submit "window.confirm = () => true; document.getElementById('coBillBtn').click(); const f = document.getElementById('billForm'); f.payment_type.value = 'charge'; f.payment_type.dispatchEvent(new Event('change')); f.requestSubmit()" 'bill DR 1 on account'
+    $bill1 = Sql "SELECT sale_id FROM customer_deliveries WHERE id = $dr1"
+    $chk = Sql "SELECT CONCAT(payment_type, ':', amount_paid, ':', total = ROUND((3 * 4400 + 6500) * 1.12, 2), ':', customer_order_id) FROM sales WHERE id = '$bill1'"
+    Check ($chk -eq "charge:0.00:1:$co1") "billed on account: total = (3 x 4,400 + 6,500) + VAT, nothing paid yet ($chk)"
+    Check ((Sql "SELECT GROUP_CONCAT(qty_billed ORDER BY product_id) FROM customer_order_lines WHERE order_id = $co1") -eq '3,1' -and (Sql 'SELECT COUNT(*) FROM stock_movements') -eq $mvb) 'order lines billed 3 + 1; billing wrote no stock movement'
+    Nav "$Base/pages/bill-print.php?id=$bill1"
+    Check ((Text '#billNo') -ne '' -and (Eval "!!document.getElementById('billDue') && document.body.textContent.includes('DR-MAR')")) 'billing statement: amount due + DR reference'
+    Nav "$Base/pages/sales-history.php?payment=charge"
+    Check ((Eval "document.body.textContent.includes('On account')")) 'sales history: On account payment filter'
+    Logout
+
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/dr-form.php?order=$co1"
+    Submit "window.confirm = () => true; document.getElementById('releaseDrBtn').click()" 'release DR 2 (the rest)'
+    $dr2 = Sql 'SELECT MAX(id) FROM customer_deliveries'
+    Check ((Sql "SELECT status FROM customer_orders WHERE id = $co1") -eq 'delivered' -and [int](LocQty '4' '1') -eq $m0 - 5) 'all delivered: order Delivered, Monitor stock down by 5 in total'
+    Submit "window.confirm = () => true; document.getElementById('drCancelBtn').click(); document.getElementById('drCancelReason').value = 'Customer asked for a later date'; document.getElementById('drCancelReason').form.requestSubmit()" 'return DR 2 to stock'
+    Check ((Text '#drStatus') -like 'Returned*' -and [int](LocQty '4' '1') -eq $m1 -and (Sql "SELECT status FROM customer_orders WHERE id = $co1") -eq 'partial') 'DR 2 returned to stock: Monitor back, order partial (2 reserved again)'
+    Nav "$Base/pages/co-view.php?id=$co1"
+    Submit "window.confirm = () => true; document.getElementById('coCloseBtn').click(); const f = document.querySelector('#closeDialog form'); f.reason.value = 'Customer reduced the order'; f.requestSubmit()" 'close order'
+    $posStock = Eval "fetch('$Base/api/pos/products.php').then(r => r.json()).then(d => String(d.products.find(p => p.id === 4).stock))"
+    Check ((Text '#coStatus') -eq 'Closed' -and [int]$posStock -eq $m1) "closed: nothing reserved any more, POS sees all $m1 Monitors ($posStock)"
+    $mv = Sql 'SELECT COUNT(*) FROM stock_movements'
+    Nav "$Base/pages/sale-view.php?id=$bill1"
+    Submit "window.confirm = () => true; document.getElementById('voidBtn').click(); const f = document.querySelector('#voidDialog form'); f.reason.value = 'Wrong payment terms'; f.requestSubmit()" 'void the bill'
+    Check ((Sql "SELECT COUNT(*) FROM customer_deliveries WHERE id = $dr1 AND sale_id IS NULL") -eq '1' -and (Sql 'SELECT COUNT(*) FROM stock_movements') -eq $mv -and (Sql "SELECT GROUP_CONCAT(qty_billed) FROM customer_order_lines WHERE order_id = $co1") -eq '0,0') 'voided bill: nothing restocked, DR 1 billable again'
+    Nav "$Base/pages/co-view.php?id=$co1"
+    Submit "window.confirm = () => true; document.getElementById('coBillBtn').click(); const f = document.getElementById('billForm'); f.payment_type.value = 'gcash'; f.requestSubmit()" 'bill again with GCash'
+    Check ((Sql "SELECT CONCAT(s.payment_type, ':', s.amount_paid = s.total) FROM customer_deliveries d JOIN sales s ON s.id = d.sale_id WHERE d.id = $dr1") -eq 'gcash:1' -and (Text '#coStatus') -eq 'Closed') 'billed again (GCash, paid in full); the order stays Closed'
+    Nav "$Base/pages/order-tracking.php"
+    Check ((Eval "!!document.getElementById('trackOut') && !!document.getElementById('trackIn')")) 'order tracking: outgoing customer orders + incoming purchase orders'
+    $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'customer_orders'"
+    Check ([int]$a -ge 8) "customer order actions are in the audit log ($a)"
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
+    SwitchBranch 0
+    Nav "$Base/pages/stock-integrity.php"
+    Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after customer orders (All branches): $(Text '#integritySummary span')"
     SwitchBranch 1
 
     # Sprite validity

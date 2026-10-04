@@ -48,14 +48,14 @@ $showDemo = config('app.env') === 'local';
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Sign in · <?= e(config('app.name')) ?> POS</title>
-    <link rel="icon" href="<?= e(asset('img/favicon.svg')) ?>" type="image/svg+xml">
+    <link rel="icon" href="<?= e(asset('img/favicon.png')) ?>" type="image/png">
     <link rel="stylesheet" href="<?= e(asset('css/app.css')) ?>">
 </head>
 <body class="page-login">
 <main class="login">
     <section class="login__brand" aria-hidden="true">
         <div class="login__brand-inner">
-            <img class="login__logo" src="<?= e(asset('img/logo-mark.svg')) ?>" alt="" width="80" height="80">
+            <img class="login__logo" src="<?= e(asset('img/execom-mark.png')) ?>" alt="" width="80" height="80">
             <h1>EXECOM</h1>
             <p class="login__sub">LOGISTICS</p>
             <p class="login__tagline">POS &amp; Inventory System</p>

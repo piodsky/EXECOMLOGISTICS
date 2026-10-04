@@ -91,6 +91,8 @@ final class PurchaseOrders
         if (isset(self::STATUSES[$status])) {
             $where[]  = 'o.status = ?';
             $params[] = $status;
+        } elseif ($status === 'active') {
+            $where[] = "o.status IN ('pending', 'approved', 'partial')";
         } elseif ($status === 'open' || $status === 'overdue') {
             $where[] = "o.status IN ('approved', 'partial')";
             if ($status === 'overdue') {
