@@ -67,7 +67,7 @@ require ROOT_PATH . '/includes/header.php';
     <form class="toolbar" method="get" action="<?= e(url('pages/receiving.php')) ?>" role="search">
         <label class="toolbar__search">
             <?= icon('search') ?>
-            <input class="form-input" type="search" name="search" maxlength="100" placeholder="RR no., reference or supplier"
+            <input class="form-input" type="search" name="search" maxlength="100" placeholder="RR no., PO no., reference or supplier"
                    value="<?= e($filters['search']) ?>" aria-label="Search receiving reports">
         </label>
         <label class="date-field">
@@ -125,7 +125,7 @@ require ROOT_PATH . '/includes/header.php';
                     <td class="nowrap"><?= e(date('M j, Y', strtotime($r['received_date']))) ?></td>
                     <td><?= e($r['supplier_name']) ?> <small class="muted block"><?= e($r['supplier_code']) ?></small></td>
                     <?php if ($showBranch): ?><td class="col-opt"><span class="badge badge--branch" title="<?= e($r['branch_name']) ?>"><?= e($r['branch_code']) ?></span></td><?php endif; ?>
-                    <td class="col-opt"><?= e($r['reference_no'] ?? '—') ?></td>
+                    <td class="col-opt"><?= e($r['reference_no'] ?? '—') ?><?php if ($r['po_no'] !== null): ?><small class="muted block"><?= e($r['po_no']) ?></small><?php endif; ?></td>
                     <td class="num"><?= (int) $r['line_count'] ?></td>
                     <td class="num col-opt"><?= number_format((int) $r['total_qty']) ?></td>
                     <?php if ($canCost): ?>

@@ -97,3 +97,5 @@
     .jo-stub { flex-wrap: wrap; padding: 8px 10px; border: 1px solid #000; }
     .jo-stub p { flex-basis: 100%; margin: 4px 0 0; }
 }
+.jo-buy { display: flex; align-items: center; gap: 6px; margin: 0; padding: 0 16px 14px; }
+.jo-buy .icon { width: 15px; height: 15px; }

@@ -209,7 +209,7 @@ final class Suppliers
      */
     public static function deleteBlocker(int $id): ?string
     {
-        $checks = ['receiving_reports' => 'it has receiving reports']; // fixed table names, never input
+        $checks = ['receiving_reports' => 'it has receiving reports', 'purchase_orders' => 'it has purchase orders']; // fixed table names, never input
         foreach ($checks as $table => $reason) {
             $stmt = db()->prepare("SELECT 1 FROM {$table} WHERE supplier_id = ? LIMIT 1");
             $stmt->execute([$id]);

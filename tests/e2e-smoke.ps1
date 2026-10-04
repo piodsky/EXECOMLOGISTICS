@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -453,7 +453,8 @@ try {
     Check ((Text '.alert--success span') -eq 'Company and receipt settings were saved.') "settings saved: $(Text '.alert span')"
     Check ((Eval "document.getElementById('receiptPreview').textContent.includes('IT Center')") -and (Eval "!document.body.textContent.includes('Receipts still show the sample')")) 'receipt preview updated, warning gone'
     Nav "$Base/pages/receipt.php?id=1"
-    Check (Eval "document.body.textContent.includes('Unit 5, IT Center') && document.body.textContent.includes('VAT Reg TIN: 123-456-789-000')") 'receipt prints the new company details'
+    # MAR has its own address (migration 012), so its receipts print the branch address; the TIN is the company's.
+    Check (Eval "document.body.textContent.includes('Perimeter Freedom Park') && document.body.textContent.includes('VAT Reg TIN: 123-456-789-000')") 'receipt prints the branch address and the new company TIN'
     Nav "$Base/pages/users.php"
     Check ((Eval "document.querySelectorAll('#usersTable tbody tr').length") -eq 2) 'users list shows the 2 sample users'
     Check (Eval "(() => { const r = document.querySelector('#usersTable tr[data-username=admin]'); return !!r.querySelector('.badge--you') && !r.querySelector('[data-act=toggle]') && !r.querySelector('[data-act=delete]'); })()") 'own row: You badge, no deactivate/delete'
@@ -547,7 +548,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -1541,6 +1542,110 @@ try {
     Check ((Eval "document.body.textContent.includes('login failed') || document.body.textContent.includes('login_failed')") -and (Eval "!!document.getElementById('auditCsv')")) 'audit log: Sign-in & Security filter shows the failed login; Export CSV'
     $csv = Eval "fetch(document.getElementById('auditCsv').href).then(r => r.text().then(t => r.headers.get('content-type') + '|' + t.includes('login_failed') + '|' + !t.includes('wrong-pass')))"
     Check ($csv -like 'text/csv*|true|true') "audit CSV export ($csv)"
+
+    # ---- Phase 13a: purchasing (PR -> PO Internal -> receiving from the PO) ----
+    Logout
+    Login 'cashier' 'cashier123' 'pos.php'
+    Nav "$Base/pages/pr-form.php"
+    Submit "const f = document.getElementById('prForm'); f.purpose.value = 'Restock for the school season'; const t = document.querySelectorAll('#docLines tbody[data-line]')[0]; t.querySelector('[data-product]').value = '12'; t.querySelector('[name*=end_user]').value = 'PGB'; t.querySelector('[data-qty]').value = '5'; document.getElementById('addLine').click(); const u = [...document.querySelectorAll('#docLines tbody[data-line]')].pop(); u.querySelector('[data-product]').value = '6'; u.querySelector('[data-qty]').value = '3'; window.confirm = () => true; f.requestSubmit()" 'cashier sends a purchase request'
+    $pr1 = Sql 'SELECT MAX(id) FROM purchase_requests'
+    $prNo = Sql "SELECT pr_no FROM purchase_requests WHERE id = $pr1"
+    Check ($prNo -like 'PR-MAR-*-000001' -and (Text '#prStatus') -eq 'For Approval' -and (Eval "!document.getElementById('prApproveForm') && !document.getElementById('prCreatePo')")) "cashier: $prNo for approval; cannot approve or order it"
+    Nav "$Base/pages/purchase-requests.php"
+    Check ((Status 'pages/purchase-orders.php') -eq 403 -and (Eval "[...document.querySelectorAll('.report-tab')].map(a => a.dataset.tab).join(',')") -eq 'requests') 'cashier: PO Internal 403, only the Purchase Requests tab'
+    Logout
+
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/purchase-requests.php"
+    Check ((Text '[data-work=to-approve]') -eq '1') "branch admin: To Approve tile ($(Text '[data-work=to-approve]'))"
+    Nav "$Base/pages/pr-view.php?id=$pr1"
+    $l6 = Sql "SELECT id FROM purchase_request_lines WHERE request_id = $pr1 AND product_id = 6"
+    Submit "window.confirm = () => true; document.querySelector('[name=`"qty[$l6]`"]').value = '2'; document.getElementById('prApproveBtn').click()" 'approve PR'
+    Check ((Text '#prStatus') -eq 'Approved' -and (Sql "SELECT GROUP_CONCAT(qty_approved ORDER BY product_id) FROM purchase_request_lines WHERE request_id = $pr1") -eq '2,5' -and (Eval "!!document.getElementById('prCreatePo')")) 'branch admin approved the PR (Network Switch 3 -> 2); Create PO offered'
+    Nav (Eval "document.getElementById('prCreatePo').href")
+    $pre = Eval "[...document.querySelectorAll('#docLines tbody[data-line]')].map(t => t.querySelector('[data-product]').value + 'x' + t.querySelector('[data-qty]').value + (t.querySelector('[data-links]').value ? 'L' : '')).sort().join(',')"
+    Check ($pre -eq '12x5L,6x2L' -and (Eval "document.querySelector('[name=ship_to]').value.includes('Fortich') || document.querySelector('[name=ship_to]').value.includes('Maramag')")) "PO form from the PR: lines + request links ($pre), ship-to = branch address"
+    Submit "window.confirm = () => true; const f = document.getElementById('poForm'); f.supplier_id.value = '1'; f.forwarder.value = 'AP Cargo - Air'; f.expected_date.value = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10); document.querySelectorAll('#docLines [data-cost]').forEach((c, i) => { c.value = i === 0 ? '1,250.50' : '980'; c.dispatchEvent(new Event('input')); }); document.getElementById('submitPoBtn').click()" 'save PO and send for approval'
+    $po1 = Sql 'SELECT MAX(id) FROM purchase_orders'
+    $amt = Sql "SELECT total_amount FROM purchase_orders WHERE id = $po1"
+    $expAmt = Sql "SELECT SUM(ROUND(qty_ordered * unit_cost, 2)) FROM purchase_order_lines WHERE po_id = $po1"
+    Check ((Text '#poStatus') -eq 'For Approval' -and $amt -eq $expAmt -and (Sql "SELECT po_no IS NULL FROM purchase_orders WHERE id = $po1") -eq '1') "PO sent for approval, no number yet, total $amt"
+    Check ((Sql "SELECT status FROM purchase_requests WHERE id = $pr1") -eq 'ordered') 'PR is Ordered (all approved units on the PO)'
+    Check (Eval "!document.getElementById('poApprove')") 'the preparer cannot approve their own PO'
+    Logout
+
+    Login 'admin' 'admin123' 'dashboard.php'
+    Nav "$Base/pages/dashboard.php"
+    Check (Eval "document.getElementById('needsYou')?.textContent.includes('Purchase orders to approve')") 'dashboard: Purchase orders to approve'
+    Nav "$Base/pages/po-view.php?id=$po1"
+    Submit "document.getElementById('poReturnBtn').click(); document.getElementById('returnNote').value = 'Ask for free delivery'; document.getElementById('returnNote').form.requestSubmit()" 'return PO to draft'
+    Check ((Text '#poStatus') -eq 'Draft' -and (Sql "SELECT return_note FROM purchase_orders WHERE id = $po1") -eq 'Ask for free delivery') 'approver returned the PO to draft with a note'
+    Logout
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/po-form.php?id=$po1"
+    Check ((Text '#poReturnNote') -like '*free delivery*') 'preparer sees the return note on the draft'
+    Nav "$Base/pages/po-view.php?id=$po1"
+    Submit "window.confirm = () => true; document.getElementById('poSubmit').click()" 'resend PO'
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
+    Nav "$Base/pages/po-view.php?id=$po1"
+    Submit "window.confirm = () => true; document.getElementById('poApprove').click()" 'approve PO'
+    $poNo = Sql "SELECT po_no FROM purchase_orders WHERE id = $po1"
+    Check ($poNo -like 'PO-MAR-*-000001' -and (Text '#poStatus') -eq 'Approved' -and (Text '#poTitle') -eq $poNo) "super admin approved: $poNo"
+    Nav "$Base/pages/po-print.php?id=$po1"
+    WaitFor "document.querySelector('.lh__logo').complete" 'letterhead logo'
+    Check ((Text '#poNo') -eq $poNo -and (Eval "!document.getElementById('poStamp')") -and (Eval "document.querySelector('.lh__logo').naturalWidth > 0") -and (Eval "document.querySelector('.lh__branches').textContent.includes('Perimeter Freedom Park')") -and (Text '#poPrintTotal') -like "*$(Sql "SELECT FORMAT(total_amount, 2) FROM purchase_orders WHERE id = $po1")") "printed PO: number, EXECOM logo + branch addresses, total ($(Text '#poPrintTotal'))"
+    Check (Eval "document.querySelector('.doc__info').textContent.includes('AP Cargo')") 'printed PO: forwarder in the contact box'
+    Shot '44-po-print'
+    Nav "$Base/pages/po-view.php?id=$po1"
+    Logout
+
+    Login 'maradmin' $script:pw
+    $h0 = [int](LocQty '12' '1'); $s0 = [int](LocQty '6' '1')
+    Nav "$Base/pages/po-view.php?id=$po1"
+    Nav (Eval "document.getElementById('poReceive').href")
+    Check ((Eval "!!document.getElementById('rrPoNote') && document.querySelectorAll('#rrLines tbody[data-line]').length") -eq 2 -and (Eval "document.querySelector('#rrForm [name=supplier_id]').type") -eq 'hidden') 'receive from PO: PO note, 2 lines due, supplier fixed'
+    Submit "window.confirm = () => true; const f = document.getElementById('rrForm'); f.reference_no.value = 'DR-PO-1'; const t = [...document.querySelectorAll('#rrLines tbody[data-line]')].find(x => x.querySelector('[data-product]').value === '12'); t.querySelector('[data-qty]').value = '3'; document.getElementById('postBtn').click()" 'post partial RR from PO'
+    $rr1 = Sql 'SELECT MAX(id) FROM receiving_reports'
+    Check ((Sql "SELECT CONCAT(status, ':', po_id) FROM receiving_reports WHERE id = $rr1") -eq "posted:$po1" -and (Text '#rrPo') -eq $poNo) "RR posted against $poNo"
+    $h1 = [int](LocQty '12' '1'); $s1 = [int](LocQty '6' '1')
+    Check ($h1 -eq $h0 + 3 -and $s1 -eq $s0 + 2 -and (Sql "SELECT CONCAT(status, ':', (SELECT GROUP_CONCAT(qty_received ORDER BY product_id) FROM purchase_order_lines WHERE po_id = $po1)) FROM purchase_orders WHERE id = $po1") -eq 'partial:2,3') "stock in: Headset $h0 -> $h1, Switch $s0 -> $s1; PO partially received"
+    Nav "$Base/pages/receiving-form.php?po=$po1"
+    Submit "window.confirm = () => true; const f = document.getElementById('rrForm'); document.querySelector('#rrLines [data-qty]').value = '5'; document.getElementById('postBtn').click()" 'over-receive'
+    Check (Eval "document.body.textContent.includes('Only 2 still due') && !!document.querySelector('.alert--error')") 'receiving more than is due is refused (Only 2 still due)'
+    Submit "window.confirm = () => true; document.querySelector('#rrLines [data-qty]').value = '2'; document.getElementById('postBtn').click()" 'receive the rest'
+    $rr2 = Sql 'SELECT MAX(id) FROM receiving_reports'
+    Check ((Sql "SELECT status FROM purchase_orders WHERE id = $po1") -eq 'received') 'PO fully received'
+    Nav "$Base/pages/receiving-view.php?id=$rr2"
+    Submit "window.confirm = () => true; document.getElementById('rrCancel').click(); document.getElementById('cancelReason').value = 'Wrong delivery receipt'; document.getElementById('cancelReason').form.requestSubmit()" 'cancel second RR'
+    Check ((Sql "SELECT CONCAT(status, ':', (SELECT GROUP_CONCAT(qty_received ORDER BY product_id) FROM purchase_order_lines WHERE po_id = $po1)) FROM purchase_orders WHERE id = $po1") -eq 'partial:2,3') 'cancelling an RR puts the units back as due on the PO'
+    Nav "$Base/pages/po-view.php?id=$po1"
+    Check ((Eval "document.querySelectorAll('#poDeliveries li').length") -eq 2 -and (Text '#poProgress') -like '*5 of 7 received*') "PO tracking: 2 deliveries, $(Text '#poProgress')"
+    Submit "window.confirm = () => true; document.getElementById('poCloseBtn').click(); const f = document.querySelector('#closeDialog form'); f.reason.value = 'Supplier is out of stock'; f.requestSubmit()" 'close PO'
+    Check ((Text '#poStatus') -eq 'Closed' -and (Eval "!document.getElementById('poReceive')")) 'partially received PO closed; nothing more can be received'
+    # A PO without a request: approved, then cancelled before anything arrives.
+    Nav "$Base/pages/po-form.php"
+    Submit "window.confirm = () => true; const f = document.getElementById('poForm'); f.supplier_id.value = '1'; const t = document.querySelector('#docLines tbody[data-line]'); t.querySelector('[data-product]').value = '6'; t.querySelector('[data-qty]').value = '1'; t.querySelector('[data-cost]').value = '975'; document.getElementById('submitPoBtn').click()" 'second PO'
+    $po2 = Sql 'SELECT MAX(id) FROM purchase_orders'
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
+    Nav "$Base/pages/po-view.php?id=$po2"
+    Submit "window.confirm = () => true; document.getElementById('poApprove').click()" 'approve second PO'
+    Logout
+    Login 'maradmin' $script:pw
+    Nav "$Base/pages/po-view.php?id=$po2"
+    Submit "window.confirm = () => true; document.getElementById('poCancelBtn').click(); const f = document.querySelector('#cancelDialog form'); f.reason.value = 'Supplier cannot deliver'; f.requestSubmit()" 'cancel second PO'
+    Check ((Text '#poStatus') -eq 'Cancelled' -and (Sql "SELECT po_no FROM purchase_orders WHERE id = $po2") -like 'PO-MAR-*-000002') 'approved PO with nothing received cancelled (keeps its number)'
+    Nav "$Base/pages/purchase-orders.php"
+    Check ((Eval "document.querySelectorAll('#poTable tbody tr[data-po]').length") -eq 2) 'PO Internal list shows both purchase orders'
+    $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'purchasing' AND new_values NOT LIKE '%total_amount%'"
+    Check ([int]$a -ge 10) "purchasing actions are in the audit log without amounts ($a)"
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
+    SwitchBranch 0
+    Nav "$Base/pages/stock-integrity.php"
+    Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after purchasing (All branches): $(Text '#integritySummary span')"
+    SwitchBranch 1
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

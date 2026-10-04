@@ -32,6 +32,7 @@ final class Audit
         'warehouses'  => 'Warehouses',
         'transfers'   => 'Transfers',
         'job_orders'  => 'Job Orders',
+        'purchasing'  => 'Purchasing',
         'auth'        => 'Sign-in & Security',
     ];
 

@@ -418,6 +418,10 @@ require ROOT_PATH . '/includes/header.php';
                         </label>
                         <button type="submit" class="btn btn--light" id="requestPartBtn"><?= icon('plus') ?> Request</button>
                     </form>
+                    <?php if (Auth::can('purchasing.request')): ?>
+                        <p class="form-hint jo-buy" id="jobPurchaseLink"><?= icon('cart') ?> Part not in stock?
+                            <a href="<?= e(url('pages/pr-form.php?job=' . (int) $job['id'])) ?>">Ask purchasing to buy it</a> (purchase request for this job).</p>
+                    <?php endif; ?>
                 <?php endif; ?>
             </section>
         <?php endif; ?>

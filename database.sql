@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010, 011) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009, 010 and 011.
+--  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012) instead.
+--  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009, 010, 011 and 012.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,11 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS purchase_order_request_lines;
+DROP TABLE IF EXISTS purchase_order_lines;
+DROP TABLE IF EXISTS purchase_orders;
+DROP TABLE IF EXISTS purchase_request_lines;
+DROP TABLE IF EXISTS purchase_requests;
 DROP TABLE IF EXISTS job_order_part_serials;
 DROP TABLE IF EXISTS job_order_parts;
 DROP TABLE IF EXISTS job_order_events;
@@ -589,6 +594,7 @@ CREATE TABLE receiving_reports (
   warehouse_id   INT UNSIGNED  NOT NULL,
   location_id    INT UNSIGNED  NOT NULL,
   supplier_id    INT UNSIGNED  NOT NULL,
+  po_id          INT UNSIGNED  NULL,
   reference_no   VARCHAR(50)   NULL,
   received_date  DATE          NOT NULL,
   notes          VARCHAR(500)  NULL,
@@ -611,6 +617,7 @@ CREATE TABLE receiving_reports (
   KEY idx_receiving_created_by (created_by),
   KEY idx_receiving_posted_by (posted_by),
   KEY idx_receiving_cancelled_by (cancelled_by),
+  KEY idx_receiving_po (po_id),
   CONSTRAINT fk_receiving_location FOREIGN KEY (location_id, warehouse_id, branch_id)
     REFERENCES storage_locations (id, warehouse_id, branch_id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -631,6 +638,7 @@ CREATE TABLE receiving_items (
   id               INT UNSIGNED      NOT NULL AUTO_INCREMENT,
   receiving_id     INT UNSIGNED      NOT NULL,
   product_id       INT UNSIGNED      NOT NULL,
+  po_line_id       INT UNSIGNED      NULL,
   quantity         INT               NOT NULL,
   unit_cost        DECIMAL(12,4)     NULL,
   line_total       DECIMAL(14,2)     NULL,
@@ -641,6 +649,7 @@ CREATE TABLE receiving_items (
   PRIMARY KEY (id),
   UNIQUE KEY uq_receiving_items_product (receiving_id, product_id),
   KEY idx_receiving_items_product (product_id),
+  KEY idx_receiving_items_po_line (po_line_id),
   CONSTRAINT fk_receiving_items_receiving FOREIGN KEY (receiving_id) REFERENCES receiving_reports (id)
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_receiving_items_product FOREIGN KEY (product_id) REFERENCES products (id)
@@ -1158,6 +1167,176 @@ ALTER TABLE sales
     ON UPDATE CASCADE ON DELETE RESTRICT;
 
 -- ---------------------------------------------------------------------
+-- Purchase requests
+--   requested -> approved (qty_approved per line, never by the requester)
+--             -> ordered (every approved unit is on a purchase order)
+--   requested -> rejected (note) | cancelled (reason; also approved while
+--   nothing is on a purchase order yet).
+-- ---------------------------------------------------------------------
+CREATE TABLE purchase_requests (
+  id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  pr_no          VARCHAR(30)  NOT NULL,
+  branch_id      INT UNSIGNED NOT NULL,
+  status         ENUM('requested','approved','ordered','rejected','cancelled') NOT NULL DEFAULT 'requested',
+  needed_by      DATE         NULL,
+  purpose        VARCHAR(255) NULL,
+  job_order_id   INT UNSIGNED NULL,
+  total_qty      INT          NOT NULL DEFAULT 0,
+  requested_by   INT UNSIGNED NOT NULL,
+  requested_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  decided_by     INT UNSIGNED NULL,
+  decided_at     DATETIME     NULL,
+  decision_note  VARCHAR(255) NULL,
+  cancelled_by   INT UNSIGNED NULL,
+  cancelled_at   DATETIME     NULL,
+  cancel_reason  VARCHAR(255) NULL,
+  updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_purchase_requests_no (pr_no),
+  KEY idx_purchase_requests_branch (branch_id, status, requested_at),
+  KEY idx_purchase_requests_job (job_order_id),
+  KEY idx_purchase_requests_requested_by (requested_by),
+  KEY idx_purchase_requests_decided_by (decided_by),
+  KEY idx_purchase_requests_cancelled_by (cancelled_by),
+  CONSTRAINT fk_purchase_requests_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_requests_job FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_requests_requested_by FOREIGN KEY (requested_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_requests_decided_by FOREIGN KEY (decided_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_requests_cancelled_by FOREIGN KEY (cancelled_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE purchase_request_lines (
+  id             INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  request_id     INT UNSIGNED      NOT NULL,
+  product_id     INT UNSIGNED      NOT NULL,
+  end_user       VARCHAR(100)      NULL,
+  qty_requested  INT               NOT NULL,
+  qty_approved   INT               NULL,
+  sort_order     SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_purchase_request_lines_product (request_id, product_id),
+  KEY idx_purchase_request_lines_product (product_id),
+  CONSTRAINT fk_purchase_request_lines_request FOREIGN KEY (request_id) REFERENCES purchase_requests (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_request_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_purchase_request_lines_qty CHECK (qty_requested > 0 AND (qty_approved IS NULL OR qty_approved BETWEEN 0 AND qty_requested))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- Purchase orders (PO Internal)
+--   draft (no number, editable) -> pending (sent for approval)
+--   -> approved (po_no PO-<branch>-<year>-NNNNNN, printable, sent to the
+--   supplier; never approved by its creator) -> partial -> received
+--   (every line fully received through posted RRs). closed = the rest will
+--   not come (reason). cancelled = approved but nothing received (reason).
+--   pending -> draft again (returned with a note).
+--   Delivery goes to the branch's POS location (warehouse_id, location_id).
+-- ---------------------------------------------------------------------
+CREATE TABLE purchase_orders (
+  id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  po_no           VARCHAR(30)   NULL,
+  branch_id       INT UNSIGNED  NOT NULL,
+  warehouse_id    INT UNSIGNED  NOT NULL,
+  location_id     INT UNSIGNED  NOT NULL,
+  supplier_id     INT UNSIGNED  NOT NULL,
+  status          ENUM('draft','pending','approved','partial','received','closed','cancelled') NOT NULL DEFAULT 'draft',
+  order_date      DATE          NOT NULL,
+  expected_date   DATE          NULL,
+  payment_terms   VARCHAR(60)   NULL,
+  contact_person  VARCHAR(100)  NULL,
+  contact_number  VARCHAR(60)   NULL,
+  ship_to         VARCHAR(255)  NULL,
+  forwarder       VARCHAR(100)  NULL,
+  notes           VARCHAR(500)  NULL,
+  total_qty       INT           NOT NULL DEFAULT 0,
+  total_amount    DECIMAL(14,2) NOT NULL DEFAULT 0.00,
+  created_by      INT UNSIGNED  NOT NULL,
+  created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  submitted_by    INT UNSIGNED  NULL,
+  submitted_at    DATETIME      NULL,
+  return_note     VARCHAR(255)  NULL,
+  approved_by     INT UNSIGNED  NULL,
+  approved_at     DATETIME      NULL,
+  closed_by       INT UNSIGNED  NULL,
+  closed_at       DATETIME      NULL,
+  close_reason    VARCHAR(255)  NULL,
+  updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_purchase_orders_no (po_no),
+  KEY idx_purchase_orders_branch (branch_id, status, order_date),
+  KEY idx_purchase_orders_supplier (supplier_id),
+  KEY idx_purchase_orders_location (location_id, warehouse_id, branch_id),
+  KEY idx_purchase_orders_expected (expected_date),
+  KEY idx_purchase_orders_created_by (created_by),
+  KEY idx_purchase_orders_submitted_by (submitted_by),
+  KEY idx_purchase_orders_approved_by (approved_by),
+  KEY idx_purchase_orders_closed_by (closed_by),
+  CONSTRAINT fk_purchase_orders_location FOREIGN KEY (location_id, warehouse_id, branch_id)
+    REFERENCES storage_locations (id, warehouse_id, branch_id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_orders_supplier FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_orders_created_by FOREIGN KEY (created_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_orders_submitted_by FOREIGN KEY (submitted_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_orders_approved_by FOREIGN KEY (approved_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_orders_closed_by FOREIGN KEY (closed_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_purchase_orders_no CHECK ((po_no IS NULL) = (status IN ('draft','pending')))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE purchase_order_lines (
+  id            INT UNSIGNED      NOT NULL AUTO_INCREMENT,
+  po_id         INT UNSIGNED      NOT NULL,
+  product_id    INT UNSIGNED      NOT NULL,
+  end_user      VARCHAR(100)      NULL,
+  qty_ordered   INT               NOT NULL,
+  qty_received  INT               NOT NULL DEFAULT 0,
+  unit_cost     DECIMAL(12,4)     NOT NULL,
+  line_total    DECIMAL(14,2)     NOT NULL,
+  sort_order    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_purchase_order_lines_product (po_id, product_id),
+  KEY idx_purchase_order_lines_product (product_id),
+  CONSTRAINT fk_purchase_order_lines_po FOREIGN KEY (po_id) REFERENCES purchase_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_purchase_order_lines_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_purchase_order_lines_qty CHECK (qty_ordered > 0 AND qty_received BETWEEN 0 AND qty_ordered),
+  CONSTRAINT chk_purchase_order_lines_cost CHECK (unit_cost >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- PR lines a PO line orders (one PO line per product can cover several requests).
+CREATE TABLE purchase_order_request_lines (
+  po_line_id       INT UNSIGNED NOT NULL,
+  request_line_id  INT UNSIGNED NOT NULL,
+  qty              INT          NOT NULL,
+  PRIMARY KEY (po_line_id, request_line_id),
+  KEY idx_po_request_lines_request (request_line_id),
+  CONSTRAINT fk_po_request_lines_po_line FOREIGN KEY (po_line_id) REFERENCES purchase_order_lines (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_po_request_lines_request_line FOREIGN KEY (request_line_id) REFERENCES purchase_request_lines (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_po_request_lines_qty CHECK (qty > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- receiving_reports.po_id / receiving_items.po_line_id FKs (purchase tables are created after receiving).
+ALTER TABLE receiving_reports
+  ADD CONSTRAINT fk_receiving_po FOREIGN KEY (po_id) REFERENCES purchase_orders (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+ALTER TABLE receiving_items
+  ADD CONSTRAINT fk_receiving_items_po_line FOREIGN KEY (po_line_id) REFERENCES purchase_order_lines (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT;
+
+-- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
 --   the change; location_qty_after is the level at (branch, warehouse, location).
@@ -1266,6 +1445,11 @@ INSERT INTO branches (id, code, name, is_main) VALUES
   (4, 'DAV', 'Davao City',          0),
   (5, 'VAL', 'Valencia City',       0);
 
+-- Letterhead details from EXECOM's purchase order form (same as migrations/012).
+UPDATE branches SET address = 'Perimeter Freedom Park, Maramag, Bukidnon', contact_no = '+63 917 157 9168 / 088 828 4767' WHERE code = 'MAR';
+UPDATE branches SET address = 'Jose Un Building, Fortich Street, Malaybalay City', contact_no = '+63 917 845 8198 / 088 813 3925' WHERE code = 'MLB';
+UPDATE branches SET address = '123 Pacana Street, Corner Tiano, Cagayan De Oro City' WHERE code = 'CDO';
+
 -- One MAIN warehouse + one sellable GENERAL location per branch (ids = branch ids).
 INSERT INTO warehouses (branch_id, code, name, is_default)
 SELECT id, 'MAIN', 'Main Warehouse', 1 FROM branches ORDER BY id;
@@ -1336,7 +1520,10 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (45, 'job_orders.update',   'Job Orders', 'Work on assigned jobs: diagnosis, quotation, repair status, notes', 107),
   (46, 'job_orders.assign',   'Job Orders', 'Assign technicians, act on any job of the branch, cancel jobs', 108),
   (47, 'job_parts.issue',     'Job Orders', 'Issue parts to jobs and take back unused parts',          109),
-  (48, 'job_orders.release',  'Job Orders', 'Bill completed jobs and release devices to the customer',  110);
+  (48, 'job_orders.release',  'Job Orders', 'Bill completed jobs and release devices to the customer',  110),
+  (49, 'purchasing.request',  'Purchasing', 'Create purchase requests (PR) for items the branch needs',  120),
+  (50, 'purchasing.approve',  'Purchasing', 'Approve or reject purchase requests and purchase orders',   121),
+  (51, 'purchasing.order',    'Purchasing', 'Prepare purchase orders to suppliers (PO Internal), close or cancel them', 122);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -1359,12 +1546,12 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'counts.approve', 'warehouses.manage', 'transfers.request', 'transfers.approve', 'transfers.release',
          'transfers.receive', 'pos.change_price', 'pos.discount', 'pos.price_override', 'pos.view_cost',
          'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue',
-         'job_orders.release'))
+         'job_orders.release', 'purchasing.request', 'purchasing.approve', 'purchasing.order'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create',
-         'job_orders.release'))
+         'job_orders.release', 'purchasing.request'))
    OR (r.code = 'technician' AND p.perm_key IN ('customers.view', 'inventory.view', 'serials.view', 'job_orders.create',
-         'job_orders.update'))
+         'job_orders.update', 'purchasing.request'))
 ORDER BY r.id, p.id;
 
 -- Master data seeds (same rows and ids as migrations/004).

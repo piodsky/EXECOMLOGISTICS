@@ -60,7 +60,8 @@ final class Receiving
             "SELECT r.id, r.rr_no, r.status, r.received_date, r.reference_no, r.total_qty, {$cost}
                     r.created_at, r.posted_at, r.cancelled_at, r.supplier_id,
                     sp.code AS supplier_code, sp.name AS supplier_name,
-                    b.code AS branch_code, b.name AS branch_name, u.full_name AS created_by_name,
+                    b.code AS branch_code, b.name AS branch_name, u.full_name AS created_by_name, r.po_id,
+                    (SELECT po.po_no FROM purchase_orders po WHERE po.id = r.po_id) AS po_no,
                     (SELECT COUNT(*) FROM receiving_items ri WHERE ri.receiving_id = r.id) AS line_count
                FROM receiving_reports r
                JOIN suppliers sp ON sp.id = r.supplier_id
@@ -80,9 +81,10 @@ final class Receiving
         $where = [$scope];
         $q = (string) ($f['search'] ?? '');
         if ($q !== '') {
-            $where[] = '(r.rr_no LIKE ? OR r.reference_no LIKE ? OR sp.name LIKE ? OR sp.code LIKE ?)';
+            $where[] = '(r.rr_no LIKE ? OR r.reference_no LIKE ? OR sp.name LIKE ? OR sp.code LIKE ?
+                         OR EXISTS (SELECT 1 FROM purchase_orders po WHERE po.id = r.po_id AND po.po_no LIKE ?))';
             $like = like_pattern($q);
-            array_push($params, $like, $like, $like, $like);
+            array_push($params, $like, $like, $like, $like, $like);
         }
         $status = (string) ($f['status'] ?? '');
         if (isset(self::STATUSES[$status])) {
@@ -114,10 +116,11 @@ final class Receiving
         $stmt = db()->prepare(
             'SELECT r.*, sp.code AS supplier_code, sp.name AS supplier_name, sp.is_active AS supplier_active,
                     b.code AS branch_code, b.name AS branch_name, w.code AS warehouse_code, w.name AS warehouse_name,
-                    l.code AS location_code, l.name AS location_name,
+                    l.code AS location_code, l.name AS location_name, po.po_no,
                     cu.full_name AS created_by_name, pu.full_name AS posted_by_name, xu.full_name AS cancelled_by_name
                FROM receiving_reports r
                JOIN suppliers sp ON sp.id = r.supplier_id
+               LEFT JOIN purchase_orders po ON po.id = r.po_id
                JOIN branches b ON b.id = r.branch_id
                JOIN warehouses w ON w.id = r.warehouse_id
                JOIN storage_locations l ON l.id = r.location_id
@@ -188,11 +191,15 @@ final class Receiving
      * Lines: items[i][product_id], items[i][quantity], items[i][unit_cost] (products.cost only),
      * items[i][serials] (textarea text, one per line, or a list). Fully blank lines are skipped.
      *
+     * With $poId (an RR made from a purchase order): the supplier is the PO's, every line must be a PO line with
+     * units still due (qty at most what is due); each item gets po_line_id and po_cost (the PO line cost, used
+     * when the user can't enter costs).
+     *
      * @return array{0: array, 1: array<string,string>} [clean data, errors keyed 'field' or 'items.i.field']
-     *         clean items: list<array{product_id:int, quantity:int, unit_cost:?string, serials:list<string>}>
+     *         clean items: list<array{product_id:int, quantity:int, unit_cost:?string, serials:list<string>, po_line_id:?int, po_cost:?string}>
      *         unit_cost null = not entered / not allowed (saveDraft keeps the stored value without products.cost)
      */
-    public static function validate(array $in): array
+    public static function validate(array $in, ?int $poId = null): array
     {
         $errors = [];
         $data = [
@@ -200,8 +207,14 @@ final class Receiving
             'received_date' => input_date($in, 'received_date'),
             'reference_no'  => input_string($in, 'reference_no', 50),
             'notes'         => input_string($in, 'notes', 500),
+            'po_id'         => $poId,
             'items'         => [],
         ];
+        $po = null;
+        if ($poId !== null) {
+            $po = PurchaseOrders::findForReceiving($poId);
+            $data['supplier_id'] = (int) $po['supplier_id'];
+        }
 
         if ($data['supplier_id'] === null) {
             $errors['supplier_id'] = 'Choose a supplier.';
@@ -268,12 +281,30 @@ final class Receiving
             $pid  = input_int($line, 'product_id', 1);
             $p    = $pid !== null ? ($products[$pid] ?? null) : null;
             $qty  = input_int($line, 'quantity', 1, Products::MAX_STOCK);
-            $item = ['product_id' => $pid, 'quantity' => $qty, 'unit_cost' => null, 'serials' => []];
+            $item = ['product_id' => $pid, 'quantity' => $qty, 'unit_cost' => null, 'serials' => [], 'po_line_id' => null, 'po_cost' => null];
 
             if ($p === null || (int) $p['is_active'] !== 1) {
                 $errors[$key . 'product_id'] = 'Choose an active product.';
             } elseif (isset($seen[$pid])) {
                 $errors[$key . 'product_id'] = "{$p['name']} is already on this report. Use one line per product.";
+            } elseif ($po !== null) {
+                $poLine = null;
+                foreach ($po['lines'] as $l) {
+                    if ($l['product_id'] === $pid) {
+                        $poLine = $l;
+                    }
+                }
+                if ($poLine === null) {
+                    $errors[$key . 'product_id'] = "{$p['name']} is not on {$po['po_no']}. Receive it on a separate report.";
+                } elseif ($poLine['remaining'] < 1) {
+                    $errors[$key . 'product_id'] = "{$p['name']} is already fully received on {$po['po_no']}.";
+                } else {
+                    $item['po_line_id'] = $poLine['id'];
+                    $item['po_cost']    = Costing::format(Costing::toUnits($poLine['unit_cost']));
+                    if ($qty !== null && $qty > $poLine['remaining']) {
+                        $errors[$key . 'quantity'] = "Only {$poLine['remaining']} still due on {$po['po_no']}.";
+                    }
+                }
             }
             if ($pid !== null) {
                 $seen[$pid] = true;
@@ -363,11 +394,11 @@ final class Receiving
             if ($id === null) {
                 $location = Branch::defaultLocation($branchId);
                 $pdo->prepare(
-                    'INSERT INTO receiving_reports (branch_id, warehouse_id, location_id, supplier_id, reference_no,
+                    'INSERT INTO receiving_reports (branch_id, warehouse_id, location_id, supplier_id, po_id, reference_no,
                                                     received_date, notes, status, total_qty, created_by)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
                 )->execute([
-                    $branchId, $location['warehouse_id'], $location['id'], $d['supplier_id'], $d['reference_no'],
+                    $branchId, $location['warehouse_id'], $location['id'], $d['supplier_id'], $d['po_id'] ?? null, $d['reference_no'],
                     $d['received_date'], $d['notes'], 'draft', 0, $userId,
                 ]);
                 $id = (int) $pdo->lastInsertId();
@@ -378,6 +409,9 @@ final class Receiving
                     throw new HttpException(409, self::label($rr) . ' is ' . strtolower(self::STATUSES[$rr['status']]) . ' and can no longer be edited.');
                 }
                 $branchId = (int) $rr['branch_id'];
+                if (($rr['po_id'] === null ? null : (int) $rr['po_id']) !== ($d['po_id'] ?? null)) {
+                    throw new HttpException(409, 'The purchase order of a receiving draft cannot be changed.');
+                }
                 $stmt = $pdo->prepare('SELECT product_id, unit_cost FROM receiving_items WHERE receiving_id = ?');
                 $stmt->execute([$id]);
                 $oldCosts = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -389,13 +423,13 @@ final class Receiving
             }
 
             $insItem   = $pdo->prepare(
-                'INSERT INTO receiving_items (receiving_id, product_id, quantity, unit_cost, sort_order) VALUES (?, ?, ?, ?, ?)'
+                'INSERT INTO receiving_items (receiving_id, product_id, po_line_id, quantity, unit_cost, sort_order) VALUES (?, ?, ?, ?, ?, ?)'
             );
             $insSerial = $pdo->prepare('INSERT INTO receiving_item_serials (receiving_item_id, serial_no) VALUES (?, ?)');
             $totalQty  = 0;
             foreach (array_values($d['items']) as $n => $item) {
-                $cost = $canCost ? $item['unit_cost'] : ($oldCosts[$item['product_id']] ?? null);
-                $insItem->execute([$id, $item['product_id'], $item['quantity'], $cost, $n + 1]);
+                $cost = $canCost ? $item['unit_cost'] : ($oldCosts[$item['product_id']] ?? $item['po_cost'] ?? null);
+                $insItem->execute([$id, $item['product_id'], $item['po_line_id'] ?? null, $item['quantity'], $cost, $n + 1]);
                 $itemId = (int) $pdo->lastInsertId();
                 foreach ($item['serials'] as $serial) {
                     $insSerial->execute([$itemId, $serial]);
@@ -478,6 +512,28 @@ final class Receiving
             }
             if ($problems) {
                 throw new HttpException(422, implode(' ', $problems), ['problems' => $problems]);
+            }
+
+            // From a purchase order: lock it (before the sequence, see PurchaseOrders), check what is still due.
+            $poQty = [];
+            if ($rr['po_id'] !== null) {
+                $po = PurchaseOrders::findForReceiving((int) $rr['po_id'], true);
+                if ((int) $po['supplier_id'] !== (int) $rr['supplier_id']) {
+                    throw new HttpException(422, "The supplier differs from {$po['po_no']}. Edit the draft first.");
+                }
+                foreach ($items as $item) {
+                    $line = $po['lines'][(int) $item['po_line_id']] ?? null;
+                    if ($line === null || $line['product_id'] !== (int) $item['product_id']) {
+                        $problems[] = "{$item['product_name']} is not on {$po['po_no']}.";
+                    } elseif ((int) $item['quantity'] > $line['remaining']) {
+                        $problems[] = "{$item['product_name']}: only {$line['remaining']} still due on {$po['po_no']}.";
+                    } else {
+                        $poQty[$line['id']] = (int) $item['quantity'];
+                    }
+                }
+                if ($problems) {
+                    throw new HttpException(422, implode(' ', $problems), ['problems' => $problems]);
+                }
             }
 
             // Number: locked sequence row (a rollback releases the number).
@@ -572,9 +628,13 @@ final class Receiving
                 'UPDATE receiving_reports SET rr_no = ?, status = ?, total_qty = ?, total_cost = ?, posted_at = NOW(), posted_by = ?
                   WHERE id = ?'
             )->execute([$rrNo, 'posted', $totalQty, from_cents($totalCents), $userId, $id]);
+            if ($poQty) {
+                PurchaseOrders::addReceived((int) $rr['po_id'], $poQty, $rrNo);
+            }
 
             Audit::record('receiving', 'post', 'receiving', $id, $rrNo, ['status' => 'draft'],
-                ['status' => 'posted', 'rr_no' => $rrNo, 'lines' => count($items), 'total_qty' => $totalQty, 'serials' => $serialCount],
+                array_filter(['status' => 'posted', 'rr_no' => $rrNo, 'po' => $po['po_no'] ?? null, 'lines' => count($items),
+                    'total_qty' => $totalQty, 'serials' => $serialCount], static fn ($v) => $v !== null),
                 $branchId);
             $pdo->commit();
             return $rrNo;
@@ -610,6 +670,10 @@ final class Receiving
             }
             $rrNo     = (string) $rr['rr_no'];
             $branchId = (int) $rr['branch_id'];
+            if ($rr['po_id'] !== null) { // lock order: RR -> PO -> products
+                $pdo->prepare('SELECT id FROM purchase_orders WHERE id = ? FOR UPDATE')->execute([(int) $rr['po_id']]);
+                $pdo->prepare('SELECT id FROM purchase_order_lines WHERE po_id = ? FOR UPDATE')->execute([(int) $rr['po_id']]);
+            }
             $items    = self::lockedItems($id);
             self::lockProducts(array_column($items, 'product_id'));
 
@@ -685,6 +749,15 @@ final class Receiving
             $pdo->prepare(
                 'UPDATE receiving_reports SET status = ?, cancelled_at = NOW(), cancelled_by = ?, cancel_reason = ? WHERE id = ?'
             )->execute(['cancelled', $userId, $reason, $id]);
+            if ($rr['po_id'] !== null) { // the units are due again on the purchase order
+                $back = [];
+                foreach ($items as $item) {
+                    if ($item['po_line_id'] !== null) {
+                        $back[(int) $item['po_line_id']] = -(int) $item['quantity'];
+                    }
+                }
+                PurchaseOrders::addReceived((int) $rr['po_id'], $back, $rrNo);
+            }
 
             Audit::record('receiving', 'cancel', 'receiving', $id, $rrNo, ['status' => 'posted'],
                 ['status' => 'cancelled', 'reason' => $reason, 'total_qty' => (int) $rr['total_qty']], $branchId);
