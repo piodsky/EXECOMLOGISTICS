@@ -1,0 +1,115 @@
+/* Printed documents (PO, PR) on the EXECOM letterhead: A4 / Letter, modern take on EXECOM's own PO form.
+   Standalone page (like receipt.css): its own colours, no app chrome. */
+
+* { box-sizing: border-box; }
+body.doc-page {
+    margin: 0;
+    background: #e9eef5;
+    color: #14223b;
+    font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.doc-toolbar { display: flex; justify-content: center; gap: 10px; padding: 16px; }
+.doc-toolbar button,
+.doc-toolbar a {
+    padding: 9px 18px;
+    border: 1px solid #1f6fe5;
+    border-radius: 6px;
+    background: #1f6fe5;
+    color: #fff;
+    font: inherit;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+}
+.doc-toolbar a { background: #fff; color: #1f6fe5; }
+
+.doc {
+    position: relative;
+    width: 210mm;
+    min-height: 297mm;
+    margin: 0 auto 32px;
+    padding: 14mm 15mm 16mm;
+    background: #fff;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, .12);
+}
+
+/* Letterhead */
+.lh { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 10px; border-bottom: 3px solid #0f2a5c; }
+.lh__logo { flex-shrink: 0; width: auto; height: 58px; }
+.lh__branches { display: flex; gap: 16px; color: #3c4a63; font-size: 10px; line-height: 1.35; }
+.lh__branches p { max-width: 150px; margin: 0; padding-left: 8px; border-left: 2px solid #c9d8ee; }
+
+.doc__title { margin: 22px 0 4px; color: #0f2a5c; font-size: 26px; font-weight: 600; letter-spacing: .14em; text-align: center; text-transform: uppercase; }
+.doc__stamp {
+    width: max-content;
+    margin: 6px auto 0;
+    padding: 2px 14px;
+    border: 2px solid #b3261e;
+    border-radius: 4px;
+    color: #b3261e;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .12em;
+}
+
+.doc__meta { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 24px; margin: 20px 0 14px; }
+.doc__meta dl { display: grid; gap: 4px; margin: 0; }
+.doc__meta dl div { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 8px; }
+.doc__meta dl + dl div { grid-template-columns: 70px minmax(0, 1fr); }
+.doc__meta dt { color: #5d6b82; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding-top: 2px; }
+.doc__meta dd { margin: 0; }
+.doc__no { color: #0f2a5c; font-family: Consolas, "Courier New", monospace; font-size: 15px; font-weight: 700; }
+.doc__strong { font-weight: 700; }
+
+/* Items */
+.doc__table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.doc__table th,
+.doc__table td { padding: 7px 8px; border: 1px solid #c9d3e3; vertical-align: top; }
+.doc__table thead th { background: #0f2a5c; border-color: #0f2a5c; color: #fff; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-align: left; text-transform: uppercase; }
+.doc__table .num { text-align: right; white-space: nowrap; }
+.doc__table thead th.num { text-align: right; }
+.doc__table .c { width: 54px; text-align: center; }
+.doc__table thead th.c { text-align: center; }
+.doc__table .w strong { display: block; font-weight: 600; }
+.doc__table .w small { color: #5d6b82; font-size: 10px; }
+.doc__table tbody tr:nth-child(even) td { background: #f6f8fc; }
+.doc__nf td { padding: 4px; color: #8a96aa; font-size: 10px; letter-spacing: .2em; text-align: center; text-transform: uppercase; }
+.doc__total th,
+.doc__total td { border-color: #c9d3e3; background: #e3edfc; color: #0f2a5c; font-size: 14px; font-weight: 700; }
+.doc__total td:first-child { border: 0; background: none; }
+
+/* Contact / ship-to box (the green box of the old form) */
+.doc__info { margin-top: 16px; padding: 10px 14px; border-left: 4px solid #1f6fe5; border-radius: 0 6px 6px 0; background: #eef3fb; }
+.doc__info p { margin: 2px 0; }
+.doc__info span { color: #0f2a5c; font-weight: 700; }
+
+/* Signatures */
+.doc__signs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; margin-top: 44px; }
+.doc__signs div { display: grid; gap: 2px; }
+.doc__signs span { color: #5d6b82; font-size: 11px; }
+.doc__signs strong { min-height: 20px; margin-top: 30px; padding-top: 4px; border-top: 1px solid #14223b; font-weight: 600; }
+.doc__signs small { color: #8a96aa; font-size: 10px; }
+
+.doc__foot { display: flex; justify-content: space-between; margin-top: 36px; padding-top: 8px; border-top: 1px solid #e1e7f0; color: #8a96aa; font-size: 10px; }
+
+@page { size: A4; margin: 10mm; }
+@media print {
+    body.doc-page { background: #fff; }
+    .no-print { display: none !important; }
+    .doc { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+    .doc__table thead th, .doc__total th, .doc__total td, .doc__info, .doc__table tbody tr:nth-child(even) td {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .doc__table tr { break-inside: avoid; }
+}
+@media (max-width: 860px) {
+    .doc { width: auto; min-height: 0; margin: 0 16px 24px; padding: 18px; }
+    .lh { flex-direction: column; align-items: flex-start; }
+    .lh__branches { flex-wrap: wrap; }
+    .doc__meta { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .doc__signs { grid-template-columns: minmax(0, 1fr); }
+}

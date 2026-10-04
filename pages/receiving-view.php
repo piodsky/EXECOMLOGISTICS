@@ -216,6 +216,15 @@ require ROOT_PATH . '/includes/header.php';
                         <?= e($rr['supplier_name']) ?>
                     <?php endif; ?>
                 </dd></div>
+                <?php if ($rr['po_no'] !== null): ?>
+                    <div><dt>Purchase order</dt><dd id="rrPo">
+                        <?php if (PurchaseOrders::canView()): ?>
+                            <a href="<?= e(url('pages/po-view.php?id=' . (int) $rr['po_id'])) ?>"><?= e($rr['po_no']) ?></a>
+                        <?php else: ?>
+                            <?= e($rr['po_no']) ?>
+                        <?php endif; ?>
+                    </dd></div>
+                <?php endif; ?>
                 <div><dt>Reference / DR</dt><dd><?= e($rr['reference_no'] ?? '—') ?></dd></div>
                 <div><dt>Received</dt><dd><?= e(date('M j, Y', strtotime($rr['received_date']))) ?></dd></div>
                 <div><dt>Branch</dt><dd><?= e($rr['branch_code'] . ' · ' . $rr['branch_name']) ?></dd></div>

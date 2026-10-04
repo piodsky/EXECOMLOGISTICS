@@ -2,7 +2,8 @@
 /**
  * Receiving report draft: create / edit (receiving.manage), Save & Post (receiving.post + products.cost),
  * Delete draft. PRG: errors come back through flash_old / flash_errors (line errors keyed items.N.field).
- * pages/receiving-form.php[?id=5][&return=receiving.php%3Fpage%3D2]
+ * From a purchase order: ?po=ID (new RR: supplier fixed, lines = what is still due on the PO); a draft keeps its PO.
+ * pages/receiving-form.php[?id=5][?po=3][&return=receiving.php%3Fpage%3D2]
  */
 declare(strict_types=1);
 
@@ -17,8 +18,9 @@ $rr       = null;
 if ($id !== null) {
     $rr = Receiving::find($id) ?? throw new HttpException(404, 'Receiving report not found.');
 }
+$poId     = $rr !== null ? ($rr['po_id'] !== null ? (int) $rr['po_id'] : null) : input_int($_GET, 'po', 1);
 $returnTo = safe_return($_POST['return'] ?? $_GET['return'] ?? null, 'receiving.php');
-$self     = 'receiving-form.php?' . http_build_query(array_filter(['id' => $id, 'return' => $returnTo]));
+$self     = 'receiving-form.php?' . http_build_query(array_filter(['id' => $id, 'po' => $rr === null ? $poId : null, 'return' => $returnTo]));
 $viewPath = static fn (int $rrId): string => 'pages/receiving-view.php?' . http_build_query(['id' => $rrId, 'return' => $returnTo]);
 
 if ($rr !== null && $rr['status'] !== 'draft') {
@@ -62,7 +64,16 @@ if (is_post()) {
         flash_old(array_filter($_POST, 'is_string') + ['items' => $items]);
     };
 
-    [$data, $errors] = Receiving::validate($_POST);
+    try {
+        [$data, $errors] = Receiving::validate($_POST, $poId);
+    } catch (HttpException $e) {
+        if ($e->status === 403) {
+            throw $e;
+        }
+        $keepForm();
+        flash('error', $e->getMessage());
+        redirect('pages/' . $self);
+    }
     if ($errors) {
         $keepForm();
         flash_errors($errors);
@@ -101,6 +112,26 @@ $costInput = static function (?string $v): string {
     return preg_match('/^(\d+)\.(\d{2})(\d*)$/', $v, $m) ? $m[1] . '.' . $m[2] . rtrim($m[3], '0') : $v;
 };
 
+// Purchase order (header info; for a new RR also the lines still due).
+$po = null;
+$poError = null;
+$poRows = [];
+if ($poId !== null) {
+    try {
+        $pre    = PurchaseOrders::receivingPrefill($poId);
+        $po     = $pre['po'];
+        $poRows = $pre['rows'];
+        if (!$poRows && $rr === null) {
+            $poError = "Everything on {$po['po_no']} has been received.";
+        }
+    } catch (HttpException $e) {
+        if ($e->status === 403 || $rr === null) {
+            throw $e;
+        }
+        $poError = $e->getMessage();
+    }
+}
+
 if (has_old()) {
     $old  = old_input();
     $rows = is_array($old['items'] ?? null) ? array_values($old['items']) : [];
@@ -112,7 +143,7 @@ if (has_old()) {
         'serials'    => implode("\n", $it['serials']),
     ], $rr['items']);
 } else {
-    $rows = [];
+    $rows = $poRows;
 }
 if (!$rows) {
     $rows = [[]];
@@ -123,6 +154,11 @@ $rowVal = static fn (array $row, string $key): string => is_string($row[$key] ??
 $onDraft = array_filter(array_map(static fn (array $r): int => (int) ($r['product_id'] ?? 0), $rows));
 $sql = 'SELECT p.id, p.code, p.barcode, p.name, p.track_serial, p.is_active FROM products p WHERE p.is_active = ?';
 $params = [1];
+if ($po !== null) { // only the purchase order's products
+    $sql = 'SELECT p.id, p.code, p.barcode, p.name, p.track_serial, p.is_active FROM products p
+             WHERE p.id IN (SELECT product_id FROM purchase_order_lines WHERE po_id = ?)';
+    $params = [$poId];
+}
 if ($onDraft) {
     $sql .= ' OR p.id IN (' . implode(',', array_fill(0, count($onDraft), '?')) . ')';
     array_push($params, ...array_values($onDraft));
@@ -135,14 +171,14 @@ foreach ($products as $p) {
     $trackById[(int) $p['id']] = (int) $p['track_serial'] === 1;
 }
 
-$supplierId = old('supplier_id', (string) ($rr['supplier_id'] ?? ''));
+$supplierId = $po !== null ? (string) $po['supplier_id'] : old('supplier_id', (string) ($rr['supplier_id'] ?? ''));
 $stmt = db()->prepare('SELECT id, code, name, is_active FROM suppliers WHERE is_active = ? OR id = ? ORDER BY name');
 $stmt->execute([1, (int) $supplierId]);
 $suppliers = $stmt->fetchAll();
 
 $val = static fn (string $key, string $default = ''): string => old($key, (string) ($rr[$key] ?? $default));
 $errors = form_errors();
-$title  = $rr ? 'Draft #' . $rr['id'] : 'New Receiving';
+$title  = $rr ? 'Draft #' . $rr['id'] : ($po !== null ? 'Receive ' . $po['po_no'] : 'New Receiving');
 $page['title'] = $title;
 
 $pageStyles  = ['css/receiving.css'];
@@ -218,6 +254,12 @@ $renderLine = static function (string $i, array $row, int $n) use ($products, $t
             A draft doesn't change stock until it is posted.</p>
     </div>
 </div>
+<?php if ($po !== null || $poError !== null): ?>
+    <div class="alert <?= $poError !== null ? 'alert--warning' : 'alert--info' ?>" role="note" id="rrPoNote">
+        <?= icon($poError !== null ? 'alert' : 'cart') ?>
+        <span><?php if ($poError !== null): ?><?= e($poError) ?><?php else: ?>Receiving against purchase order <strong><?= e($po['po_no']) ?></strong>: only its items, at most what is still due. The supplier is fixed.<?php endif; ?></span>
+    </div>
+<?php endif; ?>
 <?php if (!Branch::isConcrete()): ?>
     <div class="alert alert--warning" role="status">
         <?= icon('info') ?>
@@ -236,12 +278,17 @@ $renderLine = static function (string $i, array $row, int $n) use ($products, $t
             <div class="form-grid">
                 <label class="form-field">
                     <span class="form-label">Supplier *</span>
+                    <?php if ($po !== null): ?>
+                        <input type="hidden" name="supplier_id" value="<?= (int) $po['supplier_id'] ?>">
+                        <input class="form-input" value="<?= e($po['supplier_name']) ?>" readonly aria-readonly="true">
+                    <?php else: ?>
                     <select class="form-input" name="supplier_id" required<?= invalid('supplier_id') ?>>
                         <option value="">Choose a supplier…</option>
                         <?php foreach ($suppliers as $s): ?>
                             <option value="<?= (int) $s['id'] ?>"<?= $supplierId === (string) $s['id'] ? ' selected' : '' ?>><?= e($s['name'] . ' (' . $s['code'] . ')') ?><?= (int) $s['is_active'] === 1 ? '' : ' (inactive)' ?></option>
                         <?php endforeach; ?>
                     </select>
+                    <?php endif; ?>
                     <?= field_error('supplier_id') ?>
                 </label>
                 <label class="form-field">

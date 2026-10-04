@@ -51,6 +51,17 @@ final class Dashboard
             $add('Stock counts to approve', 'Submitted counts', $one("SELECT COUNT(*) FROM inventory_docs WHERE branch_id = ? AND doc_type = 'count' AND status = 'submitted'", [$cur]),
                 'pages/stock-docs.php?type=count&status=submitted', 'clipboard');
         }
+        if (Auth::can('purchasing.approve')) {
+            $pr = PurchaseRequests::workCounts();
+            $add('Purchase requests to approve', 'Staff ask for items', $pr['approve'], 'pages/purchase-requests.php?status=requested', 'clipboard');
+        }
+        if (PurchaseOrders::canView()) {
+            $po = PurchaseOrders::workCounts();
+            if (Auth::can('purchasing.approve')) {
+                $add('Purchase orders to approve', 'Ready to send to the supplier', $po['approve'], 'pages/purchase-orders.php?status=pending', 'cart');
+            }
+            $add('Overdue deliveries', 'Purchase orders past the expected date', $po['overdue'], 'pages/purchase-orders.php?status=overdue', 'clock');
+        }
         if (Auth::can('receiving.post')) {
             $add('Receiving drafts', 'Not posted yet', $one("SELECT COUNT(*) FROM receiving_reports WHERE branch_id = ? AND status = 'draft'", [$cur]),
                 'pages/receiving.php?status=draft', 'truck');

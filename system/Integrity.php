@@ -220,6 +220,16 @@ final class Integrity
                 AND {scope}
               ORDER BY ps.id", 'ps.branch_id');
 
+        // A purchase order line has received exactly what the posted receiving reports made from it say.
+        $add('po_received', 'Purchase order received quantity differs from its posted receiving reports',
+            "SELECT x.po_no, x.branch_id, x.product_id, x.qty_received, x.rr_qty FROM (
+                 SELECT o.po_no, o.branch_id, ol.product_id, ol.qty_received,
+                        COALESCE((SELECT SUM(ri.quantity) FROM receiving_items ri
+                                    JOIN receiving_reports r ON r.id = ri.receiving_id
+                                   WHERE ri.po_line_id = ol.id AND r.status = 'posted'), 0) AS rr_qty
+                   FROM purchase_orders o JOIN purchase_order_lines ol ON ol.po_id = o.id
+             ) x WHERE x.qty_received <> x.rr_qty AND {scope} ORDER BY x.po_no, x.product_id", 'x.branch_id');
+
         return $checks;
     }
 

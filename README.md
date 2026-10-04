@@ -47,6 +47,7 @@ Copy the new files over the old folder, then run the migrations you haven't run 
 | Phase 10a → 10b | `migrations\010_job_parts_billing.sql` (job parts, billing & release, back-jobs) |
 | Phase 10b → 11 | nothing: Dashboard and the new reports use the existing tables (just copy the files) |
 | Phase 11 → 12 | `migrations\011_security_indexes.sql` (indexes only), then the tools in *Security, database user & backups* below |
+| Phase 12 → 13a | `migrations\012_purchasing.sql` (purchase requests, PO Internal, receiving from a PO; fills the MAR / MLB / CDO letterhead addresses if empty). Run as **root** |
 
 ```
 C:\xampp\mysql\bin\mysql.exe -u root execomlogistics_db < C:\xampp\htdocs\EXECOMLOGISTICS\migrations\002_phase2_sales_history.sql
@@ -167,6 +168,19 @@ For one-click printing without the dialog, start Edge/Chrome on the POS PC with 
     illustrations; replace them with your own product photos anytime.
 - **Customers** (admin + cashier): add/edit, search by name/phone/email, see visits, total spent and past receipts.
   Only an admin can deactivate or delete a customer; customers with purchases can only be deactivated.
+
+## Purchasing (stock in)
+
+- **Purchase Requests** (all staff): list the items the branch needs (end-user, needed-by date, purpose, optional
+  job order). A branch admin who did not make the request approves (possibly fewer) or rejects it.
+- **PO Internal** (branch admin): the purchase order to the supplier, made from approved requests or from scratch
+  (supplier, terms, expected delivery, contact, ship-to, forwarder, unit costs). Draft → For Approval → approved by a
+  branch admin other than the preparer (it gets its `PO-<branch>-<year>-NNNNNN` number) → **Print PO** on the EXECOM
+  letterhead and send it.
+- **Receive Delivery** on the PO opens a receiving report with what is still due (partial deliveries are fine);
+  posting it adds the stock as before. The PO shows ordered / received / still due and every delivery, and becomes
+  *Received* when everything arrived. *Close* a partly received PO when the rest won't come; *Cancel* one that
+  received nothing.
 
 ## Folder structure
 

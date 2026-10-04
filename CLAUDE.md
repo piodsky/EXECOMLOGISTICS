@@ -53,6 +53,13 @@ Read this first; open only the files a task needs.
       override audit, audit CSV export, dedicated MySQL users, backups + restore test + nightly task, FORCE_HTTPS +
       HSTS (off until go-live), sensitive parameters, legacy folders moved out of htdocs, indexes
       (`migrations/011_security_indexes.sql`). Built without agents.
+- [x] Phase 13a: Purchasing (stock in) — purchase requests → PO Internal → receiving from a PO (partial deliveries),
+      PO tracking, printed PO / PR on the EXECOM letterhead (design from the old NewEXECOM `SAMPLE P.O.pdf`).
+      Migration `migrations/012_purchasing.sql`. Built without agents.
+- [ ] Phase 13b: Customer Orders (stock out): PO Outgoing (the customer's PO, government / private) with HARD stock
+      reservation (user decision: reserved units can't be sold at the POS), Delivery Receipts (stock out, serials),
+      billing (a sale linked to the order, no second stock deduction), order tracking. 13c (optional): quotation /
+      RFQ, collections with withholding tax (BIR 2307).
 
 ## Security & operations (Phase 12) — user decisions
 - MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
@@ -73,7 +80,30 @@ Read this first; open only the files a task needs.
 - `FORCE_HTTPS` (.env, default false): `force_https()` in bootstrap redirects http → https (GET 301, other 308) and
   `send_security_headers()` adds HSTS on https. `zend.exception_ignore_args=1` outside debug; password parameters
   carry `#[SensitiveParameter]`. Apache ServerTokens / expose_php are documented for go-live (not changed here).
-      Next: go-live preparation (no legacy Globalchips data migration: user decision 2026-10-04).
+      No legacy Globalchips data migration (user decision 2026-10-04).
+
+## Purchasing (Phase 13a) — user decisions
+- Names: menu "Purchasing" (`purchasing`, icon `cart`, after Inventory) with tabs Purchase Requests / PO Internal
+  (`includes/purchasing-nav.php`); outgoing (13b) will be "Customer Orders" / PO Outgoing.
+- Permissions: `purchasing.request` (branch_admin, cashier, technician), `purchasing.approve` + `purchasing.order`
+  (branch_admin). PO pages need `PurchaseOrders::canView()` = (order or approve) + `products.cost` (POs show cost);
+  managing = `canManage()` = order + products.cost. Audit module `purchasing` (no amounts in the audit log).
+- `PurchaseRequests` (`purchase_requests` + lines, PR-<BR>-<YEAR>-NNNNNN at create): requested → approved (qty per
+  line, never the requester, super admin included) / rejected (note) → ordered (all approved units on POs that are not
+  cancelled; `refreshStatus()` recomputes approved ⇄ ordered). Cancel while requested or approved with nothing on a
+  PO. Optional open job order of the branch (`pr-form.php?job=ID`, link on job-view parts card).
+- `PurchaseOrders` (`purchase_orders` + lines + `purchase_order_request_lines` links): draft (no number, edit/delete)
+  → pending (submit) → approved (never its creator; numbered PO-<BR>-<YEAR>-NNNNNN by `DocNumber::next`) → partial →
+  received; pending → draft (return with note); partial → closed (reason); approved with nothing received and no RR
+  drafts → cancelled (reason; frees its PR units). One line per product; a line's links never exceed what the PR
+  still needs (`PurchaseRequests::lockLines`), line qty ≥ its links. Delivery = branch POS location.
+- Receiving from a PO: `receiving-form.php?po=ID` (supplier fixed, PO products only, prefilled with what is due, PO
+  cost; users without products.cost store the PO cost). `receiving_reports.po_id`, `receiving_items.po_line_id`;
+  `Receiving::post` locks the PO (lock order RR → PO → PO lines → sequence → products) and calls
+  `PurchaseOrders::addReceived` (qty ≤ due); RR cancel gives the units back (closed stays closed). Integrity check
+  `po_received`. Prints: `po-print.php` / `pr-print.php` + `includes/letterhead.php` + `assets/css/print-doc.css`
+  (logo `assets/img/execom-logo.png` from the old system; branch addresses MAR / MLB / CDO from the sample PO, set
+  by migration 012 only where empty). Dashboard tiles: PRs / POs to approve, overdue deliveries.
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
@@ -362,7 +392,7 @@ the main session runs each step with the agent named in project-manager's plan.
   (user-form.php uses `$target`).
 
 ## Inventory / Customers behaviour
-- Stock changes ONLY via sales, receiving (RR post/cancel), stock documents (InventoryDocs), branch transfers, job parts (JobParts) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
+- Stock changes ONLY via sales, receiving (RR post/cancel, also from a PO), stock documents (InventoryDocs), branch transfers, job parts (JobParts) or `Products::adjustStock()` (reasons in `Products::REASONS`, direction-checked);
   every change writes `stock_movements` (type initial/sale/restock/adjustment/void/receiving, signed qty, stock_after).
   The product edit form never edits stock; opening stock is set on create only.
 - Delete is allowed only if never sold / never bought; otherwise deactivate (`is_active=0` hides from POS).
@@ -408,7 +438,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (413 checks incl. security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (439 checks incl. purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

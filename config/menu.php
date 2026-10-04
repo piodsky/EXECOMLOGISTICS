@@ -40,6 +40,13 @@ return [
         'url'        => 'pages/inventory.php',
         'permission' => 'inventory.view',
     ],
+    // Purchase requests + purchase orders to suppliers (= PurchaseRequests::VIEW_PERMISSIONS).
+    'purchasing' => [
+        'label'      => 'Purchasing',
+        'icon'       => 'cart',
+        'url'        => 'pages/purchase-requests.php',
+        'permission' => ['purchasing.request', 'purchasing.approve', 'purchasing.order'],
+    ],
     'receiving' => [
         'label'      => 'Receiving',
         'icon'       => 'truck',
