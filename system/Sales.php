@@ -9,7 +9,10 @@ declare(strict_types=1);
 
 final class Sales
 {
+    /** Paid at the till (POS, job bills). */
     public const PAYMENT_TYPES = ['cash' => 'Cash', 'gcash' => 'GCash', 'card' => 'Card'];
+    /** Every payment type a sale can have: + 'charge' = on account (customer order bills, collected later). */
+    public const ALL_PAYMENT_TYPES = self::PAYMENT_TYPES + ['charge' => 'On account'];
     /** Statuses shown in Sales History ('held' is unused). */
     public const STATUSES  = ['completed' => 'Completed', 'cancelled' => 'Voided'];
     public const MAX_LINES = 100;
@@ -127,7 +130,8 @@ final class Sales
                     $problems[] = ['product_id' => $id, 'stock' => 0, 'message' => 'An item in the cart is no longer available.'];
                     continue;
                 }
-                $available = Stock::balance($id, $location['id']); // locked with the product row
+                // Locked with the product row; units reserved for customer orders are not for sale (Phase 13b).
+                $available = max(0, Stock::balance($id, $location['id']) - Stock::reserved($id, $location['id']));
                 if ($available < $qty) {
                     $problems[] = [
                         'product_id' => $id,
@@ -378,7 +382,7 @@ final class Sales
         [$scope, $params] = Branch::scopeSql('s.branch_id');
         $stmt = db()->prepare(
             "SELECT s.*, u.full_name AS cashier_name, COALESCE(c.name, 'Walk-in Customer') AS customer_name,
-                    v.full_name AS voided_by_name, da.full_name AS discount_approved_by_name, jo.job_no,
+                    v.full_name AS voided_by_name, da.full_name AS discount_approved_by_name, jo.job_no, co.order_no, co.customer_po_no,
                     b.code AS branch_code, b.name AS branch_name, b.address AS branch_address,
                     b.contact_no AS branch_contact, b.tin_branch_code AS branch_tin
                FROM sales s
@@ -388,6 +392,7 @@ final class Sales
                LEFT JOIN users v ON v.id = s.voided_by
                LEFT JOIN users da ON da.id = s.discount_approved_by
                LEFT JOIN job_orders jo ON jo.id = s.job_order_id
+               LEFT JOIN customer_orders co ON co.id = s.customer_order_id
               WHERE s.id = ? AND {$scope}"
         );
         $stmt->execute([$id, ...$params]);
@@ -515,7 +520,7 @@ final class Sales
             $where[]  = 's.status = ?';
             $params[] = $f['status'];
         }
-        if (isset(self::PAYMENT_TYPES[$f['payment']])) {
+        if (isset(self::ALL_PAYMENT_TYPES[$f['payment']])) {
             $where[]  = 's.payment_type = ?';
             $params[] = $f['payment'];
         }
@@ -559,7 +564,7 @@ final class Sales
         $pdo = db();
         $pdo->beginTransaction();
         try {
-            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total, s.job_order_id FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
+            $stmt = $pdo->prepare("SELECT s.id, s.sale_no, s.status, s.branch_id, s.total, s.job_order_id, s.customer_order_id FROM sales s WHERE s.id = ? AND {$scope} FOR UPDATE");
             $stmt->execute([$id, ...$scopeParams]);
             $sale = $stmt->fetch() ?: throw new HttpException(404, 'Sale not found.');
             if ($sale['status'] === 'cancelled') {
@@ -573,6 +578,11 @@ final class Sales
             // restocked; the job goes back to completed (JobBilling::onSaleVoid).
             $jobNo = $sale['job_order_id'] !== null
                 ? JobBilling::onSaleVoid($id, (int) $sale['job_order_id'], $userId, $reason) : null;
+            // A customer order bill: the goods left on delivery receipts and stay with the customer; the receipts
+            // can be billed again (CustomerOrders::onSaleVoid).
+            $orderNo = $sale['customer_order_id'] !== null
+                ? CustomerOrders::onSaleVoid($id, (int) $sale['customer_order_id'], $userId, $reason) : null;
+            $noRestock = $sale['job_order_id'] !== null || $sale['customer_order_id'] !== null ? 1 : null;
 
             // Units to return per product (products deleted since then have product_id NULL),
             // with the cost snapshots (NULL = sold before costing existed).
@@ -582,7 +592,7 @@ final class Sales
                    FROM sale_items si
                   WHERE si.sale_id = ? AND si.product_id IS NOT NULL AND ? IS NULL ORDER BY si.product_id, si.id'
             );
-            $stmt->execute([$id, $sale['job_order_id']]);
+            $stmt->execute([$id, $noRestock]);
             $returns = [];
             $costs   = []; // product_id => list of {qty, cost}, or null when any snapshot is missing
             $lines   = []; // product_id => list of {name, has_serials} (serial-tracking check)
@@ -635,7 +645,8 @@ final class Sales
                 ['status' => 'completed', 'total' => $sale['total']],
                 ['status' => 'cancelled', 'reason' => $reason, 'units_returned' => $units]
                     + ($serials ? ['serials_returned' => $serials] : [])
-                    + ($sale['job_order_id'] !== null ? ['job_reopened' => $jobNo] : []),
+                    + ($sale['job_order_id'] !== null ? ['job_reopened' => $jobNo] : [])
+                    + ($sale['customer_order_id'] !== null ? ['order_rebill' => $orderNo] : []),
                 (int) $sale['branch_id']);
 
             $pdo->commit();

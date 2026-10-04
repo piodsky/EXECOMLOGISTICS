@@ -47,6 +47,13 @@ return [
         'url'        => 'pages/purchase-requests.php',
         'permission' => ['purchasing.request', 'purchasing.approve', 'purchasing.order'],
     ],
+    // Customer purchase orders (PO Outgoing), deliveries, billing, order tracking (= CustomerOrders::VIEW_PERMISSIONS).
+    'customer-orders' => [
+        'label'      => 'Customer Orders',
+        'icon'       => 'file',
+        'url'        => 'pages/customer-orders.php',
+        'permission' => ['customer_orders.manage', 'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill'],
+    ],
     'receiving' => [
         'label'      => 'Receiving',
         'icon'       => 'truck',

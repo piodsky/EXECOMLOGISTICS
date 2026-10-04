@@ -69,6 +69,7 @@ $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at'])
         <div><dt>Cashier</dt><dd><?= e($sale['cashier_name']) ?></dd></div>
         <div><dt>Customer</dt><dd><?= e($sale['customer_name']) ?></dd></div>
         <?php if ($sale['job_no'] !== null): ?><div><dt>Job Order</dt><dd id="receiptJob"><?= e($sale['job_no']) ?></dd></div><?php endif; ?>
+        <?php if ($sale['order_no'] !== null): ?><div><dt>Order</dt><dd id="receiptOrder"><?= e($sale['order_no']) ?></dd></div><div><dt>Customer PO</dt><dd><?= e($sale['customer_po_no']) ?></dd></div><?php endif; ?>
     </dl>
     <hr>
 
@@ -97,7 +98,7 @@ $date      = new DateTimeImmutable($sale['completed_at'] ?? $sale['created_at'])
         <div class="row"><span>VAT (<?= e($vatLabel) ?>%)</span><span><?= e(number_format((float) $sale['vat_amount'], 2)) ?></span></div>
         <div class="row grand"><span>TOTAL</span><span><?= e(money($sale['total'])) ?></span></div>
         <hr>
-        <div class="row"><span><?= e(Sales::PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?></span><span><?= e(number_format((float) $sale['amount_paid'], 2)) ?></span></div>
+        <div class="row"><span><?= e(Sales::ALL_PAYMENT_TYPES[$sale['payment_type']] ?? $sale['payment_type']) ?></span><span><?= e(number_format((float) $sale['amount_paid'], 2)) ?></span></div>
         <div class="row"><span>Change</span><span><?= e(number_format((float) $sale['change_amount'], 2)) ?></span></div>
     </div>
     <hr>

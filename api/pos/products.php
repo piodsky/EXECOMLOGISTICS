@@ -4,6 +4,7 @@
  * All sellable products with the stock available at the current branch (its default sellable
  * location, where the POS sells from), for the POS grid (filtered client-side).
  * "All branches" -> 422 "Choose a branch first."
+ * stock = units free for sale: the balance minus units reserved for customer orders (Phase 13b).
  * cost_cents (branch average) only with pos.view_cost; 'pricing' = the user's POS limits (Pricing::limits()).
  */
 declare(strict_types=1);
@@ -16,14 +17,17 @@ $location = Branch::defaultLocation($branchId);
 $viewCost = Auth::can('pos.view_cost');
 
 $stmt = db()->prepare(
-    'SELECT p.id, p.category_id, p.code, p.barcode, p.name, p.price, COALESCE(sb.qty, 0) AS stock, p.reorder_level, p.image, p.track_serial,
+    "SELECT p.id, p.category_id, p.code, p.barcode, p.name, p.price, p.reorder_level, p.image, p.track_serial,
+            GREATEST(0, COALESCE(sb.qty, 0) - COALESCE((SELECT SUM(l.qty_ordered - l.qty_delivered) FROM customer_order_lines l
+                JOIN customer_orders o ON o.id = l.order_id
+               WHERE l.product_id = p.id AND o.location_id = sb.location_id AND o.status IN ('confirmed', 'partial')), 0)) AS stock,
             c.icon AS category_icon, COALESCE(pb.avg_cost, p.unit_cost) AS cost
        FROM products p
        JOIN categories c ON c.id = p.category_id
        LEFT JOIN stock_balances sb ON sb.product_id = p.id AND sb.location_id = ?
        LEFT JOIN product_branches pb ON pb.product_id = p.id AND pb.branch_id = ?
       WHERE p.is_active = ? AND c.is_active = ?
-      ORDER BY p.code'
+      ORDER BY p.code"
 );
 $stmt->execute([$location['id'], $branchId, 1, 1]);
 

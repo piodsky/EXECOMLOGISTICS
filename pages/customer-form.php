@@ -59,7 +59,7 @@ if (is_post()) {
 $stats  = $customer ? Customers::stats($id) : null;
 $recent = $customer ? Customers::recentSales($id, 10) : [];
 $val    = static fn (string $key): string => old($key, (string) ($customer[$key] ?? ''));
-$paymentLabels = Sales::PAYMENT_TYPES;
+$paymentLabels = Sales::ALL_PAYMENT_TYPES;
 $types       = MasterData::options('customer-types', isset($customer['customer_type_id']) ? (int) $customer['customer_type_id'] : null);
 $contactRows = $canEdit ? Contacts::formRows($customer['contacts'] ?? []) : ($customer['contacts'] ?? []);
 

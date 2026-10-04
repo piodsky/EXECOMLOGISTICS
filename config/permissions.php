@@ -1,7 +1,7 @@
 <?php
 /**
  * Permission registry: key => [module, label].
- * Must match the `permissions` table seed (database.sql / migrations/003-012). Roles get permissions
+ * Must match the `permissions` table seed (database.sql / migrations/003-013). Roles get permissions
  * through `role_permissions`; a role with roles.is_super = 1 holds every key (also future ones).
  * Check with Auth::can('key'); an unknown key is a programming error.
  */
@@ -50,6 +50,10 @@ return [
     'purchasing.request'  => ['Purchasing', 'Create purchase requests (PR) for items the branch needs'],
     'purchasing.approve'  => ['Purchasing', 'Approve or reject purchase requests and purchase orders'],
     'purchasing.order'    => ['Purchasing', 'Prepare purchase orders to suppliers (PO Internal), close or cancel them'],
+    'customer_orders.manage'  => ['Customer Orders', 'Enter customer purchase orders (PO Outgoing) and send them for confirmation'],
+    'customer_orders.approve' => ['Customer Orders', 'Confirm customer orders (reserves stock), close or cancel them'],
+    'customer_orders.deliver' => ['Customer Orders', 'Release delivery receipts (stock leaves the branch) and record the delivery'],
+    'customer_orders.bill'    => ['Customer Orders', 'Bill delivered customer orders (cash, GCash, card or on account)'],
     'users.view'          => ['Users',     'View users'],
     'users.manage'        => ['Users',     'Add and edit users, reset passwords, activate/deactivate'],
     'users.delete'        => ['Users',     'Delete users'],

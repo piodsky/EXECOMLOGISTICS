@@ -56,10 +56,11 @@ Read this first; open only the files a task needs.
 - [x] Phase 13a: Purchasing (stock in) — purchase requests → PO Internal → receiving from a PO (partial deliveries),
       PO tracking, printed PO / PR on the EXECOM letterhead (design from the old NewEXECOM `SAMPLE P.O.pdf`).
       Migration `migrations/012_purchasing.sql`. Built without agents.
-- [ ] Phase 13b: Customer Orders (stock out): PO Outgoing (the customer's PO, government / private) with HARD stock
-      reservation (user decision: reserved units can't be sold at the POS), Delivery Receipts (stock out, serials),
-      billing (a sale linked to the order, no second stock deduction), order tracking. 13c (optional): quotation /
-      RFQ, collections with withholding tax (BIR 2307).
+- [x] Phase 13b: Customer Orders (stock out): PO Outgoing (the customer's PO, government / private) with HARD stock
+      reservation, Delivery Receipts (stock out, serials, IAR), billing (a sale linked to the order, no second stock
+      deduction; cash / GCash / card / on account), order tracking, DR + billing statement prints.
+      Migration `migrations/013_customer_orders.sql`. Built without agents.
+- [ ] Phase 13c (optional): quotation / RFQ, collections of on-account bills with withholding tax (BIR 2307).
 
 ## Security & operations (Phase 12) — user decisions
 - MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
@@ -104,6 +105,32 @@ Read this first; open only the files a task needs.
   `po_received`. Prints: `po-print.php` / `pr-print.php` + `includes/letterhead.php` + `assets/css/print-doc.css`
   (logo `assets/img/execom-logo.png` from the old system; branch addresses MAR / MLB / CDO from the sample PO, set
   by migration 012 only where empty). Dashboard tiles: PRs / POs to approve, overdue deliveries.
+
+## Customer orders (Phase 13b) — user decisions
+- Menu "Customer Orders" (`customer-orders`, icon `file`, after Purchasing), tabs PO Outgoing / Delivery Receipts /
+  Order Tracking (`includes/orders-nav.php`). Permissions `customer_orders.manage` (branch_admin, cashier),
+  `.approve` + `.deliver` (branch_admin), `.bill` (branch_admin, cashier). Audit module `customer_orders`.
+- `CustomerOrders` (`customer_orders` + lines; customer snapshot, customer PO no./date, end-user, place of delivery,
+  terms, deadline, procurement mode, award ref): draft → pending → confirmed (never the preparer; CO-<BR>-<YEAR>-NNNNNN;
+  needs free stock; prices beyond the confirmer's `Pricing::limits()` drop or below cost need pos.price_override) →
+  partial → delivered → completed (all billed); pending → draft (note); partial → closed; confirmed without DRs →
+  cancelled. Prices VAT-exclusive, suggested snapshot + reason when lower.
+- HARD reservation (user decision): reserved = Σ(ordered − delivered) of confirmed/partial orders at the order's
+  location (`Stock::reserved`). `Stock::move` refuses any stock-out below the reserved qty except types `delivery` and
+  `count`; `Sales::complete` and `api/pos/products.php` use free stock (balance − reserved). Reservation changes take
+  the product row locks.
+- `CustomerDeliveries` (`customer_deliveries` + lines + serials, DR-<BR>-<YEAR>-NNNNNN): release (deliver perm; qty ≤ to
+  deliver; exact serials; movement `delivery` with `stock_movements.customer_delivery_id`, cost = branch average;
+  serials `delivered`) → markDelivered (received by, date, acceptance/IAR ref) ; released + not billed → cancel
+  (`delivery_return` at the line cost via `Costing::applyReturn`, serials back in stock, units due/reserved again).
+- Billing (`CustomerOrders::bill`, bill perm): chosen unbilled DRs → one sale (`sales.customer_order_id`, order prices,
+  cost = DR snapshots, VAT, no discount, NO stock movement, delivered serials linked for the receipt);
+  `Sales::ALL_PAYMENT_TYPES` adds `charge` = "On account" (amount_paid 0; collections = 13c). POS + job bills keep
+  `Sales::PAYMENT_TYPES`. `Sales::void` of an order bill restocks nothing; `CustomerOrders::onSaleVoid` unbills the DRs.
+- Lock order: customer_orders → lines → customer_deliveries → sequence → products → balances → product_branches → serials.
+  Integrity checks `delivery_movements`, `delivered_serials`, `customer_order_lines`. Prints `dr-print.php`,
+  `bill-print.php` (billing statement, "not an official receipt"). Dashboard tiles: to confirm / deliver / bill / overdue.
+  Customers / products / branches with orders can't be deleted; serial history shows deliveries.
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;
@@ -438,7 +465,7 @@ the main session runs each step with the agent named in project-manager's plan.
 ## Testing
 - Lint: `C:\xampp\php\php.exe -l file.php`
 - Node.js v24 is installed now (`C:\Program Files\nodejs`), but the main suite is still PowerShell: use **`powershell -ExecutionPolicy Bypass -File tests\e2e-smoke.ps1 [outdir]`**
-  (439 checks incl. purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
+  (460 checks incl. customer orders (order -> reservation -> DR -> bill on account -> return / close / void), purchasing (PR -> PO -> receiving from a PO, print), security events + audit CSV + FORCE_HTTPS redirect, dashboard + profit / jobs / price override / branch reports, job parts custody, job billing / warranty release / back-job, job orders (intake, take, diagnosis, quotation, repair, ticket), POS pricing + approvals, branch transfers, warehouses, stock operations, counts, serial registration, receiving, branch average cost, serials + POS picker, integrity, master data, suppliers, unit-cost visibility, role × branch isolation, branch stock, roles, audit, DB integrity; PowerShell + Edge DevTools protocol; login, mockup cart totals, F2/F3/F4, checkout, stock, receipt,
   sales history filters, cashier can't void, admin void + restock + audit, reports (KPIs, chart hover/keys, top
   items, CSV, monthly grouping), settings save → receipt, users rules, add user, My Account, new-user login,
   logout, inventory, adjust reasons,

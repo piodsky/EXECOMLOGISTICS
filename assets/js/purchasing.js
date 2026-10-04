@@ -1,5 +1,5 @@
 /**
- * Purchasing pages (purchase requests, PO Internal):
+ * Purchasing pages (purchase requests, PO Internal) and Customer Orders (orders, delivery receipts, billing):
  *  - pr-form.php / po-form.php ([data-lines-form]): item lines (add / remove, code or barcode lookup), summary;
  *    with [data-cost-lines] also line totals and the total amount (same rounding as Costing::lineCents).
  *    Changing the product of a line loaded from a purchase request drops its request link.
@@ -50,6 +50,44 @@
         });
     }
 
+    // ---- Customer -> place of delivery (customer order form) --------------
+    const customer = document.getElementById('coCustomer');
+    const place = document.getElementById('coPlace');
+    if (customer && place) {
+        const addr = () => (customer.selectedOptions[0] && customer.selectedOptions[0].dataset.address) || '';
+        let lastAddr = addr();
+        customer.addEventListener('change', () => {
+            const nextAddr = addr();
+            if (place.value.trim() === '' || place.value === lastAddr) place.value = nextAddr;
+            lastAddr = nextAddr;
+        });
+    }
+
+    // ---- Serial picks (delivery receipt) -----------------------------------
+    document.querySelectorAll('fieldset[data-pick]').forEach((box) => {
+        const row = box.closest('tr');
+        const qtyInput = row && row.querySelector('[data-pick-qty]');
+        const out = box.querySelector('[data-pick-count]');
+        const update = () => {
+            const n = box.querySelectorAll('input[type=checkbox]:checked').length;
+            const need = qtyInput ? (parseInt(qtyInput.value, 10) || 0) : (Number(box.dataset.pick) || 0);
+            if (!out) return;
+            out.textContent = `${n} chosen of ${need}.`;
+            out.classList.toggle('is-warn', n !== need);
+        };
+        box.addEventListener('change', update);
+        if (qtyInput) qtyInput.addEventListener('input', update);
+        update();
+    });
+
+    // ---- Bill dialog: amount received only for cash ---------------------------
+    const pay = document.getElementById('billPayment');
+    if (pay) {
+        const sync = () => document.querySelectorAll('[data-cash-only]').forEach((el) => { el.hidden = pay.value !== 'cash'; });
+        pay.addEventListener('change', sync);
+        sync();
+    }
+
     // =====================================================================
     // Line forms
     // =====================================================================
@@ -67,7 +105,7 @@
     const fmt = (cents) => `${currency} ${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     /** "30,000.5" -> integer units of 1/10000; invalid -> NaN (same rules as PurchaseOrders::validate). */
     const costUnits = (text) => {
-        const m = /^(\d{1,6})(?:\.(\d{1,4}))?$/.exec(String(text).replace(/,/g, '').trim());
+        const m = /^(\d{1,7})(?:\.(\d{1,4}))?$/.exec(String(text).replace(/,/g, '').trim());
         return m ? parseInt(m[1], 10) * 10000 + parseInt((m[2] || '').padEnd(4, '0'), 10) : NaN;
     };
     const lineCents = (qty, units) => Math.floor((2 * qty * units + 100) / 200);
@@ -109,6 +147,15 @@
         const select = line.querySelector('[data-product]');
         const qty = line.querySelector('[data-qty]');
         const links = line.querySelector('[data-links]');
+        const priceInput = line.querySelector('[data-price-input]');
+        const hint = line.querySelector('[data-price-hint]');
+        const showHint = () => {
+            if (!hint) return;
+            const o = select.selectedOptions[0];
+            hint.textContent = o && o.value && o.dataset.price !== undefined
+                ? `Suggested ${fmt(Math.round(parseFloat(o.dataset.price) * 100))} · ${Number(o.dataset.free || 0).toLocaleString('en-US')} free at the branch`
+                : '';
+        };
         const pick = () => {
             const v = code.value.trim().toUpperCase();
             if (!v) return;
@@ -134,6 +181,9 @@
         code.addEventListener('input', () => code.setCustomValidity(''));
         select.addEventListener('change', () => {
             if (select.value && !qty.value) qty.value = '1';
+            const o = select.selectedOptions[0];
+            if (priceInput && o && o.dataset.price !== undefined && priceInput.value.trim() === '') priceInput.value = o.dataset.price;
+            showHint();
             if (links && links.value) { // a different product no longer belongs to the purchase request
                 links.value = '';
                 const note = line.querySelector('[data-links-note]');
@@ -142,6 +192,7 @@
             summary();
         });
         line.querySelectorAll('input').forEach((el) => el.addEventListener('input', summary));
+        showHint();
         line.querySelector('[data-remove-line]').addEventListener('click', () => {
             if (lines().length > 1) {
                 line.remove();

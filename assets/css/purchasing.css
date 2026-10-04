@@ -43,3 +43,8 @@
 @media print {
     .pu-picker { display: none !important; }
 }
+
+/* Customer orders (Phase 13b) */
+.co-reason { margin-top: 6px; text-align: left !important; font-size: 13px; }
+.co-hint { min-height: 16px; margin-top: 4px; }
+.pu-track-in { margin-top: 16px; }

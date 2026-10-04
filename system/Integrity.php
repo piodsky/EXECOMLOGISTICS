@@ -230,6 +230,43 @@ final class Integrity
                    FROM purchase_orders o JOIN purchase_order_lines ol ON ol.po_id = o.id
              ) x WHERE x.qty_received <> x.rr_qty AND {scope} ORDER BY x.po_no, x.product_id", 'x.branch_id');
 
+        // Delivery receipts: released qty = -'delivery' movements; a cancelled DR also has the same 'delivery_return'.
+        $add('delivery_movements', 'Delivery receipt quantities differ from their stock movements',
+            "SELECT x.dr_no, x.branch_id, x.product_id, x.qty, x.out_moves, x.back_moves, x.status FROM (
+                 SELECT d.dr_no, d.branch_id, d.status, dl.product_id, SUM(dl.qty) AS qty,
+                        -COALESCE((SELECT SUM(m.quantity) FROM stock_movements m WHERE m.customer_delivery_id = d.id
+                                     AND m.product_id = dl.product_id AND m.type = 'delivery'), 0) AS out_moves,
+                        COALESCE((SELECT SUM(m.quantity) FROM stock_movements m WHERE m.customer_delivery_id = d.id
+                                    AND m.product_id = dl.product_id AND m.type = 'delivery_return'), 0) AS back_moves
+                   FROM customer_deliveries d JOIN customer_delivery_lines dl ON dl.delivery_id = d.id
+                  GROUP BY d.id, dl.product_id
+             ) x WHERE (x.qty <> x.out_moves OR x.back_moves <> IF(x.status = 'cancelled', x.qty, 0)) AND {scope}
+             ORDER BY x.dr_no, x.product_id", 'x.branch_id');
+
+        // A serial is 'delivered' exactly while it is on a delivery receipt that is not cancelled.
+        $add('delivered_serials', 'Delivered serial without a delivery receipt (or the reverse)',
+            "SELECT ps.id AS serial_id, ps.serial_no, ps.product_id, ps.branch_id, ps.status, d.dr_no
+               FROM product_serials ps
+               LEFT JOIN customer_delivery_serials x ON x.serial_id = ps.id
+                     AND x.line_id IN (SELECT dl.id FROM customer_delivery_lines dl JOIN customer_deliveries dd ON dd.id = dl.delivery_id
+                                        WHERE dd.status <> 'cancelled')
+               LEFT JOIN customer_delivery_lines l ON l.id = x.line_id
+               LEFT JOIN customer_deliveries d ON d.id = l.delivery_id
+              WHERE ((ps.status = 'delivered') <> (x.serial_id IS NOT NULL)) AND (ps.status = 'delivered' OR x.serial_id IS NOT NULL)
+                AND {scope}
+              ORDER BY ps.id", 'ps.branch_id');
+
+        // Customer order lines: delivered = live delivery receipts, billed = receipts on a bill.
+        $add('customer_order_lines', 'Customer order delivered / billed quantities differ from its delivery receipts',
+            "SELECT x.order_no, x.branch_id, x.product_id, x.qty_delivered, x.dr_qty, x.qty_billed, x.billed_qty FROM (
+                 SELECT o.order_no, o.branch_id, l.product_id, l.qty_delivered, l.qty_billed,
+                        COALESCE((SELECT SUM(dl.qty) FROM customer_delivery_lines dl JOIN customer_deliveries d ON d.id = dl.delivery_id
+                                   WHERE dl.order_line_id = l.id AND d.status <> 'cancelled'), 0) AS dr_qty,
+                        COALESCE((SELECT SUM(dl.qty) FROM customer_delivery_lines dl JOIN customer_deliveries d ON d.id = dl.delivery_id
+                                   WHERE dl.order_line_id = l.id AND d.status <> 'cancelled' AND d.sale_id IS NOT NULL), 0) AS billed_qty
+                   FROM customer_orders o JOIN customer_order_lines l ON l.order_id = o.id
+             ) x WHERE (x.qty_delivered <> x.dr_qty OR x.qty_billed <> x.billed_qty) AND {scope} ORDER BY x.order_no, x.product_id", 'x.branch_id');
+
         return $checks;
     }
 

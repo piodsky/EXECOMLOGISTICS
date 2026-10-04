@@ -187,7 +187,10 @@ final class Reports
             $found[$row['type']] = $row;
         }
         $out = [];
-        foreach (Sales::PAYMENT_TYPES as $type => $label) {
+        foreach (Sales::ALL_PAYMENT_TYPES as $type => $label) {
+            if (!isset(Sales::PAYMENT_TYPES[$type]) && !isset($found[$type])) {
+                continue; // "On account" only when the period has such bills
+            }
             $out[] = ['name' => $label, 'count' => (int) ($found[$type]['count'] ?? 0), 'total' => $found[$type]['total'] ?? '0'];
         }
         usort($out, static fn ($a, $b) => (float) $b['total'] <=> (float) $a['total']);
