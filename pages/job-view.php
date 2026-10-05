@@ -62,6 +62,9 @@ $device  = trim(($job['brand'] ?? '') . ' ' . ($job['model'] ?? ''));
 $sold    = $job['sold'];
 $inWarranty = $job['warranty_until'] !== null && $job['warranty_until'] >= substr((string) $job['created_at'], 0, 10);
 $technicians = $act['assign'] ? JobOrders::technicians((int) $job['branch_id']) : [];
+$jobTypeNames = implode(', ', array_column($job['job_types'], 'name'));
+$helperNames  = implode(', ', array_column($job['helpers'], 'full_name'));
+$team = $job['technician_name'] !== null ? $job['technician_name'] . ($helperNames !== '' ? ' (lead), ' . $helperNames : '') : '';
 $threshold   = JobOrders::quoteThreshold();
 // Parts + billing (Phase 10b)
 $parts      = JobParts::forJob($id);
@@ -147,7 +150,7 @@ require ROOT_PATH . '/includes/header.php';
     <div class="alert alert--warning doc-note" role="note"><?= icon('clock') ?><span>Waiting for a technician to take this job.</span></div>
 <?php elseif (!$hasStep && in_array($status, JobOrders::OPEN, true)): ?>
     <div class="alert alert--info doc-note" role="note"><?= icon('info') ?>
-        <span><?= $job['technician_name'] !== null ? e($job['technician_name']) . ' is working on this job.' : 'Not assigned yet.' ?>
+        <span><?= $team !== '' ? e($team) . ($job['helpers'] ? ' are' : ' is') . ' working on this job.' : 'Not assigned yet.' ?>
             <?= Branch::current() !== (int) $job['branch_id'] ? 'Switch to branch ' . e($job['branch_name']) . ' to work on it.' : '' ?></span></div>
 <?php endif; ?>
 
@@ -266,7 +269,7 @@ require ROOT_PATH . '/includes/header.php';
             <dl class="detail-list jo-details">
                 <div><dt>Device</dt><dd><?= e($job['device_type'] ?? '—') ?><?= $device !== '' ? ' · ' . e($device) : '' ?></dd></div>
                 <div><dt>Serial no.</dt><dd class="serial-cell"><?= e($job['serial_no'] ?? '—') ?></dd></div>
-                <div><dt>Job type</dt><dd><?= e($job['job_type'] ?? '—') ?></dd></div>
+                <div><dt>Job type</dt><dd id="jobTypes"><?php if ($job['job_types']): ?><span class="jo-chips"><?php foreach ($job['job_types'] as $jt): ?><span class="jo-chip"><?= e($jt['name']) ?></span><?php endforeach; ?></span><?php else: ?>—<?php endif; ?></dd></div>
                 <div><dt>Service</dt><dd><?= e(JobOrders::LOCATIONS[$job['service_location']] ?? '') ?></dd></div>
                 <div><dt>Accessories</dt><dd><?= e($job['accessories'] ?? 'None') ?></dd></div>
                 <div><dt>Condition</dt><dd><?= e($job['device_condition'] ?? '—') ?></dd></div>
@@ -561,24 +564,48 @@ require ROOT_PATH . '/includes/header.php';
         </section>
 
         <section class="card card--pad" id="assignCard">
-            <h2 class="card__title">Technician</h2>
-            <p id="jobTechnician"><?= $job['technician_name'] !== null ? e($job['technician_name']) : '<span class="muted">Not assigned</span>' ?>
-                <?php if ($job['assigned_at']): ?><small class="muted block">since <?= e($when($job['assigned_at'])) ?></small><?php endif; ?></p>
+            <h2 class="card__title">Technician<?= $job['helpers'] ? 's' : '' ?></h2>
+            <?php if ($job['technician_name'] !== null): ?>
+                <ul class="jo-team" id="jobTechnician">
+                    <li><strong><?= e($job['technician_name']) ?></strong> <span class="badge badge--info">Lead</span>
+                        <?php if ($job['assigned_at']): ?><small class="muted block">since <?= e($when($job['assigned_at'])) ?></small><?php endif; ?></li>
+                    <?php foreach ($job['helpers'] as $h): ?><li data-helper="<?= (int) $h['id'] ?>"><?= e($h['full_name']) ?> <span class="badge">Helper</span></li><?php endforeach; ?>
+                </ul>
+            <?php else: ?>
+                <p id="jobTechnician"><span class="muted">Not assigned</span></p>
+            <?php endif; ?>
             <?php if ($act['assign']): ?>
+                <?php
+                $helperIds = array_column($job['helpers'], 'id');
+                $assignOpts = $technicians;
+                foreach ($job['helpers'] as $h) { // a current helper stays listed even without the permission now
+                    if (!in_array($h['id'], array_map('intval', array_column($assignOpts, 'id')), true)) {
+                        $assignOpts[] = ['id' => $h['id'], 'full_name' => $h['full_name'], 'open_jobs' => 0];
+                    }
+                }
+                ?>
                 <form method="post" action="<?= e($actionUrl) ?>" class="jo-assign" id="assignForm" novalidate>
                     <?= $hidden('assign') ?>
                     <label class="form-field">
-                        <span class="form-label"><?= $job['technician_id'] === null ? 'Assign to' : 'Reassign to' ?></span>
-                        <select class="form-input" name="technician_id" id="assignTech"<?= $oldAct === 'assign' ? invalid('technician_id') : '' ?>>
+                        <span class="form-label">Lead technician</span>
+                        <select class="form-input" name="technician_id" id="assignTech" data-lead-select="assignHelpers"<?= $oldAct === 'assign' ? invalid('technician_id') : '' ?>>
                             <option value="">Choose…</option>
                             <?php foreach ($technicians as $t): ?>
-                                <?php if ((int) $t['id'] === (int) $job['technician_id']) continue; ?>
-                                <option value="<?= (int) $t['id'] ?>"><?= e($t['full_name']) ?> · <?= (int) $t['open_jobs'] ?> open</option>
+                                <option value="<?= (int) $t['id'] ?>"<?= (int) $t['id'] === (int) $job['technician_id'] ? ' selected' : '' ?>><?= e($t['full_name']) ?> · <?= (int) $t['open_jobs'] ?> open</option>
                             <?php endforeach; ?>
                         </select>
                         <?= $oldAct === 'assign' ? field_error('technician_id') : '' ?>
                     </label>
-                    <button type="submit" class="btn btn--light btn--sm" id="assignBtn"><?= icon('user') ?> Assign</button>
+                    <?php if (count($assignOpts) > 1): ?>
+                        <span class="form-label">Helpers <small class="muted">(optional)</small></span>
+                        <div class="jo-checks" id="assignHelpers" role="group">
+                            <?php foreach ($assignOpts as $t): ?>
+                                <label class="jo-check"><input type="checkbox" name="helper_ids[]" value="<?= (int) $t['id'] ?>"<?= in_array((int) $t['id'], $helperIds, true) ? ' checked' : '' ?>> <span><?= e($t['full_name']) ?></span></label>
+                            <?php endforeach; ?>
+                        </div>
+                        <?= $oldAct === 'assign' ? field_error('helper_ids') : '' ?>
+                    <?php endif; ?>
+                    <button type="submit" class="btn btn--light btn--sm" id="assignBtn"><?= icon('user') ?> <?= $job['technician_id'] === null ? 'Assign' : 'Save assignment' ?></button>
                     <?php if (!$technicians): ?><p class="form-hint">No active user of this branch has the "work on assigned jobs" permission.</p><?php endif; ?>
                 </form>
             <?php endif; ?>
@@ -616,7 +643,8 @@ require ROOT_PATH . '/includes/header.php';
         <tr><th>Customer</th><td><?= e($job['customer_name']) ?></td><th>Contact</th><td><?= e($job['customer_phone']) ?><?= $job['contact_person'] ? ' (' . e($job['contact_person']) . ')' : '' ?></td></tr>
         <tr><th>Device</th><td><?= e(trim(($job['device_type'] ?? '') . ' ' . $device)) ?></td><th>Serial no.</th><td><?= e($job['serial_no'] ?? '—') ?></td></tr>
         <tr><th>Accessories</th><td><?= e($job['accessories'] ?? 'None') ?></td><th>Condition</th><td><?= e($job['device_condition'] ?? '—') ?></td></tr>
-        <tr><th>Job type</th><td><?= e($job['job_type'] ?? '—') ?></td><th>Expected</th><td><?= e($day($job['expected_at'])) ?></td></tr>
+        <tr><th>Job type</th><td><?= e($jobTypeNames !== '' ? $jobTypeNames : '—') ?></td><th>Expected</th><td><?= e($day($job['expected_at'])) ?></td></tr>
+        <?php if ($team !== ''): ?><tr><th>Technician</th><td colspan="3"><?= e($team) ?></td></tr><?php endif; ?>
         <tr><th>Problem</th><td colspan="3" class="jo-memo"><?= e($job['problem']) ?></td></tr>
         <?php if ($job['remarks']): ?><tr><th>Remarks</th><td colspan="3" class="jo-memo"><?= e($job['remarks']) ?></td></tr><?php endif; ?>
         <?php if ($job['warranty_until'] !== null): ?><tr><th>Warranty</th><td colspan="3"><?= $inWarranty ? 'Under warranty' : 'Expired' ?> (until <?= e($day($job['warranty_until'])) ?>)</td></tr><?php endif; ?>

@@ -104,6 +104,10 @@ final class PurchaseOrders
             $where[]  = 'o.supplier_id = ?';
             $params[] = (int) $f['supplier'];
         }
+        $payment = PaymentStatus::poWhere((string) ($f['payment'] ?? ''));
+        if ($payment !== null && Payables::canView()) {
+            $where[] = $payment;
+        }
         $q = (string) ($f['search'] ?? '');
         if ($q !== '') {
             $like = like_pattern($q);
@@ -132,7 +136,8 @@ final class PurchaseOrders
             "SELECT o.id, o.po_no, o.status, o.order_date, o.expected_date, o.total_qty, o.total_amount, o.branch_id,
                     sp.name AS supplier_name, sp.code AS supplier_code, b.code AS branch_code, b.name AS branch_name,
                     u.full_name AS created_by_name,
-                    (SELECT COALESCE(SUM(ol.qty_received), 0) FROM purchase_order_lines ol WHERE ol.po_id = o.id) AS qty_received
+                    (SELECT COALESCE(SUM(ol.qty_received), 0) FROM purchase_order_lines ol WHERE ol.po_id = o.id) AS qty_received,
+                    " . PaymentStatus::PO_COLUMNS . "
                FROM purchase_orders o
                JOIN suppliers sp ON sp.id = o.supplier_id
                JOIN branches b ON b.id = o.branch_id

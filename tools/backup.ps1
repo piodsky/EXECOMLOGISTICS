@@ -1,6 +1,7 @@
 # Database backup (Phase 12): mysqldump of the app database -> BACKUP_DIR\execomlogistics_db-YYYYMMDD-HHMMSS.sql.gz,
 # then deletes backups older than BACKUP_KEEP_DAYS. Uses BACKUP_DB_USER / BACKUP_DB_PASS from .env (read-only account,
 # see tools\setup-db-users.ps1); falls back to DB_USER / DB_PASS. Every run appends one line to BACKUP_DIR\backup.log.
+# Also zips storage\attachments (attachment files) to BACKUP_DIR\attachments-YYYYMMDD-HHMMSS.zip (same retention).
 # Exit code 0 = backup written and verified, 1 = failed. MySQL (XAMPP) must be running.
 #
 #   powershell -ExecutionPolicy Bypass -File tools\backup.ps1
@@ -44,14 +45,26 @@ try {
     try { $in.CopyTo($z) } finally { $z.Dispose(); $out.Dispose(); $in.Dispose() }
     Remove-Item $sql
 
-    $old = Get-ChildItem $dir -Filter "$db-*.sql.gz" | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$keep) }
+    # Attachments (storage\attachments: PO / order / collection photos and PDFs) -> attachments-<stamp>.zip
+    $attDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'storage\attachments'
+    $zip = $null
+    if ((Test-Path $attDir) -and @(Get-ChildItem $attDir -File).Count -gt 0) {
+        $zip = Join-Path $dir "attachments-$stamp.zip"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($attDir, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    }
+
+    $old = @(Get-ChildItem $dir -Filter "$db-*.sql.gz") + @(Get-ChildItem $dir -Filter 'attachments-*.zip') |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$keep) }
     $old | Remove-Item -Force
     $size = [math]::Round((Get-Item $gz).Length / 1KB, 1)
-    Log "OK    $([IO.Path]::GetFileName($gz)) ($size KB); removed $(@($old).Count) older than $keep days"
-    Write-Output "Backup written: $gz ($size KB)"
+    $attNote = if ($zip) { "; attachments $([IO.Path]::GetFileName($zip)) ($([math]::Round((Get-Item $zip).Length / 1KB, 1)) KB)" } else { '; no attachments' }
+    Log "OK    $([IO.Path]::GetFileName($gz)) ($size KB)$attNote; removed $(@($old).Count) older than $keep days"
+    Write-Output "Backup written: $gz ($size KB)$attNote"
     exit 0
 } catch {
     Remove-Item $sql, $gz -ErrorAction SilentlyContinue
+    if ($zip) { Remove-Item $zip -ErrorAction SilentlyContinue }
     Log "FAIL  $($_.Exception.Message)"
     Write-Output "BACKUP FAILED: $($_.Exception.Message)"
     exit 1

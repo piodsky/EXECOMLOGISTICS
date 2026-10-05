@@ -1,21 +1,42 @@
 <?php
 /**
- * Sidebar — items come from config/menu.php and are hidden when the
- * user lacks the item's permission (the page itself also enforces this).
+ * Sidebar — items come from config/menu.php, in sections ('group'); an item is hidden when the user lacks its
+ * permission (the page itself also enforces this) or its optional 'show' permission. A section heading is shown
+ * only when the user has an item in it; Buying / Selling headings link to their Overview (Flow::canOpen()).
  *
- * @var string $activeKey
+ * @var string $activeKey  menu key of the page; 'overview-buy' / 'overview-sell' on the Overview pages
  */
+$menuGroups = ['overview' => null, 'sell' => 'Selling', 'service' => 'Service', 'buy' => 'Buying', 'stock' => 'Stock', 'admin' => 'Admin'];
+$menuItems  = [];
+foreach (config('menu', []) as $key => $item) {
+    if (can_open_menu($item) && (!isset($item['show']) || Auth::can($item['show']))) {
+        $menuItems[$item['group'] ?? 'admin'][$key] = $item;
+    }
+}
 ?>
 <aside class="sidebar" id="sidebar">
     <nav class="sidebar__nav" aria-label="Main menu">
-        <?php foreach (config('menu', []) as $key => $item): ?>
-            <?php if (!can_open_menu($item)) continue; ?>
-            <a href="<?= e(url(menu_path($item))) ?>"
-               class="nav-link<?= $key === $activeKey ? ' is-active' : '' ?>"
-               <?= $key === $activeKey ? 'aria-current="page"' : '' ?>>
-                <?= icon($item['icon']) ?>
-                <span><?= e($item['label']) ?></span>
-            </a>
+        <?php foreach ($menuGroups as $group => $groupLabel): ?>
+            <?php if (empty($menuItems[$group])) continue; ?>
+            <?php if ($groupLabel !== null): ?>
+                <?php $overview = in_array($group, ['buy', 'sell'], true) && Flow::canOpen($group); ?>
+                <?php if ($overview): ?>
+                    <a class="nav-group<?= $activeKey === 'overview-' . $group ? ' is-active' : '' ?>" href="<?= e(url($group === 'buy' ? 'pages/buying.php' : 'pages/selling.php')) ?>"
+                       title="<?= e($groupLabel) ?> overview: every step at a glance"<?= $activeKey === 'overview-' . $group ? ' aria-current="page"' : '' ?>>
+                        <span><?= e($groupLabel) ?></span><small>Overview <?= icon('chevron-right') ?></small>
+                    </a>
+                <?php else: ?>
+                    <span class="nav-group"><span><?= e($groupLabel) ?></span></span>
+                <?php endif; ?>
+            <?php endif; ?>
+            <?php foreach ($menuItems[$group] as $key => $item): ?>
+                <a href="<?= e(url(menu_path($item))) ?>"
+                   class="nav-link<?= $key === $activeKey ? ' is-active' : '' ?>"
+                   <?= $key === $activeKey ? 'aria-current="page"' : '' ?>>
+                    <?= icon($item['icon']) ?>
+                    <span><?= e($item['label']) ?></span>
+                </a>
+            <?php endforeach; ?>
         <?php endforeach; ?>
     </nav>
 

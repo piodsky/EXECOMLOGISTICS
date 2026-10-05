@@ -14,6 +14,11 @@
  * job_orders.update on a job assigned to you; taking an unassigned new job needs job_orders.update. Intake and
  * intake edits: job_orders.create. Customer decisions: the worker or the front desk (job_orders.create).
  * Every action needs the session working in the job's branch. Lock order: job_orders row -> document_sequences.
+ *
+ * Migration 017: a job has one or more job types (job_order_types; job_type_id = the first) and a LEAD technician
+ * (technician_id) + optional HELPERS (job_order_technicians). Helpers see and work on the job like the lead
+ * ("My Jobs", worker actions, parts). Intake checkboxes (Master Data lists accessories / conditions) are saved as
+ * text in accessories / device_condition; the problem quick picks only fill the problem text (jobs.js).
  */
 declare(strict_types=1);
 
@@ -84,8 +89,8 @@ final class JobOrders
             return [$scope, $params];
         }
         $uid = (int) Auth::id();
-        return ["{$scope} AND ({$alias}.technician_id = ? OR {$alias}.created_by = ? OR ({$alias}.status = 'new' AND {$alias}.technician_id IS NULL))",
-            [...$params, $uid, $uid]];
+        return ["{$scope} AND ({$alias}.technician_id = ? OR " . self::helperSql($alias) . " OR {$alias}.created_by = ?
+                 OR ({$alias}.status = 'new' AND {$alias}.technician_id IS NULL))", [...$params, $uid, $uid, $uid]];
     }
 
     private static function isVisible(array $j): bool
@@ -95,7 +100,46 @@ final class JobOrders
         }
         $uid = (int) Auth::id();
         return self::seesAll() || (int) $j['technician_id'] === $uid || (int) $j['created_by'] === $uid
-            || ($j['status'] === 'new' && $j['technician_id'] === null);
+            || ($j['status'] === 'new' && $j['technician_id'] === null) || self::isHelper((int) $j['id'], $uid);
+    }
+
+    /** SQL: the user (one ? parameter) is a helper technician of job alias.id. */
+    private static function helperSql(string $alias = 'j'): string
+    {
+        return "EXISTS (SELECT 1 FROM job_order_technicians jh WHERE jh.job_order_id = {$alias}.id AND jh.user_id = ?)";
+    }
+
+    public static function isHelper(int $jobId, int $userId): bool
+    {
+        $stmt = db()->prepare('SELECT 1 FROM job_order_technicians WHERE job_order_id = ? AND user_id = ?');
+        $stmt->execute([$jobId, $userId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /** Lead or helper technician of the job. */
+    public static function isOnJob(array $j, int $userId): bool
+    {
+        return (int) $j['technician_id'] === $userId || self::isHelper((int) $j['id'], $userId);
+    }
+
+    /** @return list<array{id:int, full_name:string}> helper technicians of a job */
+    public static function helpers(int $jobId): array
+    {
+        $stmt = db()->prepare(
+            'SELECT u.id, u.full_name FROM job_order_technicians h JOIN users u ON u.id = h.user_id WHERE h.job_order_id = ? ORDER BY u.full_name'
+        );
+        $stmt->execute([$jobId]);
+        return array_map(static fn (array $r): array => ['id' => (int) $r['id'], 'full_name' => (string) $r['full_name']], $stmt->fetchAll());
+    }
+
+    /** @return list<array{id:int, name:string}> job types of a job (list order) */
+    public static function jobTypes(int $jobId): array
+    {
+        $stmt = db()->prepare(
+            'SELECT l.id, l.name FROM job_order_types t JOIN lookups l ON l.id = t.lookup_id WHERE t.job_order_id = ? ORDER BY l.sort_order, l.name'
+        );
+        $stmt->execute([$jobId]);
+        return array_map(static fn (array $r): array => ['id' => (int) $r['id'], 'name' => (string) $r['name']], $stmt->fetchAll());
     }
 
     // ------------------------------------------------------------------
@@ -115,14 +159,17 @@ final class JobOrders
             $params[] = $status;
         }
         $tech = (string) ($f['technician'] ?? '');
-        if ($tech === 'me') {
-            $where[]  = 'j.technician_id = ?';
-            $params[] = (int) Auth::id();
+        if ($tech === 'me' || ctype_digit($tech)) { // lead or helper
+            $who = $tech === 'me' ? (int) Auth::id() : (int) $tech;
+            $where[] = '(j.technician_id = ? OR ' . self::helperSql() . ')';
+            array_push($params, $who, $who);
         } elseif ($tech === 'none') {
             $where[] = 'j.technician_id IS NULL';
-        } elseif (ctype_digit($tech)) {
-            $where[]  = 'j.technician_id = ?';
-            $params[] = (int) $tech;
+        }
+        $type = (int) ($f['type'] ?? 0);
+        if ($type > 0) {
+            $where[]  = 'EXISTS (SELECT 1 FROM job_order_types jt WHERE jt.job_order_id = j.id AND jt.lookup_id = ?)';
+            $params[] = $type;
         }
         if (($f['parts'] ?? '') === 'pending') {
             $where[] = "j.status IN ('" . implode("','", self::OPEN) . "') AND EXISTS (SELECT 1 FROM job_order_parts jp WHERE jp.job_order_id = j.id AND jp.status = 'requested')";
@@ -157,7 +204,11 @@ final class JobOrders
         $stmt = db()->prepare(
             "SELECT j.id, j.job_no, j.status, j.priority, j.service_location, j.customer_name, j.customer_phone, j.brand, j.model,
                     j.serial_no, j.problem, j.expected_at, j.created_at, j.technician_id, j.branch_id, j.warranty_until,
-                    b.code AS branch_code, t.full_name AS technician_name, dt.name AS device_type
+                    b.code AS branch_code, t.full_name AS technician_name, dt.name AS device_type,
+                    (SELECT GROUP_CONCAT(l.name ORDER BY l.sort_order, l.name SEPARATOR ', ') FROM job_order_types x
+                       JOIN lookups l ON l.id = x.lookup_id WHERE x.job_order_id = j.id) AS job_types,
+                    (SELECT GROUP_CONCAT(hu.full_name ORDER BY hu.full_name SEPARATOR ', ') FROM job_order_technicians h
+                       JOIN users hu ON hu.id = h.user_id WHERE h.job_order_id = j.id) AS helper_names
                FROM job_orders j
                JOIN branches b ON b.id = j.branch_id
                LEFT JOIN users t ON t.id = j.technician_id
@@ -181,12 +232,12 @@ final class JobOrders
         [$where, $params] = self::visibleSql();
         $open = "'" . implode("','", self::OPEN) . "'";
         $stmt = db()->prepare(
-            "SELECT SUM(j.technician_id = ? AND j.status IN ({$open})), SUM(j.status = 'new' AND j.technician_id IS NULL),
+            "SELECT SUM((j.technician_id = ? OR " . self::helperSql() . ") AND j.status IN ({$open})), SUM(j.status = 'new' AND j.technician_id IS NULL),
                     SUM(j.status = 'for_approval'), SUM(j.status = 'waiting_parts'), SUM(j.status = 'completed'),
                     SUM(j.status IN ({$open}) AND EXISTS (SELECT 1 FROM job_order_parts jp WHERE jp.job_order_id = j.id AND jp.status = 'requested'))
                FROM job_orders j WHERE {$where}"
         );
-        $stmt->execute([(int) Auth::id(), ...$params]);
+        $stmt->execute([(int) Auth::id(), (int) Auth::id(), ...$params]);
         $row = $stmt->fetch(PDO::FETCH_NUM) ?: [];
         foreach (array_keys($out) as $i => $k) {
             $out[$k] = (int) ($row[$i] ?? 0);
@@ -235,6 +286,9 @@ final class JobOrders
         $stmt->execute([$id]);
         $j['events'] = $stmt->fetchAll();
         $j['sold']   = $j['serial_id'] !== null ? self::soldSerial(null, (int) $j['serial_id']) : null;
+        $j['job_types']    = self::jobTypes($id);
+        $j['job_type_ids'] = array_column($j['job_types'], 'id');
+        $j['helpers']      = self::helpers($id);
         $stmt = db()->prepare('SELECT id, job_no, status, created_at FROM job_orders WHERE parent_job_id = ? ORDER BY id');
         $stmt->execute([$id]);
         $j['back_jobs'] = $stmt->fetchAll();
@@ -253,7 +307,7 @@ final class JobOrders
         }
         $uid    = (int) Auth::id();
         $sup    = Auth::can('job_orders.assign');
-        $worker = $sup || (Auth::can('job_orders.update') && (int) $j['technician_id'] === $uid);
+        $worker = $sup || (Auth::can('job_orders.update') && self::isOnJob($j, $uid)); // lead or helper
         $desk   = Auth::can('job_orders.create');
         $s      = $j['status'];
         $in     = static fn (string $a): bool => in_array($s, self::FROM[$a], true);
@@ -275,7 +329,8 @@ final class JobOrders
     {
         $stmt = db()->prepare(
             "SELECT u.id, u.full_name, r.name AS role_name,
-                    (SELECT COUNT(*) FROM job_orders j WHERE j.technician_id = u.id
+                    (SELECT COUNT(*) FROM job_orders j WHERE (j.technician_id = u.id
+                        OR EXISTS (SELECT 1 FROM job_order_technicians jh WHERE jh.job_order_id = j.id AND jh.user_id = u.id))
                         AND j.status IN ('" . implode("','", self::OPEN) . "')) AS open_jobs
                FROM users u JOIN roles r ON r.code = u.role
               WHERE u.is_active = 1 AND r.is_super = 0
@@ -293,9 +348,12 @@ final class JobOrders
     {
         [$scope, $params] = Branch::scopeSql('j.branch_id');
         $stmt = db()->prepare(
-            "SELECT DISTINCT u.id, u.full_name FROM job_orders j JOIN users u ON u.id = j.technician_id WHERE {$scope} ORDER BY u.full_name"
+            "SELECT u.id, u.full_name FROM users u
+              WHERE EXISTS (SELECT 1 FROM job_orders j WHERE j.technician_id = u.id AND {$scope})
+                 OR EXISTS (SELECT 1 FROM job_order_technicians h JOIN job_orders j ON j.id = h.job_order_id WHERE h.user_id = u.id AND {$scope})
+              ORDER BY u.full_name"
         );
-        $stmt->execute($params);
+        $stmt->execute([...$params, ...$params]);
         return $stmt->fetchAll();
     }
 
@@ -347,15 +405,21 @@ final class JobOrders
             'brand'            => $text('brand', 80),
             'model'            => $text('model', 80),
             'serial_no'        => $text('serial_no', 80),
-            'accessories'      => $text('accessories', 255),
-            'device_condition' => $text('device_condition', 255),
+            'accessories'      => self::pickText($in, 'accessories', 'accessories'),
+            'device_condition' => self::pickText($in, 'device_condition', 'conditions'),
             'problem'          => self::cleanMemo(input_string($in, 'problem', 1001)),
             'remarks'          => self::cleanMemo(input_string($in, 'remarks', 501)),
             'priority'         => input_string($in, 'priority', 10) ?: 'normal',
             'service_location' => input_string($in, 'service_location', 10) ?: 'in_shop',
             'expected_at'      => input_date($in, 'expected_at'),
             'technician_id'    => $job === null ? input_int($in, 'technician_id', 1) : null,
+            'helper_ids'       => $job === null ? self::idList($in, 'helper_ids') : [],
+            'job_type_ids'     => self::idList($in, 'job_type_ids'),
         ];
+        if (!array_key_exists('job_type_ids', $in) && $data['job_type_id'] !== null) {
+            $data['job_type_ids'] = [$data['job_type_id']]; // single job_type_id (older form / API)
+        }
+        $data['job_type_id'] = $data['job_type_ids'][0] ?? null;
         $errors = [];
 
         if ($data['customer_id'] !== null) {
@@ -373,7 +437,7 @@ final class JobOrders
         if ($data['customer_phone'] === null || !preg_match('/^[0-9+()\s-]{7,30}$/', $data['customer_phone'])) {
             $errors['customer_phone'] = 'Enter a contact number: digits, spaces, + ( ) or - (7 to 30 characters).';
         }
-        $lengths = ['contact_person' => 100, 'brand' => 80, 'model' => 80, 'serial_no' => 80, 'accessories' => 255, 'device_condition' => 255];
+        $lengths = ['contact_person' => 100, 'brand' => 80, 'model' => 80, 'serial_no' => 80, 'accessories' => 500, 'device_condition' => 500];
         foreach ($lengths as $k => $max) {
             if ($data[$k] !== null && mb_strlen($data[$k]) > $max) {
                 $errors[$k] = "Keep it under {$max} characters.";
@@ -385,8 +449,13 @@ final class JobOrders
         if ($data['remarks'] !== null && mb_strlen($data['remarks']) > 500) {
             $errors['remarks'] = 'Keep the remarks under 500 characters.';
         }
-        if ($data['job_type_id'] !== null && !MasterData::isChoice('job-types', $data['job_type_id'], isset($job['job_type_id']) ? (int) $job['job_type_id'] : null)) {
-            $errors['job_type_id'] = 'Choose a job type from the list.';
+        // Job types: active ones, plus (when editing) the job's current ones even if since deactivated.
+        $typeOk = array_map('intval', array_keys(MasterData::options('job-types')));
+        $typeOk = [...$typeOk, ...array_map('intval', $job['job_type_ids'] ?? [])];
+        if (count($data['job_type_ids']) > 10) {
+            $errors['job_type_ids'] = 'Choose at most 10 job types.';
+        } elseif (array_diff($data['job_type_ids'], $typeOk)) {
+            $errors['job_type_ids'] = 'Choose job types from the list.';
         }
         if ($data['device_type_id'] === null) {
             $errors['device_type_id'] = 'Choose the device type.';
@@ -405,14 +474,106 @@ final class JobOrders
         } elseif ($data['expected_at'] !== null && $data['expected_at'] !== ($job['expected_at'] ?? null) && $data['expected_at'] < date('Y-m-d')) {
             $errors['expected_at'] = 'The expected date cannot be in the past.';
         }
-        if ($data['technician_id'] !== null) {
+        if ($data['technician_id'] !== null || $data['helper_ids']) {
             if (!Auth::can('job_orders.assign')) {
-                $data['technician_id'] = null; // only supervisors assign at intake
-            } elseif (!Branch::isConcrete() || !in_array($data['technician_id'], array_map('intval', array_column(self::technicians((int) Branch::current()), 'id')), true)) {
-                $errors['technician_id'] = 'Choose a technician of this branch.';
+                [$data['technician_id'], $data['helper_ids']] = [null, []]; // only supervisors assign at intake
+            } else {
+                $techOk = Branch::isConcrete() ? array_map('intval', array_column(self::technicians((int) Branch::current()), 'id')) : [];
+                $data['helper_ids'] = array_values(array_diff($data['helper_ids'], [(int) $data['technician_id']]));
+                if ($data['technician_id'] === null) {
+                    $errors['technician_id'] = 'Choose the lead technician first, then the helpers.';
+                } elseif (!in_array($data['technician_id'], $techOk, true)) {
+                    $errors['technician_id'] = 'Choose a technician of this branch.';
+                } elseif (array_diff($data['helper_ids'], $techOk) || count($data['helper_ids']) > 10) {
+                    $errors['helper_ids'] = 'Choose helpers among the technicians of this branch (at most 10).';
+                }
             }
         }
         return [$data, $errors];
+    }
+
+    /** Distinct positive ids from a checkbox array ($in[$key][] = id), in the order given. @return list<int> */
+    private static function idList(array $in, string $key): array
+    {
+        $out = [];
+        foreach (is_array($in[$key] ?? null) ? $in[$key] : [] as $v) {
+            $id = filter_var($v, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            if ($id !== false && !in_array($id, $out, true)) {
+                $out[] = $id;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Intake checklist field as text: the ticked names ($in["{$field}_pick"][], only active names of Master Data list
+     * $listKey, in list order) + the "Other" text ($in["{$field}_other"]), joined with ", ". Without either key the
+     * plain text field $in[$field] is used (API / older form).
+     */
+    private static function pickText(array $in, string $field, string $listKey): ?string
+    {
+        if (!array_key_exists("{$field}_pick", $in) && !array_key_exists("{$field}_other", $in)) {
+            return self::cleanText(input_string($in, $field, 501));
+        }
+        $ticked = array_map('strval', is_array($in["{$field}_pick"] ?? null) ? array_filter($in["{$field}_pick"], 'is_string') : []);
+        $parts = [];
+        foreach (array_column(MasterData::options($listKey), 'name') as $name) {
+            if (in_array($name, $ticked, true)) {
+                $parts[] = $name;
+            }
+        }
+        $other = self::cleanText(input_string($in, "{$field}_other", 301));
+        if ($other !== null) {
+            $parts[] = $other;
+        }
+        return $parts ? implode(', ', $parts) : null;
+    }
+
+    /** Split saved checklist text back into [ticked names of the list, the rest as "Other" text] (intake edit form). */
+    public static function splitPicks(?string $text, array $names): array
+    {
+        $ticked = $rest = [];
+        foreach ($text === null || $text === '' ? [] : explode(', ', $text) as $part) {
+            in_array($part, $names, true) ? $ticked[] = $part : $rest[] = $part;
+        }
+        return [$ticked, implode(', ', $rest)];
+    }
+
+    /** Replace a job's job types (inside the caller's transaction). */
+    private static function saveTypes(int $jobId, array $typeIds): void
+    {
+        db()->prepare('DELETE FROM job_order_types WHERE job_order_id = ?')->execute([$jobId]);
+        $ins = db()->prepare('INSERT INTO job_order_types (job_order_id, lookup_id) VALUES (?, ?)');
+        foreach ($typeIds as $t) {
+            $ins->execute([$jobId, $t]);
+        }
+    }
+
+    /** Replace a job's helper technicians (inside the caller's transaction). */
+    private static function saveHelpers(int $jobId, array $userIds, int $byUserId): void
+    {
+        db()->prepare('DELETE FROM job_order_technicians WHERE job_order_id = ?')->execute([$jobId]);
+        $ins = db()->prepare('INSERT INTO job_order_technicians (job_order_id, user_id, added_by) VALUES (?, ?, ?)');
+        foreach ($userIds as $u) {
+            $ins->execute([$jobId, $u, $byUserId]);
+        }
+    }
+
+    /** "Name, Name" of users (helpers) for notes / audit. */
+    private static function names(array $userIds): string
+    {
+        return implode(', ', array_map(static fn (int $u): string => self::userName($u), $userIds));
+    }
+
+    /** "Type, Type" of job type ids (list names). */
+    private static function typeNames(array $typeIds): string
+    {
+        if (!$typeIds) {
+            return '';
+        }
+        $stmt = db()->prepare('SELECT name FROM lookups WHERE id IN (' . implode(',', array_fill(0, count($typeIds), '?')) . ') ORDER BY sort_order, name');
+        $stmt->execute(array_values($typeIds));
+        return implode(', ', $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
 
     /** Take in a device from the raw form input (422 with details.errors). @return array{id:int, job_no:string} */
@@ -444,16 +605,21 @@ final class JobOrders
             $pdo->prepare('INSERT INTO job_orders (' . implode(', ', $cols) . ') VALUES (' . implode(', ', array_fill(0, count($cols), '?')) . ')')
                 ->execute($vals);
             $id = (int) $pdo->lastInsertId();
+            self::saveTypes($id, $d['job_type_ids']);
+            self::saveHelpers($id, $d['helper_ids'], $userId);
             self::event($id, $userId, 'create', null, 'new', $parent !== null ? "Back-job of {$parent['job_no']}." : null);
             if ($parent !== null) {
                 self::event($parent['id'], $userId, 'note', null, null, "Back-job {$no} was opened for this device.");
             }
             if ($tech !== null) {
-                self::event($id, $userId, 'assign', 'new', 'assigned', 'Assigned to ' . self::userName($tech) . '.');
+                self::event($id, $userId, 'assign', 'new', 'assigned', 'Assigned to ' . self::userName($tech) . ' (lead)'
+                    . ($d['helper_ids'] ? '; helpers: ' . self::names($d['helper_ids']) : '') . '.');
             }
             Audit::record('job_orders', 'create', 'job_order', $id, $no, null, array_filter([
                 'customer' => $d['customer_name'], 'device' => trim(($d['brand'] ?? '') . ' ' . ($d['model'] ?? '')) ?: null,
                 'serial_no' => $d['serial_no'], 'priority' => $d['priority'], 'technician' => $tech !== null ? self::userName($tech) : null,
+                'helpers' => $d['helper_ids'] ? self::names($d['helper_ids']) : null,
+                'job_types' => $d['job_type_ids'] ? self::typeNames($d['job_type_ids']) : null,
                 'back_job_of' => $parent['job_no'] ?? null,
             ], static fn ($v) => $v !== null), $branchId);
             $pdo->commit();
@@ -498,20 +664,34 @@ final class JobOrders
                     ? new HttpException(403, 'You do not have permission to edit this job order.')
                     : new HttpException(409, "{$j['job_no']} is " . strtolower(self::STATUSES[$j['status']]) . ', so it can no longer be edited.');
             }
+            $j['job_type_ids'] = array_column(self::jobTypes($id), 'id');
             [$d, $errors] = self::validate($in, $j);
             if ($errors) {
                 throw new HttpException(422, reset($errors), ['errors' => $errors]);
             }
+            $typesBefore = $j['job_type_ids'];
+            $typesAfter  = $d['job_type_ids'];
+            sort($typesBefore);
+            sort($typesAfter);
+            $typesChanged = $typesBefore !== $typesAfter;
             $sold = ['serial_id' => $j['serial_id'], 'warranty_until' => $j['warranty_until']];
             if ($d['serial_no'] !== $j['serial_no']) {
                 $found = $d['serial_no'] !== null ? self::soldSerial($d['serial_no']) : null;
                 $sold  = ['serial_id' => $found['serial_id'] ?? null, 'warranty_until' => $found['warranty_until'] ?? null];
             }
             [$old, $new] = Audit::diff(array_intersect_key($j, array_flip(self::INTAKE)), array_intersect_key($d, array_flip(self::INTAKE)));
-            if ($new) {
+            unset($old['job_type_id'], $new['job_type_id']); // shown as job_types below
+            if ($typesChanged) {
+                $old['job_types'] = self::typeNames($j['job_type_ids']) ?: null;
+                $new['job_types'] = self::typeNames($d['job_type_ids']) ?: null;
+            }
+            if ($new || $typesChanged) {
                 $set = implode(', ', array_map(static fn (string $k): string => "{$k} = ?", [...self::INTAKE, 'serial_id', 'warranty_until']));
                 $vals = array_map(static fn (string $k) => $d[$k], self::INTAKE);
                 $pdo->prepare("UPDATE job_orders SET {$set} WHERE id = ?")->execute([...$vals, $sold['serial_id'], $sold['warranty_until'], $id]);
+                if ($typesChanged) {
+                    self::saveTypes($id, $d['job_type_ids']);
+                }
                 self::event($id, $userId, 'edit', null, null, 'Intake details updated: ' . implode(', ', array_map(
                     static fn (string $k): string => str_replace('_', ' ', $k), array_keys($new))) . '.');
                 Audit::record('job_orders', 'update', 'job_order', $id, $j['job_no'], $old, $new, (int) $j['branch_id']);
@@ -578,23 +758,45 @@ final class JobOrders
                     $to  = 'assigned';
                     $note = 'Taken by ' . self::userName($userId) . '.';
                     $msg = "You took {$no}. Start the diagnosis when you begin.";
+                    $pdo->prepare('DELETE FROM job_order_technicians WHERE job_order_id = ? AND user_id = ?')->execute([$id, $userId]); // a helper who takes it leads
                     break;
                 case 'assign':
-                    $tech = input_int($in, 'technician_id', 1);
-                    $ids  = array_map('intval', array_column(self::technicians((int) $j['branch_id']), 'id'));
+                    // Lead (technician_id, required) + helpers (helper_ids[], optional; the lead is never a helper).
+                    $tech    = input_int($in, 'technician_id', 1);
+                    $ids     = array_map('intval', array_column(self::technicians((int) $j['branch_id']), 'id'));
+                    $before  = array_column(self::helpers($id), 'id');
+                    $helpers = array_values(array_diff(self::idList($in, 'helper_ids'), [(int) $tech]));
                     if ($tech === null || !in_array($tech, $ids, true)) {
-                        throw new HttpException(422, 'Choose a technician of this branch.', ['errors' => ['technician_id' => 'Choose a technician.']]);
+                        throw new HttpException(422, 'Choose the lead technician of this branch.', ['errors' => ['technician_id' => 'Choose the lead technician.']]);
                     }
-                    if ($tech === (int) $j['technician_id']) {
-                        throw new HttpException(422, "{$no} is already assigned to " . self::userName($tech) . '.', ['errors' => ['technician_id' => 'Already assigned.']]);
+                    if (count($helpers) > 10 || array_diff($helpers, [...$ids, ...$before])) { // a current helper may stay even without the permission now
+                        throw new HttpException(422, 'Choose helpers among the technicians of this branch (at most 10).', ['errors' => ['helper_ids' => 'Choose technicians of this branch.']]);
                     }
-                    $set  = ['technician_id' => $tech, 'assigned_at' => date('Y-m-d H:i:s')];
+                    $sortedBefore = $before;
+                    $sortedAfter  = $helpers;
+                    sort($sortedBefore);
+                    sort($sortedAfter);
+                    $leadChanged = $tech !== (int) $j['technician_id'];
+                    if (!$leadChanged && $sortedBefore === $sortedAfter) {
+                        throw new HttpException(422, "{$no} is already assigned to " . self::userName($tech) . ($helpers ? ' with these helpers' : '') . '.',
+                            ['errors' => ['technician_id' => 'Nothing changed.']]);
+                    }
+                    if ($leadChanged) {
+                        $set = ['technician_id' => $tech, 'assigned_at' => date('Y-m-d H:i:s')];
+                    }
+                    self::saveHelpers($id, $helpers, $userId);
                     $to   = $from === 'new' ? 'assigned' : $from;
                     $name = self::userName($tech);
-                    $note = ($j['technician_id'] === null ? "Assigned to {$name}." : 'Reassigned from ' . self::userName((int) $j['technician_id']) . " to {$name}.")
-                        . ($note !== null ? ' ' . $note : '');
-                    $audit = ['technician' => $name];
-                    $msg = "{$no} is assigned to {$name}.";
+                    $parts = [];
+                    if ($leadChanged) {
+                        $parts[] = $j['technician_id'] === null ? "Assigned to {$name} (lead)." : 'Lead changed from ' . self::userName((int) $j['technician_id']) . " to {$name}.";
+                    }
+                    if ($sortedBefore !== $sortedAfter) {
+                        $parts[] = $helpers ? 'Helpers: ' . self::names($helpers) . '.' : 'No helpers.';
+                    }
+                    $note = implode(' ', $parts) . ($note !== null ? ' ' . $note : '');
+                    $audit = ['technician' => $name, 'helpers' => $helpers ? self::names($helpers) : null];
+                    $msg = "{$no}: {$name} leads" . ($helpers ? ', helped by ' . self::names($helpers) : '') . '.';
                     break;
                 case 'start':
                     $to  = 'diagnosing';
@@ -746,10 +948,10 @@ final class JobOrders
         return $j;
     }
 
-    /** Assigned technician (job_orders.update) or supervisor (job_orders.assign). */
+    /** Assigned technician, lead or helper (job_orders.update), or supervisor (job_orders.assign). */
     public static function isWorker(array $j): bool
     {
-        return Auth::can('job_orders.assign') || (Auth::can('job_orders.update') && (int) $j['technician_id'] === (int) Auth::id());
+        return Auth::can('job_orders.assign') || (Auth::can('job_orders.update') && self::isOnJob($j, (int) Auth::id()));
     }
 
     /** Lock the job row; 404 when missing or not visible. */

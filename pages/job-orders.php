@@ -19,6 +19,7 @@ $filters = [
     'technician' => in_array($techIn, ['me', 'none'], true) || ctype_digit($techIn) ? $techIn : '',
     'priority'   => is_string($_GET['priority'] ?? null) && isset(JobOrders::PRIORITIES[$_GET['priority']]) ? $_GET['priority'] : '',
     'parts'      => ($_GET['parts'] ?? '') === 'pending' ? 'pending' : '',
+    'type'       => (string) (input_int($_GET, 'type', 1) ?? ''),
 ];
 // Query string for links: "open" is the default (left out), "" = every status ("all").
 $pgQuery = array_filter(array_diff_key($filters, ['status' => 1]), static fn ($v) => $v !== '');
@@ -35,7 +36,7 @@ $work     = JobOrders::workCounts();
 $listUrl  = static fn (array $q): string => url('pages/job-orders.php?' . http_build_query($q));
 $canWork  = Auth::can('job_orders.update');
 $tiles = array_values(array_filter([
-    $canWork ? ['My Jobs', 'Open jobs assigned to you', 'wrench', $work['mine'], ['technician' => 'me']] : null,
+    $canWork ? ['My Jobs', 'Open jobs you lead or help on', 'wrench', $work['mine'], ['technician' => 'me']] : null,
     ['Unassigned', 'New jobs nobody has taken yet', 'clipboard', $work['unassigned'], ['status' => 'new', 'technician' => 'none']],
     ['For Approval', "Waiting for the customer's answer", 'clock', $work['for_approval'], ['status' => 'for_approval']],
     ['Waiting for Parts', 'Repairs on hold for parts', 'box', $work['waiting_parts'], ['status' => 'waiting_parts']],
@@ -100,6 +101,12 @@ require ROOT_PATH . '/includes/header.php';
                 <option value="<?= (int) $a['id'] ?>"<?= $filters['technician'] === (string) $a['id'] ? ' selected' : '' ?>><?= e($a['full_name']) ?></option>
             <?php endforeach; ?>
         </select>
+        <select class="form-input" name="type" aria-label="Job type">
+            <option value="">Any job type</option>
+            <?php foreach (MasterData::options('job-types', $filters['type'] !== '' ? (int) $filters['type'] : null) as $jt): ?>
+                <option value="<?= (int) $jt['id'] ?>"<?= $filters['type'] === (string) $jt['id'] ? ' selected' : '' ?>><?= e($jt['name']) ?></option>
+            <?php endforeach; ?>
+        </select>
         <select class="form-input" name="priority" aria-label="Priority">
             <option value="">Any priority</option>
             <?php foreach (JobOrders::PRIORITIES as $value => $label): ?>
@@ -141,8 +148,10 @@ require ROOT_PATH . '/includes/header.php';
                     <td><?= e($j['customer_name']) ?><small class="muted block"><?= e($j['customer_phone']) ?></small></td>
                     <td><?= e($device !== '' ? $device : ($j['device_type'] ?? '—')) ?>
                         <small class="muted block"><?= e($device !== '' ? ($j['device_type'] ?? '') : '') ?><?= $j['serial_no'] !== null ? ($device !== '' && $j['device_type'] ? ' · ' : '') . 'S/N ' . e($j['serial_no']) : '' ?></small></td>
-                    <td class="col-opt"><small class="doc-reason jo-problem"><?= e($j['problem']) ?></small></td>
-                    <td><?= $j['technician_name'] !== null ? e($j['technician_name']) : '<span class="muted">Unassigned</span>' ?></td>
+                    <td class="col-opt"><small class="doc-reason jo-problem"><?= e($j['problem']) ?></small>
+                        <?php if ($j['job_types']): ?><small class="muted block"><?= e($j['job_types']) ?></small><?php endif; ?></td>
+                    <td><?= $j['technician_name'] !== null ? e($j['technician_name']) : '<span class="muted">Unassigned</span>' ?>
+                        <?php if ($j['helper_names']): ?><small class="muted block" title="Helpers">+ <?= e($j['helper_names']) ?></small><?php endif; ?></td>
                     <td class="col-opt nowrap<?= $late ? ' text-danger' : '' ?>"><?= $j['expected_at'] !== null ? e(date('M j', strtotime($j['expected_at']))) . ($late ? ' <small>(late)</small>' : '') : '<span class="muted">—</span>' ?></td>
                     <td><span class="badge <?= e(JobOrders::BADGES[$j['status']] ?? '') ?>"><?= e(JobOrders::STATUSES[$j['status']] ?? $j['status']) ?></span></td>
                 </tr>

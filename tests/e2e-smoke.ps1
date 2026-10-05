@@ -56,7 +56,7 @@ try {
     # Marker first: if the copy fails or is interrupted, the next run may still delete the folder.
     New-Item -ItemType Directory -Force $e2eDir | Out-Null
     New-Item -ItemType File -Force $marker | Out-Null
-    $null = & robocopy $root $e2eDir /E /XD (Join-Path $root '.git') (Join-Path $root '.claude') (Join-Path $root 'assets\uploads\products') (Join-Path $root 'storage\logs') /XF .env /NFL /NDL /NJH /NJS /NP
+    $null = & robocopy $root $e2eDir /E /XD (Join-Path $root '.git') (Join-Path $root '.claude') (Join-Path $root 'assets\uploads\products') (Join-Path $root 'storage\logs') (Join-Path $root 'storage\attachments') /XF .env /NFL /NDL /NJH /NJS /NP
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }
     New-Item -ItemType Directory -Force (Join-Path $e2eDir 'storage\logs'), (Join-Path $e2eDir 'assets\uploads\products') | Out-Null
     Copy-Item (Join-Path $root 'assets\uploads\products\sample-*.png') (Join-Path $e2eDir 'assets\uploads\products')
@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and $txt -notmatch '/storage/attachments/' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print|attachment|attachments|buying|selling)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -548,7 +548,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Job Orders|Inventory|Purchasing|Customer Orders|Billing & Collections|Payables|Receiving|Stock Operations|Branch Transfers|Serial Lookup|Customers|Master Data|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Customer Orders|Billing & Collections|Customers|Job Orders|Purchasing|Receiving|Payables|Suppliers|Inventory|Stock Operations|Branch Transfers|Serial Lookup|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -960,7 +960,7 @@ try {
     # MAR branch admin: warehouses + locations
     Login 'maradmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
-    Check ($menu -like '*Receiving|Stock Operations|Branch Transfers|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
+    Check ($menu -like '*Inventory|Stock Operations|Branch Transfers|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
     Nav "$Base/pages/warehouses.php"
     Check ((Eval "[...document.querySelectorAll('.wh-card[data-warehouse=MAIN] tr[data-location]')].map(r => r.dataset.location).sort().join(',')") -eq 'DAMAGED,DISPLAY,GENERAL') 'warehouses tab: MAIN with GENERAL / DAMAGED / DISPLAY'
     $r = Eval "fetch('$Base/pages/warehouses.php', {method: 'POST', body: new URLSearchParams({action: 'save_warehouse', code: 'NOCSRF', name: 'No token'})}).then(r => r.status)"
@@ -1358,10 +1358,12 @@ try {
     Submit "document.getElementById('jobForm').requestSubmit()" 'empty job form'
     Check (Eval "['customer_name', 'customer_phone', 'problem', 'device_type_id'].every(n => document.querySelector('[name=' + n + ']').getAttribute('aria-invalid') === 'true') && !document.querySelector('[name=technician_id]')") 'empty intake: name / phone / problem / device type errors; cashier cannot assign'
     $dev = Sql "SELECT id FROM lookups WHERE list = 'device_type' AND name = 'Laptop'"
-    Submit "const f = document.getElementById('jobForm'); f.customer_name.value = 'Pedro Penduko'; f.customer_phone.value = '0917 555 0101'; f.device_type_id.value = '$dev'; f.brand.value = 'Acer'; f.model.value = 'Aspire 5'; f.serial_no.value = 'ACR-77'; f.accessories.value = 'Charger'; f.problem.value = 'Will not boot'; f.priority.value = 'high'; f.requestSubmit()" 'create job'
+    Submit "const f = document.getElementById('jobForm'); f.customer_name.value = 'Pedro Penduko'; f.customer_phone.value = '0917 555 0101'; f.device_type_id.value = '$dev'; f.brand.value = 'Acer'; f.model.value = 'Aspire 5'; f.serial_no.value = 'ACR-77'; [...document.querySelectorAll('#accessoryChecks input')].find(b => b.value === 'Charger / Adapter').checked = true; f.accessories_other.value = 'Mouse pad'; [...document.querySelectorAll('#conditionChecks input')].find(b => b.value === 'Minor scratches').checked = true; [...document.querySelectorAll('#jobTypeChecks input[type=checkbox]')].slice(0, 2).forEach(b => b.checked = true); f.problem.value = 'Will not boot'; document.querySelector('[data-problem-pick]').click(); f.priority.value = 'high'; f.requestSubmit()" 'create job'
     $jo = "JO-MAR-$year-000001"
     $job1 = Sql "SELECT id FROM job_orders WHERE job_no = '$jo'"
     Check ((Text '#jobTitle') -eq $jo -and (Text '#jobStatus') -eq 'New' -and $job1 -ne '') "cashier created $jo (New)"
+    $acc = Sql "SELECT CONCAT(accessories, ' | ', device_condition, ' | ', (SELECT COUNT(*) FROM job_order_types WHERE job_order_id = $job1), ' | ', problem LIKE 'Will not boot%') FROM job_orders WHERE id = $job1"
+    Check ($acc -like 'Charger / Adapter, Mouse pad | Minor scratches | 2 | 1' -and (Sql "SELECT problem LIKE CONCAT('Will not boot', CHAR(10), '_%') FROM job_orders WHERE id = $job1") -eq '1' -and (Eval "document.querySelectorAll('#jobTypes .jo-chip').length") -eq 2) "intake checklists: accessories + other, condition, 2 job types, problem quick pick ($acc)"
     Check (Eval "!document.getElementById('takeJobBtn') && !document.getElementById('assignForm') && !!document.getElementById('editJobBtn') && !!document.getElementById('noteForm')") 'cashier: no Take / Assign; Edit and notes'
     Check (Eval "getComputedStyle(document.querySelector('.jo-ticket')).display === 'none' && document.querySelector('.jo-ticket').textContent.includes('CLAIM STUB') && document.querySelector('.jo-ticket').textContent.includes('ACR-77')") 'ticket + claim stub rendered, hidden on screen'
     [void](Cdp 'Emulation.setEmulatedMedia' @{ media = 'print' })
@@ -1419,6 +1421,8 @@ try {
     Check ((Text '#jobStatus') -eq 'Assigned' -and (Text '#jobTechnician') -like 'Marco Tech*' -and (Text '#jobCustomer') -eq 'Maria Santos') 'branch admin: job for a customer record, assigned at intake'
     Submit "const f = document.getElementById('assignForm'); f.technician_id.value = '$mara'; f.requestSubmit()" 'reassign'
     Check ((Text '#jobTechnician') -like 'Mara Admin*') 'branch admin reassigned the job'
+    Submit "const f = document.getElementById('assignForm'); [...f.querySelectorAll('input[name=""helper_ids[]""]')].find(b => b.value === '$tech').checked = true; f.requestSubmit()" 'add a helper'
+    Check ((Text '#jobTechnician') -like 'Mara Admin*Lead*Marco Tech*Helper*' -and (Sql "SELECT COUNT(*) FROM job_order_technicians WHERE job_order_id = $job2") -eq '1') "lead + helper: $(Text '#jobTechnician')"
     Submit "window.confirm = () => true; document.getElementById('cancelJobBtn').click(); document.getElementById('cancelReason').value = 'Customer changed their mind'; document.getElementById('cancelReason').form.requestSubmit()" 'cancel job'
     Check ((Text '#jobStatus') -eq 'Cancelled' -and (Sql "SELECT cancel_reason FROM job_orders WHERE id = $job2") -eq 'Customer changed their mind') 'branch admin cancelled the job with a reason'
     $a = Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'job_orders'"
@@ -1552,7 +1556,7 @@ try {
     $prNo = Sql "SELECT pr_no FROM purchase_requests WHERE id = $pr1"
     Check ($prNo -like 'PR-MAR-*-000001' -and (Text '#prStatus') -eq 'For Approval' -and (Eval "!document.getElementById('prApproveForm') && !document.getElementById('prCreatePo')")) "cashier: $prNo for approval; cannot approve or order it"
     Nav "$Base/pages/purchase-requests.php"
-    Check ((Status 'pages/purchase-orders.php') -eq 403 -and (Eval "[...document.querySelectorAll('.report-tab')].map(a => a.dataset.tab).join(',')") -eq 'requests') 'cashier: PO Internal 403, only the Purchase Requests tab'
+    Check ((Status 'pages/purchase-orders.php') -eq 403 -and (Eval "[...document.querySelectorAll('.flow-tab')].map(a => a.dataset.tab).join(',')") -eq 'overview,requests') 'cashier: PO Internal 403, buying tabs only Overview + Requests'
     Logout
 
     Login 'maradmin' $script:pw
@@ -1831,6 +1835,49 @@ try {
     Nav "$Base/pages/stock-integrity.php"
     Check ((Eval "document.getElementById('integritySummary').classList.contains('alert--success')") -and (Eval "document.querySelectorAll('.integrity-list .badge--danger').length") -eq 0) "stock integrity after customer orders (All branches): $(Text '#integritySummary span')"
     SwitchBranch 1
+
+    # Attachments (migration 016), payment status, grouped sidebar, Buying / Selling overview, document chain
+    $poA = Sql "SELECT MAX(po_id) FROM receiving_reports WHERE branch_id = 1 AND status = 'posted' AND po_id IS NOT NULL"
+    Nav "$Base/pages/po-view.php?id=$poA"
+    $upJs = "(blob, name, label) => { const f = new FormData(); f.append('_csrf', document.querySelector('meta[name=csrf-token]').content); f.append('action', 'upload'); f.append('doc_type', 'purchase_order'); f.append('doc_id', '$poA'); f.append('label', label); f.append('return', 'po-view.php?id=$poA'); f.append('file', blob, name); return fetch('$Base/pages/attachments.php', {method: 'POST', body: f}).then(r => r.text()).then(t => t.includes('alert--error') ? 'refused' : (t.includes('Attachment added') ? 'added' : 'other')); }"
+    $r1 = Eval "new Promise(res => { const c = document.createElement('canvas'); c.width = 40; c.height = 30; c.getContext('2d').fillRect(0, 0, 40, 30); c.toBlob(b => res(($upJs)(b, 'signed-po.png', 'Signed PO')), 'image/png'); })"
+    $r2 = Eval "($upJs)(new Blob(['%PDF-1.4\n%%EOF\n'], {type: 'application/pdf'}), 'quote.pdf', 'Supplier quotation')"
+    $r3 = Eval "($upJs)(new Blob(['<?php echo 1; ?>'], {type: 'image/png'}), 'evil.png', 'Signed PO')"
+    $r4 = Eval "($upJs)(new Blob(['%PDF-1.4'], {type: 'application/pdf'}), 'x.pdf', 'Not a label')"
+    $attN = Sql "SELECT COUNT(*) FROM document_attachments WHERE doc_type = 'purchase_order' AND doc_id = $poA AND deleted_at IS NULL"
+    Check ($r1 -eq 'added' -and $r2 -eq 'added' -and $r3 -eq 'refused' -and $r4 -eq 'refused' -and $attN -eq '2') "attachments: photo + PDF added, fake image and unknown label refused ($r1 $r2 $r3 $r4, $attN on file)"
+    $attImg = Sql "SELECT id FROM document_attachments WHERE doc_type = 'purchase_order' AND doc_id = $poA AND mime = 'image/png' ORDER BY id DESC LIMIT 1"
+    $attPdf = Sql "SELECT id FROM document_attachments WHERE doc_type = 'purchase_order' AND doc_id = $poA AND mime = 'application/pdf' ORDER BY id DESC LIMIT 1"
+    $attFile = Sql "SELECT filename FROM document_attachments WHERE id = $attImg"
+    Nav "$Base/pages/po-view.php?id=$poA"
+    $ct = Eval "fetch('$Base/pages/attachment.php?id=$attImg').then(r => r.status + '|' + r.headers.get('content-type'))"
+    $direct = Status "storage/attachments/$attFile"
+    Check ((Eval "document.querySelectorAll('#attachments [data-attachment]').length") -eq 2 -and $ct -eq '200|image/png' -and $direct -eq 403) "attachments card lists 2 files; served after the access check ($ct); storage URL $direct"
+    $r = PostForm 'pages/attachments.php' "action: 'delete', id: '$attImg', return: 'po-view.php?id=$poA'"
+    Check ((Sql "SELECT deleted_at IS NOT NULL FROM document_attachments WHERE id = $attImg") -eq '1' -and (Status "pages/attachment.php?id=$attImg") -eq 404 -and (Sql "SELECT COUNT(*) FROM audit_logs WHERE action IN ('attachment_add', 'attachment_delete')") -ge 3) 'attachment deleted (row kept, file gone, audited)'
+    Shot '52-po-attachments'
+    Check ((Eval "document.querySelectorAll('#docChain .doc-chain__stage').length") -eq 5 -and (Text '#docChain .doc-chain__stage.is-current .doc-chain__label') -eq 'PO Internal' -and (Eval "!!document.getElementById('payCard')")) 'PO page: document chain (5 steps, PO current) + payment card'
+    Nav "$Base/pages/purchase-orders.php"
+    Check ((Text '#poTable thead th:last-child') -eq 'Payment' -and (Eval "document.querySelectorAll('#poTable td[data-payment]').length") -gt 0) 'PO Internal list: Payment column'
+    Nav "$Base/pages/co-view.php?id=$co1"
+    Check ((Eval "!!document.getElementById('payCard') && !!document.getElementById('attachments') && document.querySelectorAll('#docChain .doc-chain__stage').length === 5")) 'customer order page: payment card, attachments, document chain'
+    Nav "$Base/pages/buying.php"
+    $bs = Eval "[...document.querySelectorAll('[data-stage]')].map(s => s.dataset.stage).join(',')"
+    Check ($bs -like 'pr_approve,*to_pay,checks_out' -and (Eval "document.querySelector('.flow-tab.is-active').dataset.tab") -eq 'overview') "buying overview stages ($bs)"
+    Nav "$Base/pages/selling.php"
+    $ss = Eval "[...document.querySelectorAll('[data-stage]')].map(s => s.dataset.stage).join(',')"
+    Check ($ss -like 'quotes,*forms') "selling overview stages ($ss)"
+    Shot '53-selling-overview'
+    $groups = Eval "[...document.querySelectorAll('.sidebar__nav .nav-group')].map(g => g.firstElementChild.textContent.trim()).join(',')"
+    Check ($groups -eq 'Selling,Service,Buying,Stock,Admin') "sidebar sections ($groups)"
+    Logout
+    Login 'cashier' 'cashier123' 'pos.php'
+    $st = "$(Status "pages/attachment.php?id=$attPdf"),$(Status 'pages/buying.php'),$(Status 'pages/selling.php'),$(Status "pages/po-view.php?id=$poA")"
+    Check ($st -eq '403,200,200,403') "cashier: PO attachment 403, both overviews 200, PO 403 ($st)"
+    Nav "$Base/pages/buying.php"
+    Check ((Eval "[...document.querySelectorAll('[data-stage]')].map(s => s.dataset.stage).join(',')") -eq 'pr_approve,pr_order') 'cashier buying overview: only the purchase request steps'
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
 
     # Sprite validity
     $n = Eval "fetch('$Base/assets/img/icons.svg').then(r => r.text()).then(t => { const d = new DOMParser().parseFromString(t, 'image/svg+xml'); return d.querySelector('parsererror') ? -1 : d.querySelectorAll('symbol').length; })"

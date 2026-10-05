@@ -8,6 +8,25 @@
 .jo-hint { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
 .jo-hint svg { flex-shrink: 0; width: 16px; height: 16px; }
 .jo-checklist { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+/* Intake checklists: accessories, condition, problem quick picks, job types, helpers */
+.jo-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.jo-fieldset legend { padding: 0; margin-bottom: 6px; }
+.jo-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 14px; padding: 10px 12px;
+             border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.jo-checks--picks { margin-bottom: 8px; max-height: 230px; overflow-y: auto; }
+.jo-check { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 14px; line-height: 1.3; cursor: pointer; }
+.jo-check input { flex-shrink: 0; width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--primary); }
+.jo-check:has(input:checked) span { color: var(--primary-700); font-weight: 600; }
+.jo-check.is-disabled { opacity: .45; cursor: not-allowed; }
+.jo-other { margin-top: 8px; }
+@media (max-width: 700px) { .jo-checks { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 420px) { .jo-checks { grid-template-columns: 1fr; } }
+/* Job type chips / technicians (view, list) */
+.jo-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.jo-chip { padding: 2px 8px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12px; }
+.jo-team { margin: 0; padding: 0; list-style: none; }
+.jo-team li { padding: 2px 0; }
+.jo-assign .jo-checks { margin-bottom: 8px; }
 
 /* View */
 .jo-memo { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }

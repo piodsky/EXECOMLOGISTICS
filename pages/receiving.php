@@ -56,6 +56,8 @@ require ROOT_PATH . '/includes/header.php';
         <?php endif; ?>
     </div>
 </div>
+
+<?php [$flowSide, $flowTab] = ['buy', 'receiving']; require ROOT_PATH . '/includes/flow-nav.php'; ?>
 <?php if ($canManage && !Branch::isConcrete()): ?>
     <div class="alert alert--info" role="status">
         <?= icon('info') ?>

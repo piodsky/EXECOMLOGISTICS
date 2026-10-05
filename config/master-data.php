@@ -48,6 +48,23 @@ return [
         'fields' => ['sort_order'], 'name_max' => 80, 'permission' => 'master_data.manage',
         'hint' => 'Kinds of service work (used by job orders later).',
     ],
+    // Job order intake checklists (the ticked names are saved as text on the job, so entries can be renamed or
+    // deactivated freely; old jobs keep their text).
+    'accessories' => [
+        'label' => 'Accessories', 'singular' => 'Accessory', 'icon' => 'plug', 'table' => 'lookups', 'list' => 'accessory',
+        'fields' => ['sort_order'], 'name_max' => 80, 'permission' => 'master_data.manage',
+        'hint' => 'Checkboxes for "Accessories left with the device" on the job order intake.',
+    ],
+    'conditions' => [
+        'label' => 'Device Conditions', 'singular' => 'Device Condition', 'icon' => 'eye', 'table' => 'lookups', 'list' => 'device_condition',
+        'fields' => ['sort_order'], 'name_max' => 80, 'permission' => 'master_data.manage',
+        'hint' => 'Checkboxes for "Condition on arrival" on the job order intake.',
+    ],
+    'problems' => [
+        'label' => 'Common Problems', 'singular' => 'Common Problem', 'icon' => 'alert', 'table' => 'lookups', 'list' => 'problem',
+        'fields' => ['sort_order'], 'name_max' => 80, 'permission' => 'master_data.manage',
+        'hint' => 'Quick picks above "Problem reported" on the job order intake (each tick adds a line to the text).',
+    ],
     'service-categories' => [
         'label' => 'Service Categories', 'singular' => 'Service Category', 'icon' => 'settings', 'table' => 'lookups', 'list' => 'service_category',
         'fields' => ['sort_order'], 'name_max' => 80, 'permission' => 'master_data.manage',

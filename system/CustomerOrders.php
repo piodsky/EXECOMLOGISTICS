@@ -95,6 +95,10 @@ final class CustomerOrders
             $where[]  = 'o.customer_id = ?';
             $params[] = (int) $f['customer'];
         }
+        $payment = PaymentStatus::orderWhere((string) ($f['payment'] ?? ''));
+        if ($payment !== null) {
+            $where[] = $payment;
+        }
         $q = (string) ($f['search'] ?? '');
         if ($q !== '') {
             $like = like_pattern($q);
@@ -124,7 +128,8 @@ final class CustomerOrders
                     o.subtotal, o.created_at, o.branch_id, b.code AS branch_code, b.name AS branch_name, u.full_name AS created_by_name,
                     ct.name AS customer_type,
                     (SELECT COALESCE(SUM(l.qty_delivered), 0) FROM customer_order_lines l WHERE l.order_id = o.id) AS qty_delivered,
-                    (SELECT COALESCE(SUM(l.qty_billed), 0) FROM customer_order_lines l WHERE l.order_id = o.id) AS qty_billed
+                    (SELECT COALESCE(SUM(l.qty_billed), 0) FROM customer_order_lines l WHERE l.order_id = o.id) AS qty_billed,
+                    " . PaymentStatus::CO_COLUMNS . "
                FROM customer_orders o
                JOIN branches b ON b.id = o.branch_id
                JOIN users u ON u.id = o.created_by

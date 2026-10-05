@@ -15,6 +15,7 @@ $filters = [
     'search'   => input_string($_GET, 'search', 100),
     'status'   => is_string($_GET['status'] ?? null) && isset($statuses[$_GET['status']]) ? $_GET['status'] : '',
     'customer' => input_int($_GET, 'customer', 1),
+    'payment'  => is_string($_GET['payment'] ?? null) && isset(PaymentStatus::FILTERS[$_GET['payment']]) ? $_GET['payment'] : '',
 ];
 $pgQuery = array_filter($filters, static fn ($v) => $v !== '' && $v !== null);
 
@@ -24,7 +25,7 @@ $pgPath   = 'pages/customer-orders.php';
 $returnTo = 'customer-orders.php' . (($pgQuery || $pg['page'] > 1) ? '?' . http_build_query($pgQuery + ['page' => $pg['page']]) : '');
 $showBranch = Branch::current() === Branch::ALL;
 $work  = CustomerOrders::workCounts();
-$cols  = 7 + ($showBranch ? 1 : 0);
+$cols  = 8 + ($showBranch ? 1 : 0);
 $today = date('Y-m-d');
 
 $listUrl = static fn (array $q): string => url('pages/customer-orders.php?' . http_build_query($q));
@@ -87,6 +88,12 @@ require ROOT_PATH . '/includes/header.php';
                 <option value="<?= e($value) ?>"<?= $filters['status'] === $value ? ' selected' : '' ?>><?= e($label) ?></option>
             <?php endforeach; ?>
         </select>
+        <select class="form-input" name="payment" aria-label="Payment">
+            <option value="">Payment: any</option>
+            <?php foreach (PaymentStatus::FILTERS as $value => $label): ?>
+                <option value="<?= e($value) ?>"<?= $filters['payment'] === $value ? ' selected' : '' ?>><?= e($label) ?></option>
+            <?php endforeach; ?>
+        </select>
         <button type="submit" class="btn btn--primary">Filter</button>
         <?php if ($pgQuery): ?>
             <a class="btn btn--light" href="<?= e(url('pages/customer-orders.php')) ?>">Reset</a>
@@ -105,6 +112,7 @@ require ROOT_PATH . '/includes/header.php';
                 <th class="col-opt">Billed</th>
                 <th class="num">Amount</th>
                 <th>Status</th>
+                <th>Payment</th>
             </tr>
             </thead>
             <tbody>
@@ -135,6 +143,9 @@ require ROOT_PATH . '/includes/header.php';
                     <td class="col-opt"><?= $tracking ? number_format((int) $o['qty_billed']) . ' of ' . number_format($delivered) : '<span class="muted">—</span>' ?></td>
                     <td class="num doc-value"><?= e(money($o['subtotal'])) ?></td>
                     <td><span class="badge <?= e(CustomerOrders::BADGES[$o['status']] ?? '') ?>"><?= e(CustomerOrders::STATUSES[$o['status']] ?? $o['status']) ?></span></td>
+                    <?php $pay = PaymentStatus::order($o); ?>
+                    <td class="pay-cell" data-payment="<?= e($pay['key']) ?>"><?php if ($pay['key'] === 'none'): ?><span class="muted">—</span><?php else: ?><span class="badge <?= e($pay['badge']) ?>"><?= e($pay['label']) ?></span><?php endif; ?>
+                        <?php foreach ($pay['notes'] as $n): ?><small><?= e($n) ?></small><?php endforeach; ?></td>
                 </tr>
             <?php endforeach; ?>
             <?php if (!$orders): ?>

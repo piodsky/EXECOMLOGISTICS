@@ -421,15 +421,17 @@ final class Reports
             "SELECT u.id, u.full_name AS name,
                     (SELECT COUNT(*) FROM job_orders j WHERE j.technician_id = u.id AND j.status IN ({$open}) AND {$scope}) AS open_now,
                     (SELECT COUNT(*) FROM job_orders j WHERE j.technician_id = u.id AND {$cw}) AS completed,
+                    (SELECT COUNT(*) FROM job_orders j JOIN job_order_technicians h ON h.job_order_id = j.id WHERE h.user_id = u.id AND {$cw}) AS helped,
                     (SELECT AVG(TIMESTAMPDIFF(MINUTE, j.created_at, j.completed_at)) / 1440 FROM job_orders j WHERE j.technician_id = u.id AND {$cw}) AS avg_days,
                     (SELECT COUNT(*) FROM job_orders j JOIN job_orders pj ON pj.id = j.parent_job_id WHERE pj.technician_id = u.id AND {$bw}) AS back_jobs,
                     (SELECT COALESCE(SUM(si.line_total), 0) FROM sales s JOIN job_orders jj ON jj.id = s.job_order_id
                        JOIN sale_items si ON si.sale_id = s.id AND si.line_type = 'labor' WHERE jj.technician_id = u.id AND {$sw}) AS labor
                FROM users u
               WHERE EXISTS (SELECT 1 FROM job_orders j WHERE j.technician_id = u.id AND {$scope})
+                 OR EXISTS (SELECT 1 FROM job_order_technicians h JOIN job_orders j ON j.id = h.job_order_id WHERE h.user_id = u.id AND {$scope})
               ORDER BY completed DESC, open_now DESC, u.full_name"
         );
-        $stmt->execute([...$sp, ...$cp, ...$cp, ...$bp, ...$spp, ...$sp]);
+        $stmt->execute([...$sp, ...$cp, ...$cp, ...$cp, ...$bp, ...$spp, ...$sp, ...$sp]);
         return $stmt->fetchAll();
     }
 

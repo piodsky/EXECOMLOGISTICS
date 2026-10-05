@@ -125,6 +125,8 @@ require ROOT_PATH . '/includes/header.php';
     <div class="alert alert--info doc-note" role="note"><?= icon('info') ?><span>Draft: print it or mark it as sent when it goes to the customer.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('qt', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head"><h2><?= icon('box') ?> Items</h2></header>
