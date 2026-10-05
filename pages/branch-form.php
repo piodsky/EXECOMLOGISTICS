@@ -106,6 +106,11 @@ require ROOT_PATH . '/includes/header.php';
                 <input class="form-input form-input--mono" name="tin_branch_code" maxlength="30" value="<?= e($val('tin_branch_code')) ?>"<?= invalid('tin_branch_code') ?>>
                 <?= field_error('tin_branch_code') ?>
             </label>
+            <label class="form-field">
+                <span class="form-label">Monthly sales target <small class="muted">(optional, incl. VAT; shown on the Dashboard)</small></span>
+                <input class="form-input" name="monthly_target" inputmode="decimal" maxlength="20" placeholder="e.g. 500,000.00" value="<?= e($val('monthly_target')) ?>"<?= invalid('monthly_target') ?>>
+                <?= field_error('monthly_target') ?>
+            </label>
         </div>
     </section>
 

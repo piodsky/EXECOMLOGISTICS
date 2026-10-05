@@ -71,6 +71,7 @@ final class Branches
             'address'         => input_string($in, 'address', 255),
             'contact_no'      => input_string($in, 'contact_no', 50),
             'tin_branch_code' => input_string($in, 'tin_branch_code', 30),
+            'monthly_target'  => null,
             'is_active'       => isset($in['is_active']) ? 1 : 0,
             'is_main'         => isset($in['is_main']) ? 1 : 0,
         ];
@@ -93,6 +94,16 @@ final class Branches
         }
         if ($data['tin_branch_code'] !== '' && !preg_match('/^[0-9A-Za-z-]{1,30}$/', $data['tin_branch_code'])) {
             $errors['tin_branch_code'] = 'Use letters, numbers and dashes only.';
+        }
+        // Monthly sales target (Dashboard), net incl. VAT; blank = no target.
+        $rawTarget = is_string($in['monthly_target'] ?? null) ? str_replace(',', '', trim($in['monthly_target'])) : '';
+        if ($rawTarget !== '') {
+            $target = input_decimal(['v' => $rawTarget], 'v', 0, 999999999999.99, 2);
+            if ($target === null) {
+                $errors['monthly_target'] = 'Enter an amount, e.g. 500,000.00, or leave it blank for no target.';
+            } else {
+                $data['monthly_target'] = number_format($target, 2, '.', '');
+            }
         }
 
         $isMain = $branch !== null && (int) $branch['is_main'] === 1;
@@ -120,7 +131,7 @@ final class Branches
         }
     }
 
-    private const AUDIT_FIELDS = ['code', 'name', 'address', 'contact_no', 'tin_branch_code', 'is_active', 'is_main'];
+    private const AUDIT_FIELDS = ['code', 'name', 'address', 'contact_no', 'tin_branch_code', 'monthly_target', 'is_active', 'is_main'];
 
     public static function create(array $data): int
     {
@@ -132,9 +143,9 @@ final class Branches
                 $pdo->prepare('UPDATE branches SET is_main = 0 WHERE is_main = 1')->execute([]);
             }
             $pdo->prepare(
-                'INSERT INTO branches (code, name, address, contact_no, tin_branch_code, is_main, is_active)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)'
-            )->execute([$data['code'], $data['name'], $data['address'], $data['contact_no'], $data['tin_branch_code'],
+                'INSERT INTO branches (code, name, address, contact_no, tin_branch_code, monthly_target, is_main, is_active)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute([$data['code'], $data['name'], $data['address'], $data['contact_no'], $data['tin_branch_code'], $data['monthly_target'],
                 $data['is_main'], $data['is_active']]);
             $id = (int) $pdo->lastInsertId();
 
@@ -165,9 +176,9 @@ final class Branches
                 $pdo->prepare('UPDATE branches SET is_main = 0 WHERE is_main = 1 AND id <> ?')->execute([$branch['id']]);
             }
             $pdo->prepare(
-                'UPDATE branches SET code = ?, name = ?, address = ?, contact_no = ?, tin_branch_code = ?, is_main = ?, is_active = ?
+                'UPDATE branches SET code = ?, name = ?, address = ?, contact_no = ?, tin_branch_code = ?, monthly_target = ?, is_main = ?, is_active = ?
                   WHERE id = ?'
-            )->execute([$data['code'], $data['name'], $data['address'], $data['contact_no'], $data['tin_branch_code'],
+            )->execute([$data['code'], $data['name'], $data['address'], $data['contact_no'], $data['tin_branch_code'], $data['monthly_target'],
                 $data['is_main'], $data['is_active'], $branch['id']]);
 
             [$old, $new] = Audit::diff(

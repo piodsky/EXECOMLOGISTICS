@@ -1900,6 +1900,46 @@ try {
     [void](Eval "document.querySelector('.sidebar-backdrop').click()")
     Check ((Eval "!document.body.classList.contains('sidebar-open')")) 'mobile: backdrop closes it'
     Size 1536 1024
+
+    # Notifications (migration 018): made from the audit log of the flows above
+    $nCount = Sql 'SELECT COUNT(*) FROM notifications'
+    $self = Sql 'SELECT COUNT(*) FROM notification_recipients r JOIN notifications n ON n.id = r.notification_id WHERE r.user_id = n.actor_id'
+    $outside = Sql "SELECT COUNT(*) FROM notification_recipients r JOIN notifications n ON n.id = r.notification_id JOIN users u ON u.id = r.user_id JOIN roles ro ON ro.code = u.role
+                     WHERE n.branch_id IS NOT NULL AND ro.is_super = 0 AND u.branch_id <> n.branch_id AND r.user_id <> COALESCE(n.actor_id, 0)
+                       AND NOT EXISTS (SELECT 1 FROM user_branches ub WHERE ub.user_id = u.id AND ub.branch_id = n.branch_id)
+                       AND NOT EXISTS (SELECT 1 FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = ro.id AND p.perm_key = 'branches.access_all')
+                       AND n.event NOT IN ('purchasing.pr_approve', 'purchasing.pr_reject', 'purchasing.po_approve', 'purchasing.po_return', 'transfers.approve', 'transfers.release', 'transfers.receive', 'transfers.cancel',
+                                           'customer_orders.return', 'customer_orders.confirm', 'job_orders.create', 'job_orders.assign', 'job_orders.decision', 'job_orders.parts_issue', 'job_orders.cancel', 'inventory.count_post')"
+    Check ([int]$nCount -gt 5 -and $self -eq '0' -and $outside -eq '0') "notifications created for the flows ($nCount); never to the person who did it; never outside the branch (except the people involved)"
+    Nav "$Base/pages/dashboard.php"
+    $badge = Eval "Number(document.getElementById('notifBadge').hidden ? 0 : document.getElementById('notifBadge').textContent.replace('+', ''))"
+    [void](Eval "document.getElementById('notifBell').click()")
+    WaitFor "document.querySelectorAll('#notifList .notif-item').length > 0 || !document.getElementById('notifState').hidden && !/^Loading/.test(document.getElementById('notifState').textContent)" 'notification panel loaded'
+    $items = Eval "document.querySelectorAll('#notifList .notif-item').length"
+    Check ([int]$badge -gt 0 -and [int]$items -gt 0 -and (Eval "!document.getElementById('notifPanel').hidden && !!document.querySelector('#notifList .notif-item strong')")) "bell: $badge unread; panel lists $items notifications (document no. in bold)"
+    Shot '54-notifications'
+    $first = Eval "document.querySelector('#notifList .notif-item.is-unread').dataset.notification"
+    Submit "document.querySelector('#notifList .notif-item.is-unread').click()" 'open a notification'
+    $after = Sql "SELECT COUNT(*) FROM notification_recipients WHERE user_id = 1 AND read_at IS NULL"
+    Check ((Sql "SELECT read_at IS NOT NULL FROM notification_recipients WHERE user_id = 1 AND notification_id = $first") -eq '1' -and [int]$after -eq [int]$badge - 1 -and (Eval "!location.pathname.endsWith('/dashboard.php')")) "opening a notification marks it read and opens its document ($(Eval 'location.pathname'))"
+    $r = Eval "fetch('$Base/api/notifications/read-all.php', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name=csrf-token]').content}, body: '{}'}).then(r => r.json()).then(d => d.ok + ':' + d.unread)"
+    Check ($r -eq 'true:0' -and (Sql 'SELECT COUNT(*) FROM notification_recipients WHERE user_id = 1 AND read_at IS NULL') -eq '0') "mark all read ($r)"
+    Nav "$Base/pages/notifications.php?filter=unread"
+    Check ((Eval "document.querySelectorAll('#notifPageList .notif-item').length") -eq 0 -and (Eval "document.querySelector('.notif-empty') !== null")) 'notifications page: nothing unread after mark all read'
+
+    # Dashboard: money position, sales pace + target, coming up, sales mix, stock health, service, people
+    [void](Sql 'UPDATE branches SET monthly_target = 1000000 WHERE id = 1')
+    Nav "$Base/pages/dashboard.php"
+    $sections = Eval "['dashMoney','dashReceivable','dashPayable','dashChecks','dashCollected','dashPace','dashTarget','dashUpcoming','dashTopItems','dashToday2','dashSlow','dashStockCat','dashService','dashCustomers','dashNotes'].filter(id => !document.getElementById(id)).join(',')"
+    Check ($sections -eq '' -and (Eval "document.querySelectorAll('#dashReceivable .dash-aging-legend li').length") -eq 5) "dashboard: every new section is there (missing: '$sections'), receivables aging in 5 buckets"
+    Check ((Eval "document.querySelector('.topbar').scrollWidth <= document.querySelector('.topbar').clientWidth + 1 && document.documentElement.scrollWidth <= window.innerWidth")) 'topbar fits at 1536px (bell + logout visible, no page scroll)'
+    Shot '55-dashboard-more'
+    [void](Sql 'UPDATE branches SET monthly_target = NULL WHERE id = 1')
+    Logout
+    Login 'cashier' 'cashier123' 'pos.php'
+    Check ((Status 'pages/dashboard.php') -eq 403) 'cashier: no dashboard (money position stays with admins)'
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
     Logout
     Login 'cashier' 'cashier123' 'pos.php'
     $st = "$(Status "pages/attachment.php?id=$attPdf"),$(Status 'pages/buying.php'),$(Status 'pages/selling.php'),$(Status "pages/po-view.php?id=$poA")"

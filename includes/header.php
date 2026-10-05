@@ -104,6 +104,38 @@ $hdrSearch = Auth::can('pos.access') ? ['pages/pos.php', 'q'] : (Auth::can('inve
         </div>
     </div>
 
+    <?php $notifUnread = Notifications::unreadCount((int) $user['id']); ?>
+    <div class="notif" id="notif" data-icons="<?= e(asset('img/icons.svg')) ?>">
+        <button type="button" class="notif__bell" id="notifBell" aria-haspopup="true" aria-expanded="false" aria-controls="notifPanel"
+                aria-label="Notifications<?= $notifUnread > 0 ? ', ' . $notifUnread . ' unread' : '' ?>" title="Notifications">
+            <?= icon('bell') ?>
+            <span class="notif__badge" id="notifBadge"<?= $notifUnread > 0 ? '' : ' hidden' ?>><?= $notifUnread > 99 ? '99+' : $notifUnread ?></span>
+        </button>
+        <div class="notif__panel" id="notifPanel" role="dialog" aria-label="Notifications" hidden>
+            <div class="notif__head">
+                <strong>Notifications</strong>
+                <button type="button" class="notif__markall" id="notifMarkAll"><?= icon('check') ?> Mark all read</button>
+            </div>
+            <div class="notif-tabs notif-tabs--panel" role="tablist">
+                <button type="button" class="notif-tab is-active" data-notif-filter="" role="tab" aria-selected="true">All</button>
+                <button type="button" class="notif-tab" data-notif-filter="unread" role="tab" aria-selected="false">Unread</button>
+            </div>
+            <div class="notif__scroll" id="notifScroll">
+                <p class="notif-empty" id="notifState">Loading…</p>
+                <ul class="notif-list" id="notifList"></ul>
+            </div>
+            <a class="notif__all" href="<?= e(url('pages/notifications.php')) ?>">See all notifications</a>
+        </div>
+        <template id="notifGroupTpl"><li class="notif-group"></li></template>
+        <template id="notifItemTpl">
+            <li><a class="notif-item">
+                <span class="notif-icon"></span>
+                <span class="notif-body"><span class="notif-text"></span><small class="notif-meta"></small></span>
+                <span class="notif-dot" aria-label="Unread"></span>
+            </a></li>
+        </template>
+    </div>
+
     <details class="user-menu">
         <summary class="user-menu__trigger">
             <span class="avatar"><?= icon('user') ?></span>
@@ -134,7 +166,7 @@ $hdrSearch = Auth::can('pos.access') ? ['pages/pos.php', 'q'] : (Auth::can('inve
 
     <form class="topbar__logout" action="<?= e(url('logout.php')) ?>" method="post">
         <?= Csrf::field() ?>
-        <button type="submit" class="btn-logout"><?= icon('logout') ?><span>Logout</span></button>
+        <button type="submit" class="btn-logout" aria-label="Logout" title="Logout"><?= icon('logout') ?><span>Logout</span></button>
     </form>
 </header>
 
