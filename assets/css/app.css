@@ -1169,3 +1169,30 @@ textarea.form-input { resize: vertical; min-height: 84px; }
 .doc-chain__doc .badge { font-size: 11px; }
 .doc-chain__stage.is-empty .doc-chain__label { opacity: .7; }
 @media print { .doc-chain { display: none !important; } }
+
+/* ---------- Collapsible sidebar (desktop > 992px) ----------
+   The topbar menu button toggles body.sidebar-collapsed (icon rail; app.js + execom_sidebar cookie, read by
+   header.php so the page renders collapsed). The content area is flex: it widens on its own. Tablet / mobile
+   keep the slide-in menu (rules in the max-width: 992px block above). */
+@media (min-width: 993px) {
+    :root { --sidebar-rail: 72px; }
+    .topbar__toggle { display: inline-flex; flex-shrink: 0; margin-right: -6px; transition: background-color .15s; }
+    .topbar__toggle:hover { background: rgba(255, 255, 255, .16); }
+    .brand { min-width: calc(var(--sidebar-w) - 66px); padding-left: 0; }
+    .sidebar { transition: width .18s ease, padding .18s ease; }
+    .nav-link span, .scan-card span, .scan-card kbd, .sidebar__footer, .nav-group > * { transition: opacity .12s ease; }
+
+    body.sidebar-collapsed .sidebar { width: var(--sidebar-rail); padding-left: 10px; padding-right: 10px; overflow-x: hidden; }
+    body.sidebar-collapsed .nav-link { justify-content: center; gap: 0; padding: 0; }
+    body.sidebar-collapsed .nav-link span { width: 0; overflow: hidden; white-space: nowrap; opacity: 0; }
+    /* Section headings become thin dividers */
+    body.sidebar-collapsed .nav-group { height: 1px; margin: 10px 8px; padding: 0; overflow: hidden; background: rgba(255, 255, 255, .14); pointer-events: none; }
+    body.sidebar-collapsed .nav-group > * { opacity: 0; }
+    body.sidebar-collapsed .scan-card { justify-content: center; padding: 10px 0; }
+    body.sidebar-collapsed .scan-card span, body.sidebar-collapsed .scan-card kbd { display: none; }
+    body.sidebar-collapsed .scan-card .icon { width: 26px; height: 26px; }
+    body.sidebar-collapsed .sidebar__footer { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .sidebar, .nav-link span, .scan-card span, .sidebar__footer, .nav-group > * { transition: none !important; }
+}

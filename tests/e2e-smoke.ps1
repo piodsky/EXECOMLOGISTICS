@@ -258,6 +258,13 @@ try {
     Login 'cashier' 'cashier123'
     WaitFor "document.querySelectorAll('.product-card').length > 0" 'products loaded'
     Check ((Eval "document.querySelectorAll('.product-card').length") -eq 12) 'grid shows 12 products'
+    Check ((Eval "![...document.querySelectorAll('.product-card')].some(c => c.textContent.includes(String.fromCharCode(0x20B1))) && !document.getElementById('sumValue') && /^\d+$/.test(document.getElementById('sumLow').textContent)")) "POS: no prices on the product cards, no stock value; Low Stock $(Text '#sumLow')"
+    [void](Eval "document.getElementById('lowStockBtn').click()")
+    $low = Eval "(() => { const d = document.getElementById('lowDialog'); const rows = document.querySelectorAll('#lowBody tr').length; const ok = d.open && rows === Number(document.getElementById('sumLow').textContent) && (rows > 0 || !document.getElementById('lowEmpty').hidden) && !d.textContent.includes(String.fromCharCode(0x20B1)); d.close(); return ok + ':' + rows; })()"
+    Check ($low -like 'true:*') "POS: Low Stock opens the list of low items, no prices ($low)"
+    [void](Eval "document.getElementById('allItemsBtn').click()")
+    $all = Eval "(() => { const d = document.getElementById('lowDialog'); const n = document.querySelectorAll('#lowBody tr').length; const s = document.getElementById('lowSearch'); s.value = 'mouse'; s.dispatchEvent(new Event('input')); const shown = [...document.querySelectorAll('#lowBody tr')].filter(r => !r.hidden).length; const ok = d.open && n === Number(document.getElementById('sumItems').textContent) && shown === 1 && !d.textContent.includes(String.fromCharCode(0x20B1)); d.close(); return ok + ':' + n + ':' + shown; })()"
+    Check ($all -like 'true:*') "POS: Total Items opens every item with its stock, filter works, no prices ($all)"
     WaitFor "[...document.querySelectorAll('.product-card img')].every(i => i.complete && i.naturalWidth > 0)" 'images'
     Check $true 'all product images load'
     Check ((Eval "[...document.querySelectorAll('.tab')].map(t => t.textContent.trim()).join('|')") -eq 'All Items|Laptops & Computers|Peripherals|Accessories|Network|Office Supplies') 'category tabs match mockup'
@@ -1870,6 +1877,29 @@ try {
     Shot '53-selling-overview'
     $groups = Eval "[...document.querySelectorAll('.sidebar__nav .nav-group')].map(g => g.firstElementChild.textContent.trim()).join(',')"
     Check ($groups -eq 'Selling,Service,Buying,Stock,Admin') "sidebar sections ($groups)"
+
+    # Collapsible sidebar: desktop icon rail (remembered in a cookie, rendered by the server), mobile slide-in
+    Size 1536 1024
+    $w0 = Eval "Math.round(document.getElementById('sidebar').getBoundingClientRect().width)"
+    $c0 = Eval "Math.round(document.getElementById('main').getBoundingClientRect().width)"
+    [void](Eval "document.querySelector('.topbar__toggle').click()")
+    Start-Sleep -Milliseconds 400
+    $w1 = Eval "Math.round(document.getElementById('sidebar').getBoundingClientRect().width)"
+    $c1 = Eval "Math.round(document.getElementById('main').getBoundingClientRect().width)"
+    $icons = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].every(a => a.querySelector('svg').getBoundingClientRect().width > 0 && a.querySelector('span').getBoundingClientRect().width === 0)"
+    Check ($w0 -eq 218 -and $w1 -eq 72 -and $c1 -gt $c0 -and $icons -and (Eval "document.cookie.includes('execom_sidebar=collapsed') && document.querySelector('.topbar__toggle').getAttribute('aria-expanded') === 'false'")) "sidebar collapses to icons ($w0 -> $w1 px), content widens ($c0 -> $c1 px), state saved"
+    Nav "$Base/pages/selling.php"
+    Check ((Eval "document.body.classList.contains('sidebar-collapsed') && Math.round(document.getElementById('sidebar').getBoundingClientRect().width) === 72")) 'collapsed sidebar remembered on the next page (server-rendered)'
+    [void](Eval "document.querySelector('.topbar__toggle').click()")
+    Start-Sleep -Milliseconds 400
+    Check ((Eval "!document.body.classList.contains('sidebar-collapsed') && !document.cookie.includes('execom_sidebar=collapsed') && Math.round(document.getElementById('sidebar').getBoundingClientRect().width) === 218")) 'sidebar expanded again (labels back, cookie cleared)'
+    Size 900 900
+    [void](Eval "document.querySelector('.topbar__toggle').click()")
+    Start-Sleep -Milliseconds 300
+    Check ((Eval "document.body.classList.contains('sidebar-open') && !document.body.classList.contains('sidebar-collapsed') && document.querySelector('.topbar__toggle').getAttribute('aria-expanded') === 'true'")) 'mobile: the menu button opens the slide-in sidebar'
+    [void](Eval "document.querySelector('.sidebar-backdrop').click()")
+    Check ((Eval "!document.body.classList.contains('sidebar-open')")) 'mobile: backdrop closes it'
+    Size 1536 1024
     Logout
     Login 'cashier' 'cashier123' 'pos.php'
     $st = "$(Status "pages/attachment.php?id=$attPdf"),$(Status 'pages/buying.php'),$(Status 'pages/selling.php'),$(Status "pages/po-view.php?id=$poA")"

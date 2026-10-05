@@ -34,10 +34,11 @@ $hdrSearch = Auth::can('pos.access') ? ['pages/pos.php', 'q'] : (Auth::can('inve
         <link rel="stylesheet" href="<?= e(asset($style)) ?>">
     <?php endforeach; ?>
 </head>
-<body data-base-url="<?= e(base_path()) ?>" data-page="<?= e($activeKey) ?>"<?= Auth::can('pos.access') ? ' data-pos="1"' : '' ?>>
+<?php $sidebarCollapsed = ($_COOKIE['execom_sidebar'] ?? '') === 'collapsed'; // desktop icon-only sidebar (app.js sets the cookie) ?>
+<body data-base-url="<?= e(base_path()) ?>" data-page="<?= e($activeKey) ?>"<?= Auth::can('pos.access') ? ' data-pos="1"' : '' ?><?= $sidebarCollapsed ? ' class="sidebar-collapsed"' : '' ?>>
 
 <header class="topbar">
-    <button class="topbar__toggle" type="button" data-sidebar-toggle aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">
+    <button class="topbar__toggle" type="button" data-sidebar-toggle aria-label="<?= $sidebarCollapsed ? 'Expand menu' : 'Collapse menu' ?>" aria-controls="sidebar" aria-expanded="<?= $sidebarCollapsed ? 'false' : 'true' ?>" title="Menu">
         <?= icon('menu') ?>
     </button>
 

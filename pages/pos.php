@@ -54,14 +54,14 @@ require ROOT_PATH . '/includes/header.php';
         </div>
 
         <footer class="pos-summary">
-            <div>
+            <button type="button" class="pos-summary__btn" id="allItemsBtn" aria-haspopup="dialog" title="Show every item with its stock">
                 <?= icon('barcode') ?>
-                <span><small>Total Items</small><strong id="sumItems">0</strong></span>
-            </div>
-            <div>
-                <?= icon('box') ?>
-                <span><small>Total Stock Value</small><strong id="sumValue"><?= e(money(0)) ?></strong></span>
-            </div>
+                <span><small>Total Items <em>View</em></small><strong id="sumItems">0</strong></span>
+            </button>
+            <button type="button" class="pos-summary__btn" id="lowStockBtn" aria-haspopup="dialog" title="Show the items at or below their reorder level">
+                <?= icon('alert') ?>
+                <span><small>Low Stock <em>View</em></small><strong id="sumLow">0</strong></span>
+            </button>
             <div>
                 <?= icon('clock') ?>
                 <span><small>Last Updated</small><strong id="sumUpdated">—</strong></span>
@@ -175,7 +175,6 @@ require ROOT_PATH . '/includes/header.php';
         <span class="product-card__incart" hidden></span>
         <span class="product-card__name"></span>
         <span class="product-card__code"></span>
-        <span class="product-card__price"></span>
         <span class="product-card__foot">
             <span class="stock-pill"></span>
             <span class="product-card__add"><?= icon('plus') ?></span>
@@ -287,6 +286,43 @@ require ROOT_PATH . '/includes/header.php';
 </dialog>
 
 <!-- ============ Sale completed dialog ============ -->
+<!-- ============ Low stock list (no prices; filled by pos.js from the loaded products) ============ -->
+<dialog class="modal modal--low" id="lowDialog" aria-labelledby="lowTitle">
+    <div class="modal__body">
+        <header class="modal__head">
+            <h2 id="lowTitle">Low Stock</h2>
+            <button type="button" class="modal__close" data-close aria-label="Close"><?= icon('x') ?></button>
+        </header>
+        <p class="muted" id="lowIntro" data-low="Items at or below their reorder level here (<?= e(Branch::label()) ?>), lowest first."
+           data-all="Every item sold here (<?= e(Branch::label()) ?>) with its stock, A to Z."></p>
+        <input class="form-input low-search" type="search" id="lowSearch" placeholder="Filter by item name or code" aria-label="Filter items" hidden>
+        <div class="low-list">
+            <table class="low-table" id="lowTable">
+                <thead><tr><th>Item</th><th class="num">In stock</th><th class="num">Reorder at</th></tr></thead>
+                <tbody id="lowBody"></tbody>
+            </table>
+            <p class="muted low-empty" id="lowEmpty" hidden>No low-stock items. Everything is above its reorder level.</p>
+        </div>
+        <footer class="modal__foot modal__foot--split">
+            <?php if (Auth::can('inventory.view')): ?>
+                <a class="btn btn--light" id="lowInventory" href="<?= e(url('pages/inventory.php?status=low')) ?>" data-low="<?= e(url('pages/inventory.php?status=low')) ?>" data-all="<?= e(url('pages/inventory.php')) ?>"><?= icon('box') ?> Open in Inventory</a>
+            <?php endif; ?>
+            <?php if (Auth::can('purchasing.request')): ?>
+                <a class="btn btn--primary" href="<?= e(url('pages/pr-form.php')) ?>"><?= icon('cart') ?> Request Purchase</a>
+            <?php else: ?>
+                <button type="button" class="btn btn--primary" data-close>Close</button>
+            <?php endif; ?>
+        </footer>
+    </div>
+</dialog>
+<template id="lowRowTpl">
+    <tr>
+        <td><strong class="low-name"></strong><small class="muted low-code"></small></td>
+        <td class="num"><span class="stock-pill low-stock"></span></td>
+        <td class="num low-reorder"></td>
+    </tr>
+</template>
+
 <dialog class="modal" id="doneDialog" aria-labelledby="doneTitle">
     <div class="modal__body done">
         <span class="done__icon"><?= icon('check') ?></span>

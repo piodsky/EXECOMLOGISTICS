@@ -41,7 +41,7 @@
         tTotal: $('tTotal'),
         saleNo: $('saleNo'),
         sumItems: $('sumItems'),
-        sumValue: $('sumValue'),
+        sumLow: $('sumLow'),
         sumUpdated: $('sumUpdated'),
         payDialog: $('payDialog'),
         payForm: $('payForm'),
@@ -250,7 +250,7 @@
             applyPricing();
 
             els.sumItems.textContent = String(state.products.length);
-            els.sumValue.textContent = fmt(state.products.reduce((sum, p) => sum + p.price_cents * p.stock, 0));
+            els.sumLow.textContent = String(lowStock().length); // no money on the product side (owner)
             els.sumUpdated.textContent = new Date().toLocaleString('en-US', {
                 month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
             });
@@ -337,7 +337,6 @@
 
         card.querySelector('.product-card__name').textContent = p.name;
         card.querySelector('.product-card__code').textContent = p.code;
-        card.querySelector('.product-card__price').textContent = fmt(p.price_cents);
 
         const pill = card.querySelector('.stock-pill');
         if (p.stock <= 0) {
@@ -360,7 +359,7 @@
         }
         if (index === state.highlight) card.classList.add('is-highlight');
 
-        card.setAttribute('aria-label', `${p.name}, ${fmt(p.price_cents)}, ${p.stock} in stock`);
+        card.setAttribute('aria-label', `${p.name}, ${p.stock} in stock`);
         return card;
     }
 
@@ -1203,6 +1202,62 @@
     // Done dialog
     $('donePrint').addEventListener('click', () => { if (state.lastSale) printReceipt(state.lastSale.id); });
     $('doneNew').addEventListener('click', () => els.doneDialog.close());
+
+    // ---- Low stock list (summary bar): items at / below their reorder level, lowest first, no prices ----
+    function lowStock() {
+        return state.products.filter((p) => p.stock <= p.reorder_level)
+            .sort((a, b) => a.stock - b.stock || a.name.localeCompare(b.name));
+    }
+    // Same window for "Total Items" (every item, A to Z, with a filter box) and "Low Stock".
+    const lowDialog = $('lowDialog');
+    const openStockList = (mode) => {
+        const all = mode === 'all';
+        const body = $('lowBody');
+        const tpl = $('lowRowTpl');
+        const search = $('lowSearch');
+        const items = all ? [...state.products].sort((a, b) => a.name.localeCompare(b.name)) : lowStock();
+        $('lowTitle').textContent = all ? `All Items (${items.length})` : 'Low Stock';
+        $('lowIntro').textContent = $('lowIntro').dataset[mode];
+        const inv = $('lowInventory');
+        if (inv) inv.href = inv.dataset[mode];
+        body.replaceChildren();
+        items.forEach((p) => {
+            const row = tpl.content.firstElementChild.cloneNode(true);
+            row.dataset.find = `${p.name} ${p.code}`.toLowerCase();
+            row.querySelector('.low-name').textContent = p.name;
+            row.querySelector('.low-code').textContent = p.code;
+            const pill = row.querySelector('.low-stock');
+            pill.textContent = p.stock > 0 ? String(p.stock) : 'Out of stock';
+            if (p.stock <= 0) pill.classList.add('is-out');
+            else if (p.stock <= p.reorder_level) pill.classList.add('is-low');
+            row.querySelector('.low-reorder').textContent = String(p.reorder_level);
+            body.appendChild(row);
+        });
+        search.hidden = !all;
+        search.value = '';
+        $('lowTable').hidden = items.length === 0;
+        $('lowEmpty').textContent = all ? 'No items to show.' : 'No low-stock items. Everything is above its reorder level.';
+        $('lowEmpty').hidden = items.length > 0;
+        lowDialog.showModal();
+        if (all) search.focus();
+    };
+    if (lowDialog) {
+        $('lowStockBtn')?.addEventListener('click', () => openStockList('low'));
+        $('allItemsBtn')?.addEventListener('click', () => openStockList('all'));
+        $('lowSearch').addEventListener('input', (e) => {
+            const q = e.target.value.trim().toLowerCase();
+            let shown = 0;
+            $('lowBody').querySelectorAll('tr').forEach((tr) => {
+                const hit = q === '' || tr.dataset.find.includes(q);
+                tr.hidden = !hit;
+                if (hit) shown++;
+            });
+            $('lowEmpty').textContent = 'No item matches that filter.';
+            $('lowEmpty').hidden = shown > 0;
+        });
+        // Typing in the filter must not trigger the POS scanner / shortcut handling.
+        $('lowSearch').addEventListener('keydown', (e) => e.stopPropagation());
+    }
     els.doneDialog.addEventListener('close', () => focusSearch());
 
     // Serial picker dialog
