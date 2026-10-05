@@ -68,6 +68,8 @@ require ROOT_PATH . '/includes/header.php';
     <div class="alert alert--warning doc-note" role="note"><?= icon('clock') ?><span>Overdue since <?= e($day($i['due_date'])) ?>.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('ap', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head"><h2><?= icon('wallet') ?> Payments</h2></header>

@@ -43,7 +43,9 @@ if (is_post()) {
         if ($e->status === 403 || $e->status === 404) {
             throw $e;
         }
-        flash_old(array_filter($_POST, 'is_string'));
+        // Checkbox arrays (job types, helpers, accessories / condition ticks) are kept as newline lists.
+        flash_old(array_map(static fn ($v): string => is_array($v) ? implode("\n", array_filter($v, 'is_string')) : (string) $v,
+            array_filter($_POST, static fn ($v): bool => is_string($v) || is_array($v))));
         if (is_array($e->details['errors'] ?? null)) {
             flash_errors($e->details['errors']);
             flash('error', count($e->details['errors']) > 1 ? 'Please fix the highlighted fields.' : $e->getMessage());
@@ -65,8 +67,39 @@ if ($src !== null && $src['customer_id'] !== null && !in_array((int) $src['custo
     $customers[] = ['id' => $src['customer_id'], 'name' => $src['customer_name'] . ' (inactive)', 'phone' => $src['customer_phone']];
 }
 $deviceTypes = MasterData::options('device-types', $job !== null && $job['device_type_id'] !== null ? (int) $job['device_type_id'] : null);
-$jobTypes    = MasterData::options('job-types', $job !== null && $job['job_type_id'] !== null ? (int) $job['job_type_id'] : null);
 $technicians = $job === null && $concrete && Auth::can('job_orders.assign') ? JobOrders::technicians((int) Branch::current()) : [];
+
+// Checklists (Master Data). Job types: active ones + the job's current ones (even if deactivated since).
+$jobTypes = array_column(MasterData::options('job-types'), 'name', 'id');
+foreach ($job['job_types'] ?? [] as $t) {
+    $jobTypes[$t['id']] ??= $t['name'];
+}
+$accessoryNames = array_column(MasterData::options('accessories'), 'name');
+$conditionNames = array_column(MasterData::options('conditions'), 'name');
+$problemNames   = array_column(MasterData::options('problems'), 'name');
+$oldList = static fn (string $k): array => has_old() ? array_values(array_filter(explode("\n", old($k)), static fn ($v) => $v !== '')) : [];
+// [ticked names, other text] of a checklist field: after a failed submit from old input, else from the job being edited.
+$picks = static function (string $field, array $names) use ($job, $oldList): array {
+    if (has_old()) {
+        return [$oldList("{$field}_pick"), old("{$field}_other")];
+    }
+    return JobOrders::splitPicks($job[$field] ?? null, $names);
+};
+[$accTicked, $accOther]   = $picks('accessories', $accessoryNames);
+[$condTicked, $condOther] = $picks('device_condition', $conditionNames);
+$typeTicked   = array_map('intval', has_old() ? $oldList('job_type_ids') : ($job['job_type_ids'] ?? []));
+$helperTicked = array_map('intval', $oldList('helper_ids'));
+
+/** Checkbox group: $name[] values => labels, $checked values, compact grid. */
+$checks = static function (string $name, array $options, array $checked, string $id): void {
+    ?>
+    <div class="jo-checks" id="<?= e($id) ?>" role="group">
+        <?php foreach ($options as $value => $label): ?>
+            <label class="jo-check"><input type="checkbox" name="<?= e($name) ?>[]" value="<?= e((string) $value) ?>"<?= in_array($value, $checked, true) ? ' checked' : '' ?>> <span><?= e($label) ?></span></label>
+        <?php endforeach; ?>
+    </div>
+    <?php
+};
 
 $select = static function (string $name, array $options, string $value, string $placeholder): void {
     ?>
@@ -166,16 +199,18 @@ require ROOT_PATH . '/includes/header.php';
                     <input class="form-input" name="model" maxlength="80" value="<?= e($val('model')) ?>"<?= invalid('model') ?>>
                     <?= field_error('model') ?>
                 </label>
-                <label class="form-field">
-                    <span class="form-label">Accessories left with the device</span>
-                    <input class="form-input" name="accessories" maxlength="255" value="<?= e($val('accessories')) ?>" placeholder="e.g. charger, bag"<?= invalid('accessories') ?>>
+                <fieldset class="form-field form-field--full jo-fieldset">
+                    <legend class="form-label">Accessories left with the device <small class="muted">(tick all that apply)</small></legend>
+                    <?php $checks('accessories_pick', array_combine($accessoryNames, $accessoryNames) ?: [], $accTicked, 'accessoryChecks'); ?>
+                    <input class="form-input jo-other" name="accessories_other" maxlength="300" value="<?= e($accOther) ?>" placeholder="Other accessories (type here)" aria-label="Other accessories"<?= invalid('accessories') ?>>
                     <?= field_error('accessories') ?>
-                </label>
-                <label class="form-field">
-                    <span class="form-label">Condition on arrival</span>
-                    <input class="form-input" name="device_condition" maxlength="255" value="<?= e($val('device_condition')) ?>" placeholder="e.g. scratches on the lid"<?= invalid('device_condition') ?>>
+                </fieldset>
+                <fieldset class="form-field form-field--full jo-fieldset">
+                    <legend class="form-label">Condition on arrival <small class="muted">(tick all that apply)</small></legend>
+                    <?php $checks('device_condition_pick', array_combine($conditionNames, $conditionNames) ?: [], $condTicked, 'conditionChecks'); ?>
+                    <input class="form-input jo-other" name="device_condition_other" maxlength="300" value="<?= e($condOther) ?>" placeholder="Other details, e.g. scratch on the lid, upper left" aria-label="Other condition details"<?= invalid('device_condition') ?>>
                     <?= field_error('device_condition') ?>
-                </label>
+                </fieldset>
             </div>
             <p class="form-hint jo-hint"><?= icon('lock') ?> Never write device passwords or PINs here. Ask the customer to be present or to remove the password.</p>
         </section>
@@ -183,16 +218,24 @@ require ROOT_PATH . '/includes/header.php';
         <section class="card card--pad">
             <h2 class="card__title">Job</h2>
             <div class="form-grid">
-                <label class="form-field form-field--full">
-                    <span class="form-label">Problem reported *</span>
-                    <textarea class="form-input" name="problem" maxlength="1000" rows="3" required placeholder="What the customer says is wrong"<?= invalid('problem') ?>><?= e($val('problem')) ?></textarea>
+                <div class="form-field form-field--full">
+                    <span class="form-label" id="problemLabel">Problem reported * <small class="muted">(tick the common problems, then add details)</small></span>
+                    <?php if ($problemNames): ?>
+                        <div class="jo-checks jo-checks--picks" id="problemPicks" role="group" aria-labelledby="problemLabel">
+                            <?php foreach ($problemNames as $p): ?>
+                                <label class="jo-check"><input type="checkbox" data-problem-pick="<?= e($p) ?>"> <span><?= e($p) ?></span></label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                    <textarea class="form-input" name="problem" id="jobProblem" maxlength="1000" rows="4" required placeholder="What the customer says is wrong" aria-labelledby="problemLabel"<?= invalid('problem') ?>><?= e($val('problem')) ?></textarea>
                     <?= field_error('problem') ?>
-                </label>
-                <label class="form-field">
-                    <span class="form-label">Job type</span>
-                    <?php $select('job_type_id', array_column($jobTypes, 'name', 'id'), $val('job_type_id'), 'Not set'); ?>
-                    <?= field_error('job_type_id') ?>
-                </label>
+                </div>
+                <fieldset class="form-field form-field--full jo-fieldset">
+                    <legend class="form-label">Job type <small class="muted">(one or more)</small></legend>
+                    <input type="hidden" name="job_type_ids[]" value="">
+                    <?php $checks('job_type_ids', $jobTypes, $typeTicked, 'jobTypeChecks'); ?>
+                    <?= field_error('job_type_ids') ?>
+                </fieldset>
                 <label class="form-field">
                     <span class="form-label">Priority</span>
                     <?php $select('priority', JobOrders::PRIORITIES, $val('priority', 'normal'), ''); ?>
@@ -210,8 +253,8 @@ require ROOT_PATH . '/includes/header.php';
                 </label>
                 <?php if ($technicians): ?>
                     <label class="form-field">
-                        <span class="form-label">Assign to</span>
-                        <select class="form-input" name="technician_id"<?= invalid('technician_id') ?>>
+                        <span class="form-label">Assign to (lead technician)</span>
+                        <select class="form-input" name="technician_id" id="leadTech" data-lead-select="helperChecks"<?= invalid('technician_id') ?>>
                             <option value="">Leave unassigned</option>
                             <?php foreach ($technicians as $t): ?>
                                 <option value="<?= (int) $t['id'] ?>"<?= old('technician_id') === (string) $t['id'] ? ' selected' : '' ?>><?= e($t['full_name']) ?> · <?= (int) $t['open_jobs'] ?> open</option>
@@ -219,6 +262,14 @@ require ROOT_PATH . '/includes/header.php';
                         </select>
                         <?= field_error('technician_id') ?>
                     </label>
+                    <?php if (count($technicians) > 1): ?>
+                        <fieldset class="form-field form-field--full jo-fieldset">
+                            <legend class="form-label">Helpers <small class="muted">(optional; they can also work on the job)</small></legend>
+                            <?php $checks('helper_ids', array_combine(array_map('intval', array_column($technicians, 'id')), array_map(
+                                static fn (array $t): string => $t['full_name'] . ' · ' . (int) $t['open_jobs'] . ' open', $technicians)) ?: [], $helperTicked, 'helperChecks'); ?>
+                            <?= field_error('helper_ids') ?>
+                        </fieldset>
+                    <?php endif; ?>
                 <?php endif; ?>
                 <label class="form-field form-field--full">
                     <span class="form-label">Remarks <small class="muted">(optional, printed on the ticket)</small></span>

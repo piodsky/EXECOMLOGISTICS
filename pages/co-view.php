@@ -167,6 +167,8 @@ require ROOT_PATH . '/includes/header.php';
             Receive or transfer stock in before confirming.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('co', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head">
@@ -266,22 +268,10 @@ require ROOT_PATH . '/includes/header.php';
             </section>
         <?php endif; ?>
 
-        <?php if ($o['bills']): ?>
-            <section class="card card--pad" id="coBills">
-                <h2 class="card__title">Bills</h2>
-                <ul class="pu-doc-list">
-                    <?php foreach ($o['bills'] as $b): ?>
-                        <li class="<?= $b['status'] === 'cancelled' ? 'is-void' : '' ?>">
-                            <span>
-                                <?php if (Auth::can('sales.view')): ?><a class="doc-no" href="<?= e(url('pages/sale-view.php?id=' . (int) $b['id'])) ?>">No. <?= e($b['sale_no']) ?></a><?php else: ?><span class="doc-no">No. <?= e($b['sale_no']) ?></span><?php endif; ?>
-                                <small class="muted block"><?= e(money($b['total'])) ?> · <?= e(Sales::ALL_PAYMENT_TYPES[$b['payment_type']] ?? $b['payment_type']) ?></small>
-                            </span>
-                            <a class="btn btn--light btn--sm" href="<?= e(url('pages/bill-print.php?id=' . (int) $b['id'])) ?>" target="_blank" rel="noopener"><?= icon('printer') ?> Statement</a>
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
-            </section>
+        <?php if ($tracking): ?>
+            <?php $payCard = PaymentStatus::orderCard($id); require ROOT_PATH . '/includes/payment-card.php'; ?>
         <?php endif; ?>
+        <?php [$attType, $attId, $attReturn] = ['customer_order', $id, $self]; require ROOT_PATH . '/includes/attachments-card.php'; ?>
     </aside>
 </div>
 

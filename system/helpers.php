@@ -321,15 +321,18 @@ function menu_path(array $item): string
     return $item['url'];
 }
 
-/** App path of the first page the signed-in user can open (menu order), e.g. 'pages/pos.php'. */
+/** App path of the user's landing page: the openable menu item with the lowest 'home' (default 100), then menu order. */
 function home_path(): string
 {
+    $best = null;
+    $rank = PHP_INT_MAX;
     foreach (config('menu', []) as $item) {
-        if (can_open_menu($item)) {
-            return menu_path($item);
+        $r = (int) ($item['home'] ?? 100);
+        if ($r < $rank && can_open_menu($item)) {
+            [$best, $rank] = [$item, $r];
         }
     }
-    return 'pages/account.php';
+    return $best !== null ? menu_path($best) : 'pages/account.php';
 }
 
 function home_url(): string

@@ -96,6 +96,8 @@ require ROOT_PATH . '/includes/header.php';
     </div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('bill', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head">

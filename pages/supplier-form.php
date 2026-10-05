@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/../system/bootstrap.php';
-$page = require_page('master-data');
+$page = require_page('suppliers');
 Auth::requirePermission('suppliers.view');
 
 $canManage = Auth::can('suppliers.manage');

@@ -115,6 +115,8 @@ require ROOT_PATH . '/includes/header.php';
         <span>Everything approved is on a purchase order. Track the delivery on the purchase order.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('pr', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head">

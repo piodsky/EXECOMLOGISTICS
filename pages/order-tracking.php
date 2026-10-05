@@ -3,7 +3,8 @@
  * Customer Orders → Order Tracking: everything still moving, in one place.
  *   Outgoing: customer orders for confirmation / to deliver / to bill (delivery + billing progress, deadline).
  *   Incoming: PO Internal waiting for approval or for the supplier (only with PurchaseOrders::canView()).
- * Both in the current branch scope, most urgent (oldest deadline) first, max 100 each.
+ * Both in the current branch scope, most urgent (oldest deadline) first, max 100 each; then the completed orders /
+ * received POs that are not fully paid yet (Payment column = PaymentStatus; PO payment only with Payables::canView()).
  */
 declare(strict_types=1);
 
@@ -13,10 +14,24 @@ $page = require_page('customer-orders');
 $today = date('Y-m-d');
 $out   = CustomerOrders::search(['status' => 'active'], 100, 0);
 usort($out, static fn (array $a, array $b): int => [$a['due_date'] === null, $a['due_date']] <=> [$b['due_date'] === null, $b['due_date']]);
+$out = [...$out, ...CustomerOrders::search(['status' => 'completed', 'payment' => 'unpaid'], 100, 0)];
 $in = PurchaseOrders::canView() ? PurchaseOrders::search(['status' => 'active'], 100, 0) : null;
+$showPoPay = $in !== null && Payables::canView();
 if ($in !== null) {
     usort($in, static fn (array $a, array $b): int => [$a['expected_date'] === null, $a['expected_date']] <=> [$b['expected_date'] === null, $b['expected_date']]);
+    if ($showPoPay) {
+        foreach (['received', 'closed'] as $st) {
+            $in = [...$in, ...PurchaseOrders::search(['status' => $st, 'payment' => 'unpaid'], 100, 0)];
+        }
+    }
 }
+$payCell = static function (array $pay): string {
+    $html = $pay['key'] === 'none' ? '<span class="muted">—</span>' : '<span class="badge ' . e($pay['badge']) . '">' . e($pay['label']) . '</span>';
+    foreach ($pay['notes'] as $n) {
+        $html .= '<small>' . e($n) . '</small>';
+    }
+    return '<td class="pay-cell" data-payment="' . e($pay['key']) . '">' . $html . '</td>';
+};
 $showBranch = Branch::current() === Branch::ALL;
 $bar = static fn (int $done, int $all): string =>
     '<span class="pu-progress" aria-hidden="true"><svg viewBox="0 0 100 6" preserveAspectRatio="none"><rect class="pu-progress__track" width="100" height="6" rx="3"></rect>'
@@ -31,7 +46,7 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Customer Orders</h1>
-        <p class="muted">Order tracking: customer orders still to confirm, deliver or bill<?= $in !== null ? ', and purchase orders still coming from suppliers' : '' ?>.</p>
+        <p class="muted">Order tracking: customer orders still to confirm, deliver, bill or collect<?= $in !== null ? ', and purchase orders still coming from suppliers' : '' ?>.</p>
     </div>
     <div class="page-actions"><span class="badge badge--period badge--branch"><?= icon('store') ?> <?= e(Branch::label()) ?></span></div>
 </div>
@@ -42,7 +57,7 @@ require ROOT_PATH . '/includes/header.php';
     <header class="card__head"><h2><?= icon('truck') ?> Outgoing: customer orders</h2><span class="muted"><?= count($out) ?> active</span></header>
     <div class="table-wrap">
         <table class="table table--list pu-table">
-            <thead><tr><th>Order</th><th>Customer / PO</th><?php if ($showBranch): ?><th class="col-opt">Branch</th><?php endif; ?><th>Deadline</th><th>Delivered</th><th>Billed</th><th>Status</th></tr></thead>
+            <thead><tr><th>Order</th><th>Customer / PO</th><?php if ($showBranch): ?><th class="col-opt">Branch</th><?php endif; ?><th>Deadline</th><th>Delivered</th><th>Billed</th><th>Status</th><th>Payment</th></tr></thead>
             <tbody>
             <?php foreach ($out as $o): ?>
                 <?php $late = $o['due_date'] !== null && $o['due_date'] < $today && in_array($o['status'], CustomerOrders::OPEN, true); ?>
@@ -54,9 +69,10 @@ require ROOT_PATH . '/includes/header.php';
                     <td class="pu-progress-cell"><?= $bar((int) $o['qty_delivered'], (int) $o['total_qty']) ?><small><?= number_format((int) $o['qty_delivered']) ?> of <?= number_format((int) $o['total_qty']) ?></small></td>
                     <td class="pu-progress-cell"><?= $bar((int) $o['qty_billed'], (int) $o['total_qty']) ?><small><?= number_format((int) $o['qty_billed']) ?> of <?= number_format((int) $o['total_qty']) ?></small></td>
                     <td><span class="badge <?= e(CustomerOrders::BADGES[$o['status']] ?? '') ?>"><?= e(CustomerOrders::STATUSES[$o['status']] ?? $o['status']) ?></span></td>
+                    <?= $payCell(PaymentStatus::order($o)) ?>
                 </tr>
             <?php endforeach; ?>
-            <?php if (!$out): ?><tr><td colspan="<?= 6 + ($showBranch ? 1 : 0) ?>" class="empty">No active customer orders.</td></tr><?php endif; ?>
+            <?php if (!$out): ?><tr><td colspan="<?= 7 + ($showBranch ? 1 : 0) ?>" class="empty">No active customer orders.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>
@@ -67,7 +83,7 @@ require ROOT_PATH . '/includes/header.php';
         <header class="card__head"><h2><?= icon('cart') ?> Incoming: PO Internal (from suppliers)</h2><span class="muted"><?= count($in) ?> active</span></header>
         <div class="table-wrap">
             <table class="table table--list pu-table">
-                <thead><tr><th>PO</th><th>Supplier</th><?php if ($showBranch): ?><th class="col-opt">Branch</th><?php endif; ?><th>Expected</th><th>Received</th><th>Status</th></tr></thead>
+                <thead><tr><th>PO</th><th>Supplier</th><?php if ($showBranch): ?><th class="col-opt">Branch</th><?php endif; ?><th>Expected</th><th>Received</th><th>Status</th><?php if ($showPoPay): ?><th>Payment</th><?php endif; ?></tr></thead>
                 <tbody>
                 <?php foreach ($in as $p): ?>
                     <?php $late = $p['expected_date'] !== null && $p['expected_date'] < $today && in_array($p['status'], PurchaseOrders::OPEN, true); ?>
@@ -78,9 +94,10 @@ require ROOT_PATH . '/includes/header.php';
                         <td class="nowrap<?= $late ? ' text-danger' : '' ?>"><?= $p['expected_date'] !== null ? e(date('M j, Y', strtotime($p['expected_date']))) . ($late ? ' <small>(late)</small>' : '') : '<span class="muted">—</span>' ?></td>
                         <td class="pu-progress-cell"><?= $bar((int) $p['qty_received'], (int) $p['total_qty']) ?><small><?= number_format((int) $p['qty_received']) ?> of <?= number_format((int) $p['total_qty']) ?></small></td>
                         <td><span class="badge <?= e(PurchaseOrders::BADGES[$p['status']] ?? '') ?>"><?= e(PurchaseOrders::STATUSES[$p['status']] ?? $p['status']) ?></span></td>
+                        <?php if ($showPoPay): ?><?= $payCell(PaymentStatus::po($p)) ?><?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
-                <?php if (!$in): ?><tr><td colspan="<?= 5 + ($showBranch ? 1 : 0) ?>" class="empty">No purchase orders waiting.</td></tr><?php endif; ?>
+                <?php if (!$in): ?><tr><td colspan="<?= 5 + ($showBranch ? 1 : 0) + ($showPoPay ? 1 : 0) ?>" class="empty">No purchase orders waiting.</td></tr><?php endif; ?>
                 </tbody>
             </table>
         </div>

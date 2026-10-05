@@ -26,9 +26,9 @@ if (($_GET['export'] ?? '') === 'csv') {
     fputcsv($out, [$t['received'], $t['completed'], $t['released'], $t['cancelled'], $t['back_jobs'], $t['warranty'], $t['open'],
         $t['avg_days'] === null ? '' : number_format($t['avg_days'], 1, '.', ''), (int) $t['bills'], $t['revenue'], $t['parts'], $t['labor']]);
     fputcsv($out, []);
-    fputcsv($out, ['Technician', 'Open now', 'Completed', 'Avg days', 'Back-jobs', 'Labour billed']);
+    fputcsv($out, ['Technician', 'Open now', 'Completed (lead)', 'Helped', 'Avg days', 'Back-jobs', 'Labour billed']);
     foreach ($techs as $r) {
-        fputcsv($out, [csv_cell($r['name']), (int) $r['open_now'], (int) $r['completed'], $r['avg_days'] === null ? '' : number_format((float) $r['avg_days'], 1, '.', ''), (int) $r['back_jobs'], $r['labor']]);
+        fputcsv($out, [csv_cell($r['name']), (int) $r['open_now'], (int) $r['completed'], (int) $r['helped'], $r['avg_days'] === null ? '' : number_format((float) $r['avg_days'], 1, '.', ''), (int) $r['back_jobs'], $r['labor']]);
     }
     fclose($out);
     exit;
@@ -74,14 +74,14 @@ require ROOT_PATH . '/includes/header.php';
     <header class="card__head"><h2><?= icon('user') ?> Technicians</h2></header>
     <div class="table-wrap">
         <table class="table report-table" id="jobTechnicians">
-            <thead><tr><th>Technician</th><th class="num">Open now</th><th class="num">Completed</th><th class="num">Avg time</th><th class="num">Back-jobs</th><th class="num">Labour billed</th></tr></thead>
+            <thead><tr><th>Technician</th><th class="num">Open now</th><th class="num">Completed (lead)</th><th class="num">Helped</th><th class="num">Avg time</th><th class="num">Back-jobs</th><th class="num">Labour billed</th></tr></thead>
             <tbody>
             <?php foreach ($techs as $r): ?>
-                <tr data-tech="<?= e($r['name']) ?>"><td><?= e($r['name']) ?></td><td class="num"><?= (int) $r['open_now'] ?></td><td class="num"><?= (int) $r['completed'] ?></td>
+                <tr data-tech="<?= e($r['name']) ?>"><td><?= e($r['name']) ?></td><td class="num"><?= (int) $r['open_now'] ?></td><td class="num"><?= (int) $r['completed'] ?></td><td class="num"><?= (int) $r['helped'] ?></td>
                     <td class="num"><?= e($days($r['avg_days'])) ?></td><td class="num<?= (int) $r['back_jobs'] > 0 ? ' is-neg' : '' ?>"><?= (int) $r['back_jobs'] ?></td>
                     <td class="num"><?= e(money($r['labor'])) ?></td></tr>
             <?php endforeach; ?>
-            <?php if (!$techs): ?><tr><td colspan="6" class="empty">No jobs have been assigned yet.</td></tr><?php endif; ?>
+            <?php if (!$techs): ?><tr><td colspan="7" class="empty">No jobs have been assigned yet.</td></tr><?php endif; ?>
             </tbody>
         </table>
     </div>

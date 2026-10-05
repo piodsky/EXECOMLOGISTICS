@@ -140,6 +140,8 @@ require ROOT_PATH . '/includes/header.php';
     </div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('rr', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head">
@@ -226,6 +228,19 @@ require ROOT_PATH . '/includes/header.php';
                     </dd></div>
                 <?php endif; ?>
                 <div><dt>Reference / DR</dt><dd><?= e($rr['reference_no'] ?? '—') ?></dd></div>
+                <?php if ($rr['status'] === 'posted' && Payables::canView()): ?>
+                    <?php $rrInvoice = PaymentStatus::invoiceForReceiving($id); ?>
+                    <div><dt>Supplier invoice</dt><dd id="rrInvoice">
+                        <?php if ($rrInvoice): ?>
+                            <a href="<?= e(url('pages/ap-view.php?id=' . (int) $rrInvoice['id'])) ?>"><?= e($rrInvoice['ap_no']) ?></a>
+                            <small class="muted block"><?= e(Payables::STATUSES[$rrInvoice['status']] ?? $rrInvoice['status']) ?> · paid <?= e(money($rrInvoice['paid_amount'])) ?> of <?= e(money($rrInvoice['amount'])) ?></small>
+                        <?php elseif (Auth::can('payables.manage')): ?>
+                            <a href="<?= e(url('pages/ap-form.php?rr=' . $id)) ?>">Not invoiced yet: record invoice</a>
+                        <?php else: ?>
+                            <span class="muted">Not invoiced yet</span>
+                        <?php endif; ?>
+                    </dd></div>
+                <?php endif; ?>
                 <div><dt>Received</dt><dd><?= e(date('M j, Y', strtotime($rr['received_date']))) ?></dd></div>
                 <div><dt>Branch</dt><dd><?= e($rr['branch_code'] . ' · ' . $rr['branch_name']) ?></dd></div>
                 <div><dt>Location</dt><dd><?= e($rr['warehouse_code'] . ' / ' . $rr['location_code']) ?></dd></div>

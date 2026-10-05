@@ -267,6 +267,8 @@ foreach ($catalog as $pid => [$code, $name, $cat, $brand, $price, $cost, $warran
         }
     }
 }
+// Bundled illustrations for the new items (assets/uploads/products/sample-itm-0013..0018.png).
+q("UPDATE products SET image = CONCAT('sample-', LOWER(code), '.png') WHERE id BETWEEN 13 AND 18 AND image IS NULL");
 // The starter stock at MAR came in at cost 0: give it the default cost (data fix; qty is untouched).
 q('UPDATE product_branches pb JOIN products p ON p.id = pb.product_id SET pb.avg_cost = p.unit_cost WHERE pb.branch_id = ? AND pb.avg_cost = 0',
     [MAR]);
@@ -275,15 +277,15 @@ say('Brands + 18 products ready.');
 // Suppliers
 $SUP = [];
 foreach ([
-    'tech'    => ['Mindanao Techline Distributors Inc.', '004-551-223-000', 'Lapasan, Cagayan de Oro City', '(088) 856 2210', '30 days'],
-    'digital' => ['Davao Digital Supply Corp.',          '005-318-774-000', 'Bajada, Davao City',           '(082) 224 7781', '15 days PDC'],
-    'office'  => ['Northmin Office Essentials',          '006-102-559-000', 'Sayre Highway, Malaybalay City', '(088) 813 4402', 'COD'],
-    'network' => ['Prime Network Solutions Trading',     '007-640-118-000', 'Carmen, Cagayan de Oro City',  '(088) 858 9930', '30 days'],
-] as $key => [$name, $tin, $addr, $phone, $terms]) {
+    'tech'    => ['Mindanao Techline Distributors Inc.', '004-551-223-000', 'Lapasan, Cagayan de Oro City', '(088) 856 2210', '30 days', 30],
+    'digital' => ['Davao Digital Supply Corp.',          '005-318-774-000', 'Bajada, Davao City',           '(082) 224 7781', '15 days PDC', 15],
+    'office'  => ['Northmin Office Essentials',          '006-102-559-000', 'Sayre Highway, Malaybalay City', '(088) 813 4402', 'COD', 0],
+    'network' => ['Prime Network Solutions Trading',     '007-640-118-000', 'Carmen, Cagayan de Oro City',  '(088) 858 9930', '30 days', 30],
+] as $key => [$name, $tin, $addr, $phone, $terms, $termsDays]) {
     $id = one('SELECT id FROM suppliers WHERE name = ?', [$name]);
     if (!$id) {
         $d = valid(Suppliers::validate(['code' => '', 'name' => $name, 'tin' => $tin, 'address' => $addr, 'phone' => $phone,
-            'email' => '', 'payment_terms' => $terms, 'notes' => '', 'is_active' => '1'], null), "supplier {$name}");
+            'email' => '', 'payment_terms' => $terms, 'terms_days' => s($termsDays), 'notes' => '', 'is_active' => '1'], null), "supplier {$name}");
         $id = Suppliers::save($d, [], null);
     }
     $SUP[$key] = (int) $id;
@@ -298,6 +300,7 @@ $supplierFor = static fn (int $pid): int => match (true) {
 // Customers per branch (visible where they were added)
 $CUST = [MAR => [], MLB => [], CDO => []];
 $GOV = [];
+$CREDIT = [1 => [0, ''], 2 => [30, ''], 3 => [30, '200000'], 4 => [15, '40000'], 5 => [30, '150000']]; // type => [days, limit]
 foreach ([
     MAR => [
         ['LGU Maramag (Municipal Government)', '088 238 1101', 'Poblacion, Maramag, Bukidnon', '001-882-117-000', 2, 'gov'],
@@ -324,8 +327,9 @@ foreach ([
     foreach ($list as [$name, $phone, $addr, $tin, $type, $tag]) {
         $id = one('SELECT id FROM customers WHERE name = ?', [$name]);
         if (!$id) {
+            [$days, $limit] = $CREDIT[$type]; // credit terms: government, schools, companies and resellers buy on account
             $d = valid(Customers::check(['name' => $name, 'phone' => $phone, 'email' => '', 'address' => $addr, 'tin' => $tin,
-                'customer_type_id' => s($type), 'is_active' => '1'], null), "customer {$name}");
+                'customer_type_id' => s($type), 'is_active' => '1', 'credit_days' => s($days), 'credit_limit' => $limit], null), "customer {$name}");
             Customers::create($d, []);
             $id = lastId('customers');
         }
@@ -346,7 +350,8 @@ say('Suppliers + customers ready.');
 // Building blocks
 // ---------------------------------------------------------------------------------------------------------------
 
-$STATS = ['sales' => 0, 'skipped' => 0, 'voids' => 0, 'pos' => 0, 'rrs' => 0, 'transfers' => 0, 'jobs' => 0, 'orders' => 0];
+$STATS = ['sales' => 0, 'skipped' => 0, 'voids' => 0, 'pos' => 0, 'rrs' => 0, 'transfers' => 0, 'jobs' => 0, 'orders' => 0,
+          'quotes' => 0, 'collections' => 0, 'invoices' => 0, 'vouchers' => 0];
 
 /** Purchase request (cashier) → approved (admin) → PO (admin) → approved (super admin). Returns the PO id. */
 $purchase = static function (int $br, array $qtys, string $purpose, int $supplierId, int $expectInDays, bool $approvePo = true)
@@ -511,6 +516,13 @@ $sale = static function (int $br) use (&$STAFF, &$CUST, &$POPULAR, &$MAXQ, &$REA
     $total    = $subtotal * (1 - $discount / 100) * 1.12;
     $paid     = $payment === 'cash' ? (int) (ceil(($total + 100) / 10000) * 10000) : null;
     $customer = chance(0.3) && $CUST[$br] ? pick($CUST[$br]) : null;
+    if ($isAdmin && chance(0.2)) { // on account (sales.charge): a company / reseller / school with credit terms
+        $credit = array_map('intval', q('SELECT c.id FROM customers c JOIN customer_branches cb ON cb.customer_id = c.id
+                                          WHERE cb.branch_id = ? AND c.credit_days > 0 AND c.customer_type_id IN (3, 4, 5)', [$br])->fetchAll(PDO::FETCH_COLUMN));
+        if ($credit) {
+            [$payment, $paid, $customer] = ['charge', null, pick($credit)];
+        }
+    }
     try {
         Sales::complete($uid, $qty, $customer, $payment, $discount, $paid, $serials, $pricing);
         $STATS['sales']++;
@@ -729,6 +741,165 @@ $billOrder = static function (int $orderId, string $payment) use (&$STAFF): void
     }
 };
 
+// Quotations ---------------------------------------------------------------------------------------------------------
+/** Quotation by the cashier, sent unless $stopAt = 'draft'. $lines: [pid => [qty, price|null, reason|null]]. Returns its id. */
+$quote = static function (int $br, int $customerId, array $lines, array $head, string $stopAt = 'sent') use (&$STAFF, &$STATS): int {
+    $u = actAs($STAFF[$br]['cashier'], $br);
+    $items = [];
+    foreach ($lines as $pid => [$q, $price, $reason]) {
+        $items[] = ['product_id' => s($pid), 'quantity' => s($q), 'unit_price' => s($price ?? (float) one('SELECT price FROM products WHERE id = ?', [$pid])),
+            'price_reason' => $reason ?? ''];
+    }
+    $id = Quotations::save(null, valid(Quotations::validate($head + ['customer_id' => s($customerId), 'quote_date' => today(),
+        'valid_until' => date('Y-m-d', strtotime(today() . ' +15 days')), 'attention' => '', 'rfq_no' => '', 'rfq_date' => '', 'end_user' => '',
+        'delivery_term' => 'Within 15 calendar days upon receipt of PO', 'payment_term' => '30 days after acceptance',
+        'warranty' => '1 year parts and service', 'notes' => '', 'items' => $items]), 'quotation'), $u);
+    $STATS['quotes']++;
+    if ($stopAt !== 'draft') {
+        Quotations::send($id, $u);
+    }
+    return $id;
+};
+$QT = [];
+
+// Billing & payables sweeps ------------------------------------------------------------------------------------------
+$CHECK_NO = 100200;
+/** Collect on-account bills that are old enough (government after ~25 days with EWT 1% + VAT 5% withheld, others ~12). */
+$collect = static function (int $br) use (&$STAFF, &$GOV, &$STATS, &$CHECK_NO): void {
+    $slow = $GOV[MLB]['gov'] ?? 0; // never pays in the demo: a 90+ days overdue receivable
+    $byCustomer = [];
+    foreach (q("SELECT s.id, s.customer_id, s.total, s.settled_amount, DATEDIFF(NOW(), s.created_at) AS age, c.customer_type_id
+                  FROM sales s JOIN customers c ON c.id = s.customer_id
+                 WHERE s.branch_id = ? AND s.payment_type = 'charge' AND s.status = 'completed' AND s.settled_amount < s.total
+                 ORDER BY s.id", [$br]) as $b) {
+        $gov = (int) $b['customer_type_id'] === 2;
+        if ((int) $b['customer_id'] === $slow || (int) $b['age'] < ($gov ? 18 : 12) || !chance(0.55)) {
+            continue;
+        }
+        $byCustomer[(int) $b['customer_id']][] = $b + ['gov' => $gov];
+    }
+    if (!$byCustomer) {
+        return;
+    }
+    $u = actAs($STAFF[$br]['cashier'], $br);
+    foreach ($byCustomer as $cid => $bills) {
+        $gov = $bills[0]['gov'];
+        $lines = [];
+        foreach ($bills as $b) {
+            $bal = to_cents((string) $b['total']) - to_cents((string) $b['settled_amount']);
+            if ($gov && to_cents((string) $b['settled_amount']) === 0) {
+                $base = (int) round(to_cents((string) $b['total']) / 1.12);
+                $ewt  = (int) round($base * 0.01);
+                $vat  = (int) round($base * 0.05);
+                $lines[$b['id']] = ['amount' => from_cents($bal - $ewt - $vat), 'ewt' => from_cents($ewt), 'vat' => from_cents($vat)];
+            } elseif (!$gov && $bal > 300000 && chance(0.25)) { // partial payment
+                $lines[$b['id']] = ['amount' => from_cents(intdiv($bal, 2)), 'ewt' => '', 'vat' => ''];
+            } else {
+                $lines[$b['id']] = ['amount' => from_cents($bal), 'ewt' => '', 'vat' => ''];
+            }
+        }
+        $method = (string) ($gov ? weighted(['check' => 70, 'bank' => 30]) : weighted(['cash' => 35, 'gcash' => 20, 'check' => 30, 'bank' => 15]));
+        $ref = match ($method) {
+            'check' => (string) ($CHECK_NO += mt_rand(3, 40)),
+            'bank'  => 'DEP-' . mt_rand(100000, 999999),
+            'gcash' => '10' . mt_rand(10000000, 99999999),
+            default => '',
+        };
+        Collections::post(valid(Collections::validate(['customer_id' => s($cid), 'collection_date' => today(), 'method' => $method,
+            'reference' => $ref, 'bank_name' => in_array($method, ['check', 'bank'], true) ? ($gov ? 'Land Bank' : pick(['BPI', 'BDO', 'Metrobank', 'DBP'])) : '',
+            'check_date' => '', 'notes' => '', 'lines' => $lines]), 'collection'), $u);
+        $STATS['collections']++;
+    }
+};
+/** Daily: deposit checks on hand, clear deposited ones (one bounces), receive withholding certificates, clear issued checks. */
+$BOUNCED = false;
+$dailyFinance = static function (int $br) use (&$STAFF, &$BOUNCED): void {
+    $u = actAs($STAFF[$br]['cashier'], $br);
+    foreach (q("SELECT c.id, c.check_status, c.collection_date, c.deposited_at, cu.customer_type_id FROM collections c JOIN customers cu ON cu.id = c.customer_id
+                 WHERE c.branch_id = ? AND c.status = 'posted' AND c.check_status IN ('on_hand', 'deposited') ORDER BY c.id", [$br])->fetchAll() as $c) {
+        if ($c['check_status'] === 'on_hand' && $c['collection_date'] <= date('Y-m-d', strtotime(today() . ' -2 days')) && chance(0.5)) {
+            Collections::checkAction((int) $c['id'], 'deposit', today(), null, $u);
+        } elseif ($c['check_status'] === 'deposited' && $c['deposited_at'] <= date('Y-m-d', strtotime(today() . ' -3 days'))) {
+            if (!$BOUNCED && (int) $c['customer_type_id'] !== 2) {
+                $BOUNCED = true;
+                Collections::checkAction((int) $c['id'], 'bounce', null, 'Drawn against insufficient funds', actAs($STAFF[$br]['admin'], $br));
+                $u = actAs($STAFF[$br]['cashier'], $br);
+            } else {
+                Collections::checkAction((int) $c['id'], 'clear', today(), null, $u);
+            }
+        }
+    }
+    foreach (q("SELECT id FROM collections WHERE branch_id = ? AND status = 'posted' AND form_2307 = 'pending' AND collection_date <= CURDATE() - INTERVAL 14 DAY",
+            [$br])->fetchAll(PDO::FETCH_COLUMN) as $id) {
+        if (chance(0.25)) {
+            Collections::receiveForm((int) $id, today(), $u);
+        }
+    }
+    $issued = q("SELECT id FROM disbursements WHERE branch_id = ? AND status = 'posted' AND check_status = 'issued' AND check_date <= CURDATE() - INTERVAL 3 DAY",
+        [$br])->fetchAll(PDO::FETCH_COLUMN);
+    if ($issued) {
+        $a = actAs($STAFF[$br]['admin'], $br);
+        foreach ($issued as $id) {
+            if (chance(0.5)) {
+                Payables::clearCheck((int) $id, today(), $a);
+            }
+        }
+    }
+};
+/** Supplier invoices for posted receiving reports (most within a few days; the last days stay "to invoice"). */
+$invoiceRrs = static function (int $br) use (&$STAFF, &$STATS): void {
+    $rrs = q("SELECT rr.id, rr.received_date, rr.reference_no, rr.total_cost, s.terms_days FROM receiving_reports rr JOIN suppliers s ON s.id = rr.supplier_id
+               WHERE rr.branch_id = ? AND rr.status = 'posted' AND rr.received_date < CURDATE()
+                 AND NOT EXISTS (SELECT 1 FROM supplier_invoices si WHERE si.receiving_id = rr.id AND si.status <> 'cancelled') ORDER BY rr.id", [$br])->fetchAll();
+    if (!$rrs) {
+        return;
+    }
+    $u = actAs($STAFF[$br]['admin'], $br);
+    foreach ($rrs as $rr) {
+        if (!chance(0.5)) {
+            continue;
+        }
+        $no = str_starts_with((string) $rr['reference_no'], 'SI-') ? (string) $rr['reference_no'] : 'CI-' . mt_rand(10000, 99999);
+        $d = valid(Payables::validateInvoice(['invoice_no' => $no, 'invoice_date' => $rr['received_date'],
+            'due_date' => date('Y-m-d', strtotime($rr['received_date'] . ' +' . (int) $rr['terms_days'] . ' days')),
+            'amount' => (string) $rr['total_cost'], 'notes' => ''], $rr), 'supplier invoice');
+        Payables::createInvoice((int) $rr['id'], $d, $u);
+        $STATS['invoices']++;
+    }
+};
+/** Friday: pay supplier invoices due within a week (EWT 1% on goods for the corporations). MLB falls behind at the end. */
+$payInvoices = static function (int $br, int $day) use (&$STAFF, &$SUP, &$STATS, &$CHECK_NO): void {
+    if ($br === MLB && $day > DEMO_LAST - 14) {
+        return;
+    }
+    $bySupplier = [];
+    foreach (q("SELECT id, supplier_id, amount, paid_amount FROM supplier_invoices
+                 WHERE branch_id = ? AND status = 'open' AND due_date <= CURDATE() + INTERVAL 7 DAY ORDER BY id", [$br]) as $i) {
+        if (chance(0.8)) {
+            $bySupplier[(int) $i['supplier_id']][] = $i;
+        }
+    }
+    if (!$bySupplier) {
+        return;
+    }
+    $u = actAs($STAFF[$br]['admin'], $br);
+    foreach ($bySupplier as $sid => $invoices) {
+        $withhold = in_array($sid, [$SUP['tech'], $SUP['network']], true);
+        $lines = [];
+        foreach ($invoices as $i) {
+            $bal = to_cents((string) $i['amount']) - to_cents((string) $i['paid_amount']);
+            $ewt = $withhold && to_cents((string) $i['paid_amount']) === 0 ? (int) round(to_cents((string) $i['amount']) / 1.12 * 0.01) : 0;
+            $lines[$i['id']] = ['amount' => from_cents($bal - $ewt), 'ewt' => $ewt ? from_cents($ewt) : ''];
+        }
+        $method = $sid === $SUP['office'] ? 'cash' : (string) weighted(['check' => 65, 'bank' => 35]);
+        Payables::postDv(valid(Payables::validateDv(['supplier_id' => s($sid), 'payment_date' => today(), 'method' => $method,
+            'reference' => match ($method) { 'check' => (string) ($CHECK_NO += mt_rand(3, 40)), 'bank' => 'OBT-' . mt_rand(100000, 999999), default => '' },
+            'bank_name' => $method === 'cash' ? '' : 'BDO', 'check_date' => '', 'particulars' => 'Payment of supplier invoices',
+            'lines' => $lines]), 'disbursement voucher'), $u);
+        $STATS['vouchers']++;
+    }
+};
+
 // ---------------------------------------------------------------------------------------------------------------
 // Scripted events: [day => [[time, fn], ...]]
 // ---------------------------------------------------------------------------------------------------------------
@@ -809,6 +980,43 @@ $at(73, '11:00', static function () use ($STAFF): void {
     Products::adjustStock(12, 1, 'return', 'Unit returned by customer, sealed', actAs($STAFF[CDO]['admin'], CDO));
 });
 
+// Quotations: three are won (the orders below are made from them), one lost, one cancelled, one expired, open ones at the end.
+$at(33, '14:00', static function () use ($quote, &$GOV, &$QT): void {
+    $QT['lgu'] = $quote(MAR, $GOV[MAR]['gov'], [13 => [3, 31800, 'Public bidding award price'], 8 => [2, null, null], 18 => [2, null, null]],
+        ['rfq_no' => 'RFQ-LGU-2026-0655', 'rfq_date' => today(), 'attention' => 'BAC Secretariat', 'end_user' => 'Municipal Treasurer\'s Office']);
+});
+$at(40, '10:20', static function () use ($quote, &$GOV, $at, $STAFF): void {
+    $id = $quote(MLB, $GOV[MLB]['gov2'], [4 => [3, 4350, 'Government price'], 6 => [2, null, null], 17 => [1, null, null]],
+        ['rfq_no' => 'PEO-RFQ-2026-071', 'rfq_date' => today(), 'attention' => 'Engr. Lito Sabanal', 'end_user' => 'Planning & Design Section']);
+    $at(55, '15:00', static fn () => Quotations::close($id, 'lost', 'Awarded to a lower bidder', actAs($STAFF[MLB]['cashier'], MLB)));
+});
+$at(44, '09:45', static fn () => $quote(MLB, $GOV[MLB]['gov'], [1 => [5, 24200, 'Government price'], 5 => [5, null, null]],
+    ['rfq_no' => 'SDO-RFQ-2026-140', 'rfq_date' => today(), 'attention' => 'Supply Unit', 'end_user' => 'Schools Division ICT Unit'])); // never answered: expired
+$at(61, '11:10', static function () use ($quote, &$GOV, $STAFF): void {
+    $id = $quote(MAR, $GOV[MAR]['school'], [15 => [40, 250, 'School price'], 16 => [10, null, null]], ['attention' => 'Principal\'s Office'], 'draft');
+    Quotations::close($id, 'cancelled', 'Duplicate; replaced by a revised quotation', actAs($STAFF[MAR]['cashier'], MAR));
+});
+$at(80, '13:30', static function () use ($quote, &$GOV, &$QT): void {
+    $QT['cho'] = $quote(CDO, $GOV[CDO]['gov'], [9 => [6, 1750, 'Government price per canvass'], 10 => [6, null, null], 2 => [10, null, null]],
+        ['rfq_no' => 'RFQ-CHO-0819', 'rfq_date' => today(), 'attention' => 'Dr. Annaliza Ong', 'end_user' => 'CHO Records Section']);
+});
+$at(DEMO_LAST - 28, '10:00', static function () use ($quote, &$GOV, &$QT, $STAFF): void {
+    $QT['mnhs'] = $quote(MAR, $GOV[MAR]['school'], [14 => [2, null, null], 5 => [2, null, null], 15 => [20, 260, null]], ['attention' => 'ICT Coordinator']);
+    $u = actAs($STAFF[MAR]['cashier'], MAR); // the school asked for a better paper price: revised and sent again
+    Quotations::revise($QT['mnhs'], $u);
+    $q = Quotations::find($QT['mnhs']);
+    $items = array_map(static fn (array $l): array => ['product_id' => s((int) $l['product_id']), 'quantity' => s((int) $l['quantity']),
+        'unit_price' => (int) $l['product_id'] === 15 ? '250' : (string) $l['unit_price'], 'price_reason' => (int) $l['product_id'] === 15 ? 'School price' : ''], $q['lines']);
+    Quotations::save($QT['mnhs'], valid(Quotations::validate(['customer_id' => s((int) $q['customer_id']), 'quote_date' => today(),
+        'valid_until' => date('Y-m-d', strtotime(today() . ' +15 days')), 'attention' => 'ICT Coordinator', 'rfq_no' => '', 'rfq_date' => '', 'end_user' => '',
+        'delivery_term' => 'Within 15 calendar days upon receipt of PO', 'payment_term' => '30 days after acceptance', 'warranty' => '1 year parts and service',
+        'notes' => 'Revised: school price on bond paper', 'items' => $items]), 'quotation revision'), $u);
+    Quotations::send($QT['mnhs'], $u);
+});
+$at(DEMO_LAST - 6, '15:20', static fn () => $quote(CDO, $GOV[CDO]['private'], [13 => [4, 31500, 'Volume order'], 18 => [4, null, null]],
+    ['attention' => 'Admin Office', 'end_user' => 'Review Center Admin Office']));
+$at(DEMO_LAST - 1, '11:00', static fn () => $quote(MLB, $CUST[MLB][2], [8 => [1, null, null], 16 => [6, null, null]], ['attention' => 'Clinic Manager'], 'draft'));
+
 // Customer orders
 $at(14, '10:00', static function () use ($order, $deliver, $received, $billOrder, &$GOV, $at): void {
     $id = $order(MLB, $GOV[MLB]['gov'], [4 => [4, 4400, 'Government price per quotation'], 5 => [2, null, null], 7 => [3, null, null]], [
@@ -824,11 +1032,11 @@ $at(14, '10:00', static function () use ($order, $deliver, $received, $billOrder
         $at(26, '14:00', static fn () => $billOrder($id, 'charge'));
     });
 });
-$at(38, '10:30', static function () use ($order, $deliver, $received, $billOrder, &$GOV, $at, $STAFF): void {
+$at(38, '10:30', static function () use ($order, $deliver, $received, $billOrder, &$GOV, &$QT, $at, $STAFF): void {
     $id = $order(MAR, $GOV[MAR]['gov'], [13 => [3, 31800, 'Public bidding award price'], 8 => [2, null, null], 18 => [2, null, null]], [
         'customer_po_no' => 'LGU-MAR-2026-0712', 'customer_po_date' => today(), 'end_user' => 'Municipal Treasurer\'s Office',
         'due_date' => date('Y-m-d', strtotime(today() . ' +20 days')), 'payment_term' => '30 days after acceptance',
-        'procurement_mode' => 'Public Bidding', 'award_ref' => 'BAC Res. 2026-041']);
+        'procurement_mode' => 'Public Bidding', 'award_ref' => 'BAC Res. 2026-041', 'quotation_id' => s($QT['lgu'] ?? 0)]);
     if ($id === null) {
         return;
     }
@@ -865,11 +1073,11 @@ $at(68, '11:00', static function () use ($order, $deliver, $received, $billOrder
         $billOrder($id, 'card');
     });
 });
-$at(84, '09:30', static function () use ($order, $deliver, $received, $billOrder, &$GOV, $at): void {
+$at(84, '09:30', static function () use ($order, $deliver, $received, $billOrder, &$GOV, &$QT, $at): void {
     $id = $order(CDO, $GOV[CDO]['gov'], [9 => [6, 1750, 'Government price per canvass'], 10 => [6, null, null], 2 => [10, null, null]], [
         'customer_po_no' => 'CHO-PO-2026-221', 'customer_po_date' => today(), 'end_user' => 'CHO Records Section',
         'due_date' => date('Y-m-d', strtotime(today() . ' +10 days')), 'payment_term' => '30 days after acceptance',
-        'procurement_mode' => 'Shopping', 'award_ref' => 'RFQ-CHO-0819']);
+        'procurement_mode' => 'Shopping', 'award_ref' => 'RFQ-CHO-0819', 'quotation_id' => s($QT['cho'] ?? 0)]);
     if ($id === null) {
         return;
     }
@@ -879,11 +1087,11 @@ $at(84, '09:30', static function () use ($order, $deliver, $received, $billOrder
         $at(92, '15:30', static fn () => $billOrder($id, 'charge'));
     });
 });
-$at(DEMO_LAST - 25, '10:00', static function () use ($order, $deliver, $received, $billOrder, &$GOV, $at): void {
+$at(DEMO_LAST - 25, '10:00', static function () use ($order, $deliver, $received, $billOrder, &$GOV, &$QT, $at): void {
     $id = $order(MAR, $GOV[MAR]['school'], [14 => [2, null, null], 5 => [2, null, null], 15 => [20, 250, 'School price']], [
         'customer_po_no' => 'MNHS-2026-044', 'customer_po_date' => today(), 'end_user' => 'ICT Coordinator',
         'due_date' => date('Y-m-d', strtotime(today() . ' +14 days')), 'payment_term' => '30 days after acceptance',
-        'procurement_mode' => 'Shopping', 'award_ref' => 'PR-MNHS-0091']);
+        'procurement_mode' => 'Shopping', 'award_ref' => 'PR-MNHS-0091', 'quotation_id' => s($QT['mnhs'] ?? 0)]);
     if ($id === null) {
         return;
     }
@@ -960,6 +1168,20 @@ for ($d = 1; $d <= $DAYS; $d++) {
             $todo[] = ['18:30', static fn () => $restock($br, $d)];
         }
     }
+    if ($d >= 5) {
+        foreach ([MAR, MLB, CDO] as $br) {
+            $todo[] = ['08:20', static fn () => $dailyFinance($br)];
+            if ($d < $DAYS - 2) {
+                $todo[] = ['16:45', static fn () => $invoiceRrs($br)];
+            }
+            if ($dow === 2 || $dow === 4) {
+                $todo[] = ['14:20', static fn () => $collect($br)];
+            }
+            if ($dow === 5) {
+                $todo[] = ['15:30', static fn () => $payInvoices($br, $d)];
+            }
+        }
+    }
 
     while ($todo) {
         usort($todo, static fn ($a, $b) => strcmp($a[0], $b[0]));
@@ -984,6 +1206,10 @@ for ($d = 1; $d <= $DAYS; $d++) {
 }
 
 q('SET timestamp = DEFAULT');
+// Collections::chargeTerms() dates on-account bills from PHP's clock (today): date them from the simulated sale day instead.
+q("UPDATE sales s LEFT JOIN customers c ON c.id = s.customer_id
+      SET s.due_date = DATE_ADD(DATE(s.created_at), INTERVAL IF(COALESCE(c.credit_days, 0) > 0, c.credit_days, 30) DAY)
+    WHERE s.payment_type = 'charge' AND s.created_at < ?", [$RUN_T0]);
 say('Done: ' . json_encode($STATS));
 actAs(ADMIN, Branch::ALL);
 $checks = Integrity::run();

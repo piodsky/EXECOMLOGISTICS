@@ -2,6 +2,8 @@
  * Job Orders pages:
  *  - job-form.php: choosing a customer record fills the name / contact number when they are empty
  *    or still hold the previous customer's values.
+ *  - job-form.php: problem quick picks fill the problem text; "None" accessory excludes the others; the lead
+ *    technician is not offered as a helper (also on the job-view Assign form).
  *  - job-view.php: Print Ticket, dialogs re-opened after a failed submit, one post per submit.
  */
 (function () {
@@ -30,6 +32,57 @@
             return;
         }
         form.dataset.sent = '1';
+    });
+
+    // ---- Intake: problem quick picks -> lines in the "Problem reported" text ----
+    // Ticking adds the problem as its own line (once); unticking removes that line. The text stays editable.
+    const problem = document.getElementById('jobProblem');
+    const picks = document.querySelectorAll('[data-problem-pick]');
+    if (problem && picks.length) {
+        const lines = () => problem.value.split('\n');
+        picks.forEach((box) => {
+            const text = box.dataset.problemPick;
+            box.checked = lines().some((l) => l.trim() === text);
+            box.addEventListener('change', () => {
+                const current = lines().filter((l) => l.trim() !== text);
+                if (box.checked) {
+                    while (current.length && current[current.length - 1].trim() === '') current.pop();
+                    current.push(text);
+                }
+                problem.value = current.join('\n').replace(/^\n+/, '');
+                problem.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+        });
+        problem.addEventListener('input', (e) => {
+            if (e.isTrusted) picks.forEach((box) => { box.checked = lines().some((l) => l.trim() === box.dataset.problemPick); });
+        });
+    }
+
+    // ---- Intake: "None (unit only)" accessory excludes the others --------
+    const accessories = document.getElementById('accessoryChecks');
+    if (accessories) {
+        accessories.addEventListener('change', (e) => {
+            const box = e.target;
+            if (!(box instanceof HTMLInputElement) || !box.checked) return;
+            const isNone = /^none\b/i.test(box.value);
+            accessories.querySelectorAll('input[type=checkbox]').forEach((other) => {
+                if (other !== box && /^none\b/i.test(other.value) !== isNone) other.checked = false;
+            });
+        });
+    }
+
+    // ---- Intake / assign: the lead technician is not also a helper -------
+    document.querySelectorAll('[data-lead-select]').forEach((lead) => {
+        const group = document.getElementById(lead.dataset.leadSelect);
+        if (!group) return;
+        const sync = () => group.querySelectorAll('input[type=checkbox]').forEach((box) => {
+            const isLead = box.value === lead.value;
+            box.disabled = isLead;
+            if (isLead) box.checked = false;
+            box.closest('label')?.classList.toggle('is-disabled', isLead);
+        });
+        lead.addEventListener('change', sync);
+        sync();
     });
 
     // ---- Intake: customer record -> name / phone -------------------------

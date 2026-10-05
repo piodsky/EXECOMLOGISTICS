@@ -67,6 +67,8 @@ require ROOT_PATH . '/includes/header.php';
     <div class="alert alert--info doc-note" role="note"><?= icon('clock') ?><span>Check <?= e((string) $d['reference']) ?> is issued; mark it cleared when it is debited from the bank.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('dv', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head"><h2><?= icon('clipboard') ?> Invoices paid</h2></header>

@@ -83,6 +83,8 @@ require ROOT_PATH . '/includes/header.php';
         <span>Delivered: received by <?= e((string) $d['received_by']) ?> on <?= e(date('M j, Y', strtotime((string) $d['received_date']))) ?><?= $d['acceptance_ref'] ? ' · ' . e($d['acceptance_ref']) : '' ?>.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('dr', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head"><h2><?= icon('box') ?> Items</h2><span class="muted"><?= number_format((int) $d['total_qty']) ?> units</span></header>

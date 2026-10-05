@@ -332,6 +332,15 @@ kbd {
     transition: background-color .15s;
 }
 .nav-link .icon { width: 24px; height: 24px; }
+/* Section headings (includes/sidebar.php); Buying / Selling link to their Overview */
+.nav-group { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 2px; padding: 6px 16px;
+             border-radius: var(--radius-sm); color: var(--on-dark-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em;
+             text-transform: uppercase; text-decoration: none; }
+a.nav-group small { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; color: #8fb4ec; }
+a.nav-group small .icon { width: 12px; height: 12px; }
+a.nav-group:hover { background: rgba(255, 255, 255, .06); color: #dbe6f5; }
+a.nav-group.is-active { background: rgba(47, 128, 245, .25); color: #fff; }
+.sidebar__nav .nav-link { height: 44px; }
 .nav-link:hover { background: rgba(255, 255, 255, .06); }
 .nav-link.is-active {
     background: linear-gradient(90deg, #2f80f5 0%, #1c64d8 100%);
@@ -1132,3 +1141,31 @@ textarea.form-input { resize: vertical; min-height: 84px; }
     .topbar, .sidebar, .sidebar-backdrop, .alert { display: none !important; }
     body, .content { background: #fff; padding: 0; }
 }
+
+/* Chain tab bar (includes/flow-nav.php): buying / selling documents in one row */
+.flow-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.flow-tab { display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 10px 13px; border-bottom: 2px solid transparent;
+            color: var(--text-muted); font-size: 14px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.flow-tab .icon { width: 17px; height: 17px; }
+.flow-tab:hover { color: var(--text); }
+.flow-tab.is-active { border-bottom-color: var(--primary); color: var(--primary); }
+.flow-tab[data-tab="overview"] { font-weight: 600; }
+.flow-tabs__sep { margin: 0 4px 0 10px; padding-left: 12px; border-left: 1px solid var(--border); color: var(--text-muted);
+                  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+@media print { .flow-tabs { display: none !important; } }
+
+/* Document chain strip (includes/doc-chain.php): request → PO → receiving → invoice → payment, or quotation → bill → collection */
+.doc-chain { display: flex; align-items: stretch; gap: 0; margin: 0 0 16px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.doc-chain__stage { position: relative; display: flex; flex-direction: column; gap: 4px; flex: 1 0 150px; min-width: 150px; padding: 10px 14px 10px 22px; }
+.doc-chain__stage:first-child { padding-left: 14px; }
+.doc-chain__stage + .doc-chain__stage { border-left: 1px solid var(--border); }
+.doc-chain__stage + .doc-chain__stage::before { content: ""; position: absolute; top: 50%; left: -6px; width: 10px; height: 10px; margin-top: -5px;
+    border-top: 1px solid var(--border); border-right: 1px solid var(--border); background: var(--surface); transform: rotate(45deg); }
+.doc-chain__stage.is-current { background: #eef4fe; }
+.doc-chain__stage.is-current + .doc-chain__stage::before { background: #eef4fe; }
+.doc-chain__label { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.doc-chain__doc { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; }
+.doc-chain__doc.is-current .doc-no { font-weight: 700; color: var(--primary); }
+.doc-chain__doc .badge { font-size: 11px; }
+.doc-chain__stage.is-empty .doc-chain__label { opacity: .7; }
+@media print { .doc-chain { display: none !important; } }

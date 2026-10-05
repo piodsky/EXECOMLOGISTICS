@@ -153,6 +153,8 @@ require ROOT_PATH . '/includes/header.php';
     <div class="alert alert--warning doc-note" role="note"><?= icon('clock') ?><span>Overdue: the delivery was expected on <?= e($day($po['expected_date'])) ?>.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('po', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head">
@@ -254,6 +256,9 @@ require ROOT_PATH . '/includes/header.php';
                     <p class="muted pu-empty">Nothing received yet.</p>
                 <?php endif; ?>
             </section>
+            <?php if (Payables::canView()): ?>
+                <?php $payCard = PaymentStatus::poCard($id); require ROOT_PATH . '/includes/payment-card.php'; ?>
+            <?php endif; ?>
         <?php endif; ?>
 
         <?php if ($requests): ?>
@@ -266,6 +271,7 @@ require ROOT_PATH . '/includes/header.php';
                 </ul>
             </section>
         <?php endif; ?>
+        <?php [$attType, $attId, $attReturn] = ['purchase_order', $id, $self]; require ROOT_PATH . '/includes/attachments-card.php'; ?>
     </aside>
 </div>
 

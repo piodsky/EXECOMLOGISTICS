@@ -67,6 +67,9 @@ Read this first; open only the files a task needs.
       days overdue, on account at the POS and on job bills (`sales.charge`), check register (on hand → deposited →
       cleared / bounced), statement of account; Payables: supplier invoices from receiving reports, disbursement
       vouchers (EWT), issued checks, DV print. Migration `migrations/015_billing_payables.sql`. Built without agents.
+- [x] Phase 14: payment status on PO / order pages + lists, attachments (PO Internal, PO Outgoing, collections),
+      grouped sidebar, Buying / Selling chain tab bars + Overview pages, document chain strip. Migration
+      `migrations/016_attachments.sql`. Built without agents.
 
 ## Security & operations (Phase 12) — user decisions
 - MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
@@ -81,8 +84,11 @@ Read this first; open only the files a task needs.
 - `tools/seed-demo.php` (CLI, `--password=... [--env=scratch.env] [--days=120]`): ~4 months of demo activity at MAR / MLB / CDO through
   the domain classes, backdated with MariaDB `SET timestamp`; runs once (refuses when POs / jobs / customer orders
   exist); demo users maradmin, mlbadmin, cdoadmin, mlbcashier, cdocashier, martech, martech2, mlbtech (password from
-  `--password`, never committed: the GitHub repo is public). The live DB was seeded on 2026-10-04 at the user's request (backup before:
-  `%TEMP%\execom-backups\execomlogistics_db-before-demo-data.sql`): it must be reset before real go-live.
+  `--password`, never committed: the GitHub repo is public). Also covers 13c/13d: supplier terms, customer credit
+  terms, POS on-account sales, quotations (won / lost / cancelled / expired / open), collections (EWT + VAT withheld,
+  checks deposited / cleared / one bounced, 2307), supplier invoices + disbursement vouchers; charge due dates are
+  re-dated from the simulated sale day at the end. The live DB was re-seeded on 2026-10-05 at the user's request (backup before:
+  `%TEMP%\execom-backups\execomlogistics_db-before-demo-data-2026-10-05.sql`): it must be reset before real go-live.
 - Legacy folders (CoffeeSystem, Globalchips 2010 on User, NewEXECOM, NewEXECOM - Copy BACKUP 92726, SystemsMISPYO)
   were moved to `C:\xampp\legacy-apps` (not web-reachable).
 - Audit module `auth` (global, label "Sign-in & Security"): login (branch = home), login_failed (ref = attempted
@@ -188,6 +194,52 @@ Read this first; open only the files a task needs.
   supplier's open invoices (cash + optional EWT, base = amount before VAT); checks issued → cleared; cancel reopens.
   Lock order receiving_reports → supplier_invoices → sequence; disbursements → supplier_invoices. Integrity check
   `payables`. Dashboard tiles: supplier invoices overdue / due in 7 days, receiving reports to invoice.
+
+## Phase 14: attachments, grouped menu, overviews, document chain (user: "go with your recommendations")
+- Attachments (`migrations/016_attachments.sql`, table `document_attachments`, class `Attachments`): optional photos
+  (JPG / PNG / WebP) or PDFs on PO Internal, PO Outgoing and collection receipts; max 5 MB, 10 per document; labels
+  per type (`Attachments::labels`). Files in `storage/attachments/` (web-denied), served only by `pages/attachment.php`
+  after the document view check (PDF: own CSP so the browser viewer works); upload / delete via POST
+  `pages/attachments.php` (PRG back to the document). Upload: PO = `PurchaseOrders::canManage()`, order =
+  customer_orders.manage / .deliver, collection = collections.manage; working in the branch; not on cancelled docs.
+  Delete: uploader the same day, or the approver (purchasing.approve / customer_orders.approve / collections.cancel);
+  soft (deleted_at / by) + file removed; audit `attachment_add` / `attachment_delete` in the document's module.
+  Card `includes/attachments-card.php`. `tools/backup.ps1` also zips storage\attachments; e2e copy excludes it.
+- Sidebar sections (`config/menu.php` 'group', `includes/sidebar.php`): Selling / Service / Buying / Stock / Admin;
+  the Buying and Selling headings link to their Overview. 'home' = landing priority (Dashboard 1, POS 2, Job Orders 3)
+  used by `home_path()`; 'show' = extra permission to show an item (Master Data only with master_data.manage;
+  suppliers-only users get the new 'suppliers' item, supplier pages use require_page('suppliers')).
+- Chain tab bars (`Flow::tabs()`, `includes/flow-nav.php`): purchasing / payables / orders / collections navs are now
+  wrappers; Receiving has the bar too. Buy: Overview · Requests · PO Internal · Receiving | Supplier Invoices ·
+  Disbursements. Sell: Overview · Quotations · PO Outgoing · Deliveries · Tracking | Bills · Collections · Checks · Statement.
+- Overview pages `pages/buying.php` / `pages/selling.php` (`includes/overview-page.php`, class `Overview`): stage tiles
+  with count / amount / warning in the branch scope, each linking to its filtered list; open to anyone with a tab.
+- Document chain strip (`DocChain::of(type, id)`, `includes/doc-chain.php`) above the layout of pr / po / rr / ap / dv
+  and quote / co / dr / sale / collection views: walks up then down the chain; stages per permission; no amounts.
+
+## Job intake checklists, several job types + technicians (migration 017; user: "go", option 2)
+- Intake form (`job-form.php`): Accessories / Condition on arrival = checkboxes from Master Data lists `accessories`
+  / `conditions` (lookups `accessory` / `device_condition`) + an "Other" box; saved as TEXT ("A, B, other") in
+  accessories / device_condition (now VARCHAR 500) by `JobOrders::pickText()` (only active list names; without the
+  `*_pick` / `*_other` keys the plain text field is used); edit form splits it back (`splitPicks`). Problem reported
+  stays a required textarea; quick picks (list `problems`) only add / remove lines in it (`jobs.js`).
+- Job types: `job_order_types` (one or more; `job_types` / `job_type_ids` on find(); `job_type_id` = the first, kept
+  for older reports); form sends `job_type_ids[]` with a hidden empty value so "none ticked" clears them. List
+  filter `type=`; Master Data job-types usage counts both.
+- Technicians: `technician_id` = LEAD, `job_order_technicians` = HELPERS (intake: assign perm only; Assign form on
+  job-view: lead + helper checkboxes, "Nothing changed" refused; take = helper becomes lead). Helpers see the job,
+  count in My Jobs / technician filter, and are workers (`isOnJob` in actions() / isWorker(), so parts too).
+  Jobs report adds "Helped"; Dashboard workload stays lead-only. Seeds: 24 accessories, 22 conditions, 34 problems,
+  13 more job types, 9 more device types (INSERT IGNORE by list + name).
+
+## Payment status on orders (after 13d, no schema change)
+- `PaymentStatus` (read-only): PO Internal = supplier invoices + DVs of its posted RRs (none / to_invoice / unpaid /
+  partial / paid; needs `Payables::canView()`), customer order = its bills (cash / GCash / card paid at billing, on
+  account via collections) (none / to_bill / unpaid / partial / paid). Notes: overdue, check not cleared (customer
+  on hand / deposited, supplier issued), 2307 to receive, RR not invoiced, more to deliver.
+- "Payment" card (`includes/payment-card.php`) on po-view / co-view (replaces the old Bills card, keeps Statement);
+  Payment column + `payment=unpaid|paid` filter on purchase-orders / customer-orders; Order Tracking adds a Payment
+  column and lists completed orders / received + closed POs until fully paid; receiving-view links its supplier invoice.
 
 ## Dashboard & reports (Phase 11) — user decisions
 - Menu `dashboard` (first item, permission `reports.view`) → super / branch admins land on `pages/dashboard.php`;

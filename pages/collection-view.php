@@ -79,6 +79,8 @@ require ROOT_PATH . '/includes/header.php';
         <span>Waiting for the customer's withholding certificate (BIR 2307<?= (float) $c['vat_withheld_total'] > 0 ? ' / 2306' : '' ?>) for <?= e(money(from_cents(to_cents($c['ewt_total']) + to_cents($c['vat_withheld_total'])))) ?> withheld.</span></div>
 <?php endif; ?>
 
+<?php $chain = DocChain::of('cr', $id); require ROOT_PATH . '/includes/doc-chain.php'; ?>
+
 <div class="sale-layout">
     <section class="card">
         <header class="card__head"><h2><?= icon('receipt') ?> Bills paid</h2></header>
@@ -125,6 +127,7 @@ require ROOT_PATH . '/includes/header.php';
             </dl>
             <?php if ($c['notes']): ?><p class="rr-notes"><span class="form-label">Notes</span><?= e($c['notes']) ?></p><?php endif; ?>
         </section>
+        <?php [$attType, $attId, $attReturn] = ['collection', $id, $self]; require ROOT_PATH . '/includes/attachments-card.php'; ?>
     </aside>
 </div>
 

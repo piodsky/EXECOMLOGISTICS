@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012, 013) instead.
---  This file = Phase 1-4 schema + migrations 002, 003, 004, 005, 006, 007, 008, 009, 010, 011, 012 and 013.
+--  Existing installs: don't re-import; apply migrations/ (002 ... 017, in order) instead.
+--  This file = Phase 1-4 schema + migrations 002 to 017.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,7 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS document_attachments;
 DROP TABLE IF EXISTS disbursement_lines;
 DROP TABLE IF EXISTS disbursements;
 DROP TABLE IF EXISTS supplier_invoices;
@@ -40,6 +41,8 @@ DROP TABLE IF EXISTS purchase_order_lines;
 DROP TABLE IF EXISTS purchase_orders;
 DROP TABLE IF EXISTS purchase_request_lines;
 DROP TABLE IF EXISTS purchase_requests;
+DROP TABLE IF EXISTS job_order_technicians;
+DROP TABLE IF EXISTS job_order_types;
 DROP TABLE IF EXISTS job_order_part_serials;
 DROP TABLE IF EXISTS job_order_parts;
 DROP TABLE IF EXISTS job_order_events;
@@ -1023,8 +1026,8 @@ CREATE TABLE job_orders (
   serial_no            VARCHAR(80)   NULL,
   serial_id            INT UNSIGNED  NULL,
   warranty_until       DATE          NULL,
-  accessories          VARCHAR(255)  NULL,
-  device_condition     VARCHAR(255)  NULL,
+  accessories          VARCHAR(500)  NULL,
+  device_condition     VARCHAR(500)  NULL,
   problem              VARCHAR(1000) NOT NULL,
   remarks              VARCHAR(500)  NULL,
   expected_at          DATE          NULL,
@@ -1178,6 +1181,35 @@ CREATE TABLE job_order_part_serials (
   CONSTRAINT fk_job_part_serials_part FOREIGN KEY (part_id) REFERENCES job_order_parts (id)
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT fk_job_part_serials_serial FOREIGN KEY (serial_id) REFERENCES product_serials (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Job types of a job (one or more; job_orders.job_type_id = the first) and helper technicians
+-- (job_orders.technician_id = the lead). Migration 017.
+CREATE TABLE job_order_types (
+  job_order_id  INT UNSIGNED NOT NULL,
+  lookup_id     INT UNSIGNED NOT NULL,
+  PRIMARY KEY (job_order_id, lookup_id),
+  KEY idx_job_order_types_lookup (lookup_id),
+  CONSTRAINT fk_job_order_types_job FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_job_order_types_lookup FOREIGN KEY (lookup_id) REFERENCES lookups (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE job_order_technicians (
+  job_order_id  INT UNSIGNED NOT NULL,
+  user_id       INT UNSIGNED NOT NULL,
+  added_by      INT UNSIGNED NOT NULL,
+  added_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (job_order_id, user_id),
+  KEY idx_job_order_technicians_user (user_id),
+  KEY idx_job_order_technicians_added_by (added_by),
+  CONSTRAINT fk_job_order_technicians_job FOREIGN KEY (job_order_id) REFERENCES job_orders (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_job_order_technicians_user FOREIGN KEY (user_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_job_order_technicians_added_by FOREIGN KEY (added_by) REFERENCES users (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1813,6 +1845,40 @@ CREATE TABLE disbursement_lines (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
+-- Optional attachments (photos / scanned PDFs) on PO Internal, PO Outgoing
+-- and collection receipts (migration 016). Files in storage/attachments/,
+-- served by pages/attachment.php after the document access check.
+-- ---------------------------------------------------------------------
+CREATE TABLE document_attachments (
+  id             INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  doc_type       ENUM('purchase_order','customer_order','collection') NOT NULL,
+  doc_id         INT UNSIGNED  NOT NULL,
+  branch_id      INT UNSIGNED  NOT NULL,
+  label          VARCHAR(40)   NOT NULL,
+  filename       VARCHAR(64)   NOT NULL,
+  original_name  VARCHAR(150)  NOT NULL,
+  mime           VARCHAR(40)   NOT NULL,
+  size_bytes     INT UNSIGNED  NOT NULL,
+  uploaded_by    INT UNSIGNED  NOT NULL,
+  uploaded_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_by     INT UNSIGNED  NULL,
+  deleted_at     DATETIME      NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_attachments_filename (filename),
+  KEY idx_attachments_doc (doc_type, doc_id, deleted_at),
+  KEY idx_attachments_branch (branch_id),
+  KEY idx_attachments_uploaded_by (uploaded_by),
+  KEY idx_attachments_deleted_by (deleted_by),
+  CONSTRAINT fk_attachments_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_attachments_uploaded_by FOREIGN KEY (uploaded_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT fk_attachments_deleted_by FOREIGN KEY (deleted_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE RESTRICT,
+  CONSTRAINT chk_attachments_size CHECK (size_bytes > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
 -- Stock audit log: every change to products.stock and why.
 --   quantity is signed (+ in, - out); stock_after is the company level after
 --   the change; location_qty_after is the level at (branch, warehouse, location).
@@ -2083,6 +2149,58 @@ INSERT INTO lookups (id, list, name, sort_order) VALUES
   (16, 'warranty_type',    'Store Warranty',         2),
   (17, 'warranty_type',    'Supplier Warranty',      3),
   (18, 'warranty_type',    'Manufacturer Warranty',  4);
+-- Intake checklists (Master Data: Accessories, Device Conditions, Common Problems) + more job / device types.
+INSERT IGNORE INTO lookups (list, name, sort_order) VALUES
+  ('accessory', 'Charger / Adapter', 1), ('accessory', 'Power cable', 2), ('accessory', 'Bag / Case / Sleeve', 3),
+  ('accessory', 'Battery (removable)', 4), ('accessory', 'Mouse', 5), ('accessory', 'Keyboard', 6),
+  ('accessory', 'USB cable', 7), ('accessory', 'HDMI / VGA cable', 8), ('accessory', 'Network (LAN) cable', 9),
+  ('accessory', 'Original box', 10), ('accessory', 'Manual / Documents', 11), ('accessory', 'Warranty card / Receipt', 12),
+  ('accessory', 'SD card / Flash drive', 13), ('accessory', 'External hard drive', 14), ('accessory', 'SIM card', 15),
+  ('accessory', 'Stylus / Pen', 16), ('accessory', 'Remote control', 17), ('accessory', 'Ink / Toner cartridge', 18),
+  ('accessory', 'Paper tray', 19), ('accessory', 'Antennas', 20), ('accessory', 'Screws / Brackets', 21),
+  ('accessory', 'Headset / Earphones', 22), ('accessory', 'Webcam', 23), ('accessory', 'None (unit only)', 99),
+
+  ('device_condition', 'Good / No visible damage', 1), ('device_condition', 'Minor scratches', 2),
+  ('device_condition', 'Deep scratches / Scuffs', 3), ('device_condition', 'Dents', 4),
+  ('device_condition', 'Cracked screen', 5), ('device_condition', 'Screen lines / Dead pixels', 6),
+  ('device_condition', 'Cracked casing / Bezel', 7), ('device_condition', 'Broken hinge', 8),
+  ('device_condition', 'Missing keys', 9), ('device_condition', 'Missing screws', 10),
+  ('device_condition', 'Missing rubber feet', 11), ('device_condition', 'Loose / Damaged ports', 12),
+  ('device_condition', 'Swollen battery', 13), ('device_condition', 'Liquid damage signs', 14),
+  ('device_condition', 'Burnt smell / Burn marks', 15), ('device_condition', 'Very dusty / Dirty', 16),
+  ('device_condition', 'Rust / Corrosion', 17), ('device_condition', 'Stickers / Labels on unit', 18),
+  ('device_condition', 'Warranty seal broken', 19), ('device_condition', 'Previously opened / repaired', 20),
+  ('device_condition', 'Does not power on (on arrival)', 21), ('device_condition', 'Missing parts / covers', 22),
+
+  ('problem', 'No power / Will not turn on', 1), ('problem', 'No display / Black screen', 2),
+  ('problem', 'Display flickering / Lines', 3), ('problem', 'Slow performance', 4),
+  ('problem', 'Overheating / Shuts down by itself', 5), ('problem', 'Will not boot / Operating system error', 6),
+  ('problem', 'Blue screen / Keeps restarting', 7), ('problem', 'Virus / Pop-ups / Malware', 8),
+  ('problem', 'Battery not charging', 9), ('problem', 'Battery drains fast', 10),
+  ('problem', 'Charging port loose', 11), ('problem', 'Keyboard not working / Missing keys', 12),
+  ('problem', 'Touchpad / Mouse not working', 13), ('problem', 'No sound / Speaker problem', 14),
+  ('problem', 'Camera / Microphone not working', 15), ('problem', 'Wi-Fi / Network problem', 16),
+  ('problem', 'Bluetooth problem', 17), ('problem', 'USB ports not working', 18),
+  ('problem', 'Noisy fan / Strange noise', 19), ('problem', 'Hard drive / SSD failure', 20),
+  ('problem', 'Data backup / recovery needed', 21), ('problem', 'Software / MS Office installation', 22),
+  ('problem', 'Windows reinstall / upgrade', 23), ('problem', 'Driver problem', 24),
+  ('problem', 'Account locked / password reset', 25), ('problem', 'Printer: not printing', 26),
+  ('problem', 'Printer: lines / faded print', 27), ('problem', 'Printer: paper jam', 28),
+  ('problem', 'Printer: ink / toner error', 29), ('problem', 'Scanner not working', 30),
+  ('problem', 'Router: no internet / drops', 31), ('problem', 'Dropped / Physical damage', 32),
+  ('problem', 'Liquid spill', 33), ('problem', 'Preventive maintenance / cleaning', 34),
+
+  ('job_type', 'Software / OS Installation', 11), ('job_type', 'Virus Removal', 12),
+  ('job_type', 'Data Backup / Recovery', 13), ('job_type', 'Hardware Upgrade (RAM / SSD)', 14),
+  ('job_type', 'Parts Replacement', 15), ('job_type', 'Screen Replacement', 16),
+  ('job_type', 'Battery Replacement', 17), ('job_type', 'Keyboard Replacement', 18),
+  ('job_type', 'Network Setup / Configuration', 19), ('job_type', 'Printer Service', 20),
+  ('job_type', 'Warranty Claim / RMA', 21), ('job_type', 'On-site Service', 22),
+  ('job_type', 'PC Assembly / Build', 23),
+
+  ('device_type', 'Tablet', 11), ('device_type', 'Smartphone', 12), ('device_type', 'All-in-One PC', 13),
+  ('device_type', 'Projector', 14), ('device_type', 'UPS', 15), ('device_type', 'Scanner', 16),
+  ('device_type', 'CCTV / DVR', 17), ('device_type', 'Server', 18), ('device_type', 'Gaming Console', 19);
 
 
 -- =====================================================================
