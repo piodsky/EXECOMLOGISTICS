@@ -31,7 +31,7 @@ foreach (config('menu', []) as $key => $item) {
             <?php endif; ?>
             <?php foreach ($menuItems[$group] as $key => $item): ?>
                 <a href="<?= e(url(menu_path($item))) ?>"
-                   class="nav-link<?= $key === $activeKey ? ' is-active' : '' ?>"
+                   class="nav-link<?= $key === $activeKey ? ' is-active' : '' ?>" title="<?= e($item['label']) ?>"
                    <?= $key === $activeKey ? 'aria-current="page"' : '' ?>>
                     <?= icon($item['icon']) ?>
                     <span><?= e($item['label']) ?></span>
@@ -42,7 +42,7 @@ foreach (config('menu', []) as $key => $item) {
 
     <div class="sidebar__bottom">
         <?php if (Auth::can('pos.access')): ?>
-            <a class="scan-card" href="<?= e(url('pages/pos.php')) ?>" data-scan-trigger>
+            <a class="scan-card" href="<?= e(url('pages/pos.php')) ?>" data-scan-trigger title="Scan barcode (F2)">
                 <?= icon('barcode') ?>
                 <span>
                     <strong>Scan Barcode</strong>

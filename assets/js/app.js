@@ -127,16 +127,39 @@
         setInterval(tick, 1000);
     }
 
-    // ---- Sidebar toggle (tablet / mobile) -------------------------------
+    // ---- Sidebar toggle ---------------------------------------------------
+    // Desktop (> 992px): collapse to an icon rail and back; remembered in the execom_sidebar cookie so the
+    // server renders the next page already collapsed (no flash). Tablet / mobile: slide-in menu as before.
     const toggles = document.querySelectorAll('[data-sidebar-toggle]');
     const backdrop = document.querySelector('.sidebar-backdrop');
     const menuBtn = document.querySelector('.topbar__toggle');
+    const mobile = window.matchMedia('(max-width: 992px)');
     const setSidebar = (open) => {
         body.classList.toggle('sidebar-open', open);
         if (backdrop) backdrop.hidden = !open;
         if (menuBtn) menuBtn.setAttribute('aria-expanded', String(open));
     };
-    toggles.forEach((el) => el.addEventListener('click', () => setSidebar(!body.classList.contains('sidebar-open'))));
+    const setCollapsed = (collapsed) => {
+        body.classList.toggle('sidebar-collapsed', collapsed);
+        const path = body.dataset.baseUrl || '/';
+        document.cookie = 'execom_sidebar=' + (collapsed ? 'collapsed' : '') + '; path=' + path + '; SameSite=Lax; max-age=' + (collapsed ? 31536000 : 0);
+        if (menuBtn) {
+            menuBtn.setAttribute('aria-expanded', String(!collapsed));
+            menuBtn.setAttribute('aria-label', collapsed ? 'Expand menu' : 'Collapse menu');
+        }
+        window.dispatchEvent(new Event('resize')); // charts / grids that size themselves
+    };
+    toggles.forEach((el) => el.addEventListener('click', () => {
+        if (mobile.matches || el === backdrop) setSidebar(!body.classList.contains('sidebar-open'));
+        else setCollapsed(!body.classList.contains('sidebar-collapsed'));
+    }));
+    // Crossing the breakpoint: close the slide-in menu and give the button the right state.
+    const syncMode = () => {
+        if (!mobile.matches) setSidebar(false);
+        if (menuBtn) menuBtn.setAttribute('aria-expanded', String(mobile.matches ? body.classList.contains('sidebar-open') : !body.classList.contains('sidebar-collapsed')));
+    };
+    mobile.addEventListener('change', syncMode);
+    syncMode();
 
     // ---- User dropdown: close on outside click / Escape -----------------
     const userMenu = document.querySelector('.user-menu');
@@ -220,6 +243,6 @@
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
         if (userMenu) userMenu.open = false;
-        setSidebar(false);
+        if (mobile.matches) setSidebar(false);
     });
 })();
