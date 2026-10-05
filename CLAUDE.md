@@ -217,6 +217,25 @@ Read this first; open only the files a task needs.
 - Document chain strip (`DocChain::of(type, id)`, `includes/doc-chain.php`) above the layout of pr / po / rr / ap / dv
   and quote / co / dr / sale / collection views: walks up then down the chain; stages per permission; no amounts.
 
+## Notifications (migration 018) + more Dashboard (migration 019); user: "go" / "all"
+- `Notifications` (tables `notifications` + `notification_recipients` with per-user read_at): created by
+  `Audit::record()` -> `Notifications::fromAudit()` inside the caller's transaction (never throws; errors logged).
+  Rules in `Notifications::RULES` ("module.action" => icon, tone, message {actor}/{ref}, permissions, people involved
+  requester / creator / releaser / job_team, branch event / from / to). Recipients = active users with a permission
+  + access to that branch, every super admin, the people involved; never the actor. No amounts in messages.
+- Bell in the topbar (`includes/header.php`, `assets/js/notifications.js` on every page): server-rendered badge,
+  60 s count poll while visible, compact panel (All / Unread, Today / Earlier, Mark all read, See all) loaded from
+  `api/notifications/list.php` (`?count=1`, `?filter=unread`), `read-all.php` (POST, CSRF); rows open
+  `pages/notification-open.php?id=` (marks read, redirects to the document; others' ids 404); full list
+  `pages/notifications.php`. `api_guard_login()` = login-only API guard. Read rows older than 90 days are purged.
+  The topbar date hides at <= 1600px so the bell fits (time stays).
+- Dashboard additions (`Dashboard::money/pace/upcoming/slowMovers/service/topCustomers` + Reports topItems / byCategory
+  / byPayment / byCashier / stockByCategory): Money Position (receivables aging, payables, checks not cleared,
+  collected / paid), Sales Pace (month vs same days last month + target bar), Coming Up (7 days + late counts), Top
+  items / categories, Sales today by payment / cashier, Slow-moving stock (60 days, value at cost with products.cost),
+  Stock by category, Service & Quotations, Top customers, My notifications. Each part needs its permission.
+- `branches.monthly_target` (migration 019, Settings -> Branches; blank = no target) feeds the target bar.
+
 ## Job intake checklists, several job types + technicians (migration 017; user: "go", option 2)
 - Intake form (`job-form.php`): Accessories / Condition on arrival = checkboxes from Master Data lists `accessories`
   / `conditions` (lookups `accessory` / `device_condition`) + an "Other" box; saved as TEXT ("A, B, other") in

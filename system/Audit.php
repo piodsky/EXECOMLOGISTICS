@@ -77,6 +77,8 @@ final class Audit
             client_ip(),
             mb_substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255) ?: null,
         ]);
+        // In-app notifications for the events that need someone to act (same transaction; never throws).
+        Notifications::fromAudit($module, $action, $entityType, $entityId, $ref, $new, $branchId);
     }
 
     /** Only the keys whose value changed: [old subset, new subset]. */

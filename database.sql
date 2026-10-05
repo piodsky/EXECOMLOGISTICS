@@ -9,8 +9,8 @@
 --    admin   / admin123    (role: super_admin, branch MAR)
 --    cashier / cashier123  (role: cashier,     branch MAR)
 --
---  Existing installs: don't re-import; apply migrations/ (002 ... 017, in order) instead.
---  This file = Phase 1-4 schema + migrations 002 to 017.
+--  Existing installs: don't re-import; apply migrations/ (002 ... 019, in order) instead.
+--  This file = Phase 1-4 schema + migrations 002 to 019.
 -- =====================================================================
 
 -- Silence the harmless "database exists" / "unknown table" notes that
@@ -23,6 +23,8 @@ USE execomlogistics_db;
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS notification_recipients;
+DROP TABLE IF EXISTS notifications;
 DROP TABLE IF EXISTS document_attachments;
 DROP TABLE IF EXISTS disbursement_lines;
 DROP TABLE IF EXISTS disbursements;
@@ -101,6 +103,7 @@ CREATE TABLE branches (
   address          VARCHAR(255) NULL,
   contact_no       VARCHAR(50)  NULL,
   tin_branch_code  VARCHAR(30)  NULL,
+  monthly_target   DECIMAL(14,2) NULL,
   is_main          TINYINT(1)   NOT NULL DEFAULT 0,
   is_active        TINYINT(1)   NOT NULL DEFAULT 1,
   created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1932,6 +1935,47 @@ CREATE TABLE stock_movements (
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT fk_movements_customer_delivery FOREIGN KEY (customer_delivery_id) REFERENCES customer_deliveries (id)
     ON UPDATE CASCADE ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------
+-- In-app notifications (migration 018): one row per event, recipients
+-- (users with the right permission at the branch + super admins, never
+-- the person who did it) with their own read time.
+-- ---------------------------------------------------------------------
+CREATE TABLE notifications (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  created_at  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  branch_id   INT UNSIGNED    NULL,
+  module      VARCHAR(30)     NOT NULL,
+  event       VARCHAR(60)     NOT NULL,
+  icon        VARCHAR(20)     NOT NULL,
+  tone        VARCHAR(10)     NOT NULL DEFAULT 'blue',
+  message     VARCHAR(255)    NOT NULL,
+  ref         VARCHAR(60)     NULL,
+  link        VARCHAR(255)    NULL,
+  actor_id    INT UNSIGNED    NULL,
+  actor_name  VARCHAR(100)    NULL,
+  PRIMARY KEY (id),
+  KEY idx_notifications_created (created_at),
+  KEY idx_notifications_branch (branch_id),
+  KEY idx_notifications_actor (actor_id),
+  CONSTRAINT fk_notifications_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT fk_notifications_actor FOREIGN KEY (actor_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE notification_recipients (
+  notification_id  BIGINT UNSIGNED NOT NULL,
+  user_id          INT UNSIGNED    NOT NULL,
+  read_at          DATETIME        NULL,
+  PRIMARY KEY (user_id, notification_id),
+  KEY idx_notification_recipients_unread (user_id, read_at),
+  KEY idx_notification_recipients_notification (notification_id),
+  CONSTRAINT fk_notification_recipients_notification FOREIGN KEY (notification_id) REFERENCES notifications (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_notification_recipients_user FOREIGN KEY (user_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------

@@ -250,6 +250,19 @@ function api_guard(string $method, array|string $access): void
     }
 }
 
+/** API guard for features every signed-in user has (notifications): method + login (+ CSRF header when not GET). */
+function api_guard_login(string $method): void
+{
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== $method) {
+        header('Allow: ' . $method);
+        json_response(['ok' => false, 'message' => 'Method not allowed.'], 405);
+    }
+    Auth::requireLogin();
+    if ($method !== 'GET') {
+        Csrf::verifyRequest();
+    }
+}
+
 /**
  * Page guard: login + permission from config/menu.php ('permission': a key or a list = any of them;
  * legacy 'roles' only when no permission is set). Returns the menu item.
