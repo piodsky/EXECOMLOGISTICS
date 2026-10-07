@@ -108,6 +108,14 @@ return [
         'permission' => 'inventory.view',
         'group'      => 'stock',
     ],
+    // A different selling price per branch (BranchPrices; products.branch_price, branches the user works in).
+    'branch-prices' => [
+        'label'      => 'Branch Prices',
+        'icon'       => 'tag',
+        'url'        => 'pages/branch-prices.php',
+        'permission' => 'products.branch_price',
+        'group'      => 'stock',
+    ],
     // Transfers, damaged / display units, internal use, write-offs, stock counts (= InventoryDocs::VIEW_PERMISSIONS).
     'stock-docs' => [
         'label'      => 'Stock Operations',

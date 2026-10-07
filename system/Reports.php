@@ -222,7 +222,7 @@ final class Reports
         [$join, $params] = Stock::scopeJoin();
         $stmt = db()->prepare(
             "SELECT c.name, COUNT(p.id) AS products, COALESCE(SUM(COALESCE(bs.qty, 0)), 0) AS units,
-                    COALESCE(SUM(p.price * COALESCE(bs.qty, 0)), 0) AS value
+                    COALESCE(SUM(bs.price_value), 0) AS value
                FROM categories c
                LEFT JOIN products p ON p.category_id = c.id AND p.is_active = ?
                {$join}
@@ -562,10 +562,11 @@ final class Reports
         $sales = $map("SELECT s.branch_id, COUNT(*) AS sales, SUM(s.total) AS net, SUM(CASE WHEN s.cost_total IS NOT NULL THEN s.subtotal - s.discount_amount - s.cost_total END) AS profit,
                               SUM(s.job_order_id IS NOT NULL) AS job_bills, SUM(CASE WHEN s.job_order_id IS NOT NULL THEN s.total END) AS job_revenue
                          FROM sales s WHERE s.status = 'completed' AND s.created_at >= ? AND s.created_at < ? GROUP BY s.branch_id", $rng);
-        $valueExpr = $cost ? 'sb.qty * COALESCE(pb.avg_cost, p.unit_cost)' : 'sb.qty * p.price';
+        $valueExpr = $cost ? 'sb.qty * COALESCE(pb.avg_cost, p.unit_cost)' : 'sb.qty * COALESCE(bpp.price, p.price)';
         $stock = $map("SELECT sb.branch_id, SUM(sb.qty) AS units, SUM({$valueExpr}) AS value
                          FROM stock_balances sb JOIN products p ON p.id = sb.product_id
                          LEFT JOIN product_branches pb ON pb.product_id = sb.product_id AND pb.branch_id = sb.branch_id
+                         LEFT JOIN product_branch_prices bpp ON bpp.product_id = sb.product_id AND bpp.branch_id = sb.branch_id
                         WHERE sb.qty > 0 GROUP BY sb.branch_id", []);
         $low = $map("SELECT x.branch_id, COUNT(*) AS low FROM (
                          SELECT b.id AS branch_id, p.id, COALESCE((SELECT SUM(sb.qty) FROM stock_balances sb WHERE sb.product_id = p.id AND sb.branch_id = b.id), 0) AS qty, p.reorder_level

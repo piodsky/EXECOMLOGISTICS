@@ -28,6 +28,35 @@ if (is_post()) {
         redirect('pages/' . $self);
     }
     Csrf::verifyRequest();
+
+    // Branch prices card (own form; products.branch_price for the branches the user works in).
+    if (($_POST['form'] ?? '') === 'branch_prices' && $product !== null) {
+        $prices = [];
+        foreach (BranchPrices::editableBranches() as $bid => $b) {
+            $v    = $_POST['branch_price_' . $bid] ?? null;
+            $orig = $_POST['orig_price_' . $bid] ?? null;
+            // Only boxes the user changed, so a stale page never overwrites a newer price.
+            if (is_string($v) && (!is_string($orig) || trim($v) !== trim($orig))) {
+                $prices[$bid] = trim($v);
+            }
+        }
+        if (!BranchPrices::editableBranches()) {
+            abort(403, 'You may not set branch prices.');
+        }
+        try {
+            $n = BranchPrices::saveForProduct((int) $id, $prices);
+            flash('success', $n > 0 ? "Branch prices of {$product['name']} were saved." : 'Nothing changed.');
+        } catch (HttpException $e) {
+            if ($e->status !== 422) {
+                throw $e;
+            }
+            flash_old(array_filter($_POST, 'is_string'));
+            flash_errors($e->details['errors'] ?? []);
+            flash('error', $e->getMessage());
+        }
+        redirect('pages/' . $self . '#branchPrices');
+    }
+
     if (!$canManage) {
         abort(403, 'You do not have permission to manage products.');
     }
@@ -85,8 +114,9 @@ if (is_post()) {
 $movements  = $product ? Products::movements($id, 15) : [];
 $imageUrl   = ImageUpload::url($product['image'] ?? null);
 $val = static fn (string $key, mixed $default = ''): string => old($key, (string) ($product[$key] ?? $default));
-$isActive   = has_old() ? old('is_active') === '1' : (int) ($product['is_active'] ?? 1) === 1;
-$tracksSerial = has_old() ? old('track_serial') === '1' : (int) ($product['track_serial'] ?? 0) === 1;
+$mainOld    = has_old() && old('form') !== 'branch_prices'; // old input of the product form, not the Branch prices card
+$isActive   = $mainOld ? old('is_active') === '1' : (int) ($product['is_active'] ?? 1) === 1;
+$tracksSerial = $mainOld ? old('track_serial') === '1' : (int) ($product['track_serial'] ?? 0) === 1;
 $canCost    = Auth::can('products.cost'); // unit cost is never rendered without it
 $cur        = static fn (string $key): ?int => isset($product[$key]) ? (int) $product[$key] : null;
 $categories = MasterData::options('categories', $cur('category_id'));
@@ -98,6 +128,9 @@ $inactive   = static fn (array $o): string => (int) $o['is_active'] === 1 ? '' :
 $typeLabels = ['initial' => 'Opening stock', 'sale' => 'Sale', 'restock' => 'Restock', 'adjustment' => 'Adjustment', 'void' => 'Void', 'receiving' => 'Receiving',
                'transfer' => 'Transfer', 'issue' => 'Internal use', 'write_off' => 'Write-off', 'count' => 'Stock count'];
 $canDocs    = Auth::canAny(...InventoryDocs::VIEW_PERMISSIONS);
+// Branch prices: every active branch (view); inputs only for branches the user may price.
+$branchPrices  = $product ? BranchPrices::forProduct($id) : [];
+$priceEditable = array_filter(array_column($branchPrices, 'id'), static fn ($bid): bool => BranchPrices::canEdit((int) $bid));
 
 // Stock per storage location (current scope) and the POS location, where adjustments go.
 $locStock      = $product ? Products::locations($id) : [];
@@ -172,7 +205,7 @@ require ROOT_PATH . '/includes/header.php';
                 <input class="form-input" name="price" inputmode="decimal" maxlength="10" required placeholder="0.00"
                        value="<?= e($val('price')) ?>"<?= invalid('price') ?><?= $ro ?>>
                 <?= field_error('price') ?>
-                <p class="form-hint">The selling price the POS uses.</p>
+                <p class="form-hint">Company price: every branch sells at it unless the branch has its own price (Branch prices).</p>
             </label>
 
             <?php if ($canCost): ?>
@@ -372,6 +405,46 @@ require ROOT_PATH . '/includes/header.php';
 </form>
 
 <?php if ($product): ?>
+    <section class="card card--pad branch-prices-card" id="branchPrices">
+        <h2 class="card__title"><?= icon('tag') ?> Branch prices</h2>
+        <p class="muted">Leave a branch blank to sell at the company price (<?= e(money($product['price'])) ?>). Past sales keep their price.</p>
+        <form method="post" action="<?= e(url('pages/' . $self)) ?>" novalidate>
+            <?= Csrf::field() ?>
+            <input type="hidden" name="form" value="branch_prices">
+            <input type="hidden" name="return" value="<?= e($returnTo) ?>">
+            <div class="table-wrap">
+                <table class="table bp-table">
+                    <thead><tr><th>Branch</th><th class="num">Selling price</th><th class="col-opt">Last change</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($branchPrices as $bp): ?>
+                        <?php $bid = (int) $bp['id']; $key = 'branch_price_' . $bid; ?>
+                        <tr>
+                            <td><span class="badge badge--branch"><?= e($bp['code']) ?></span> <?= e($bp['name']) ?></td>
+                            <td class="num">
+                                <?php if (in_array($bid, $priceEditable, true)): ?>
+                                    <input type="hidden" name="orig_price_<?= $bid ?>" value="<?= e($bp['price'] !== null ? number_format((float) $bp['price'], 2, '.', '') : '') ?>">
+                                    <input class="form-input bp-input" name="<?= e($key) ?>" inputmode="decimal" maxlength="12"
+                                           placeholder="<?= e(number_format((float) $product['price'], 2)) ?>" aria-label="Price at <?= e($bp['name']) ?>"
+                                           value="<?= e(old($key, $bp['price'] !== null ? number_format((float) $bp['price'], 2, '.', '') : '')) ?>"<?= invalid($key) ?>>
+                                    <?= field_error($key) ?>
+                                <?php elseif ($bp['price'] !== null): ?>
+                                    <strong><?= e(money($bp['price'])) ?></strong>
+                                <?php else: ?>
+                                    <span class="muted"><?= e(money($product['price'])) ?> (company)</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="col-opt muted"><?= $bp['updated_at'] !== null ? e(date('M j, Y', strtotime($bp['updated_at'])) . ($bp['updated_by_name'] ? ' · ' . $bp['updated_by_name'] : '')) : '—' ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php if ($priceEditable): ?>
+                <div class="form-actions"><button type="submit" class="btn btn--primary" id="saveBranchPrices"><?= icon('save') ?> Save Branch Prices</button></div>
+            <?php endif; ?>
+        </form>
+    </section>
+
     <section class="card history-card">
         <header class="card__head"><h2><?= icon('clock') ?> Stock History</h2><span class="muted">Last <?= count($movements) ?> changes</span></header>
         <div class="table-wrap">

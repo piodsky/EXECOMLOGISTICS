@@ -33,6 +33,7 @@ return [
     'counts.create'       => ['Inventory', 'Create stock counts and enter counted quantities'],
     'counts.approve'      => ['Inventory', 'Approve or cancel stock counts'],
     'products.cost'       => ['Inventory', 'See and edit unit cost'],
+    'products.branch_price' => ['Inventory', 'Set branch selling prices (branches the user works in)'],
     'master_data.manage'  => ['Master Data', 'Manage categories, brands, models, units, customer types and service lists'],
     'suppliers.view'      => ['Suppliers', 'View suppliers'],
     'suppliers.manage'    => ['Suppliers', 'Add, edit and deactivate suppliers'],

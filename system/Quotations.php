@@ -234,7 +234,9 @@ final class Quotations
         $products = [];
         if ($ids) {
             $in_  = implode(',', array_fill(0, count($ids), '?'));
-            $stmt = db()->prepare("SELECT id, name, price, is_active FROM products WHERE id IN ({$in_})");
+            // Suggested = the branch price of the working branch (drafts are saved in it), else the company price.
+            $priceSql = Branch::isConcrete() ? BranchPrices::sql('p', (int) Branch::current()) : 'p.price';
+            $stmt = db()->prepare("SELECT p.id, p.name, {$priceSql} AS price, p.is_active FROM products p WHERE p.id IN ({$in_})");
             $stmt->execute(array_keys($ids));
             $products = array_column($stmt->fetchAll(), null, 'id');
         }

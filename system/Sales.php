@@ -88,6 +88,10 @@ final class Sales
             foreach ($stmt->fetchAll() as $row) {
                 $products[(int) $row['id']] = $row;
             }
+            // Suggested price = the branch price when set (BranchPrices), else the company price.
+            foreach (BranchPrices::map($ids, $branchId) as $pid => $branchPrice) {
+                $products[$pid]['price'] = $branchPrice;
+            }
             // Products of a deactivated category are hidden from the POS, so they are not for sale either.
             $stmt = $pdo->prepare(
                 "SELECT p.id FROM products p JOIN categories c ON c.id = p.category_id WHERE p.id IN ({$in}) AND c.is_active = 0"

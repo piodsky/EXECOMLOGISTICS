@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and $txt -notmatch '/storage/attachments/' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print|attachment|attachments|buying|selling)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and $txt -notmatch '/storage/attachments/' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print|attachment|attachments|buying|selling|branch-prices)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -555,7 +555,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Customer Orders|Billing & Collections|Customers|Job Orders|Purchasing|Receiving|Payables|Suppliers|Inventory|Stock Operations|Branch Transfers|Serial Lookup|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Customer Orders|Billing & Collections|Customers|Job Orders|Purchasing|Receiving|Payables|Suppliers|Inventory|Branch Prices|Stock Operations|Branch Transfers|Serial Lookup|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -967,7 +967,7 @@ try {
     # MAR branch admin: warehouses + locations
     Login 'maradmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
-    Check ($menu -like '*Inventory|Stock Operations|Branch Transfers|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
+    Check ($menu -like '*Inventory|Branch Prices|Stock Operations|Branch Transfers|Serial Lookup*') "MAR branch admin menu has Stock Operations ($menu)"
     Nav "$Base/pages/warehouses.php"
     Check ((Eval "[...document.querySelectorAll('.wh-card[data-warehouse=MAIN] tr[data-location]')].map(r => r.dataset.location).sort().join(',')") -eq 'DAMAGED,DISPLAY,GENERAL') 'warehouses tab: MAIN with GENERAL / DAMAGED / DISPLAY'
     $r = Eval "fetch('$Base/pages/warehouses.php', {method: 'POST', body: new URLSearchParams({action: 'save_warehouse', code: 'NOCSRF', name: 'No token'})}).then(r => r.status)"
@@ -1946,6 +1946,48 @@ try {
     Check ($st -eq '403,200,200,403') "cashier: PO attachment 403, both overviews 200, PO 403 ($st)"
     Nav "$Base/pages/buying.php"
     Check ((Eval "[...document.querySelectorAll('[data-stage]')].map(s => s.dataset.stage).join(',')") -eq 'pr_approve,pr_order') 'cashier buying overview: only the purchase request steps'
+    Logout
+    Login 'admin' 'admin123' 'dashboard.php'
+
+    # Branch prices (migration 020): a different selling price per branch; blank = the company price
+    Check ((Sql "SELECT COUNT(*) FROM role_permissions rp JOIN roles r ON r.id = rp.role_id JOIN permissions p ON p.id = rp.permission_id WHERE p.perm_key = 'products.branch_price' AND r.code = 'branch_admin'") -eq '1') 'branch prices: permission granted to branch_admin'
+    SwitchBranch 1
+    Nav "$Base/pages/branch-prices.php?search=ITM-0002"
+    Submit "document.querySelector('[name=price_2]').value = '420.00'; document.getElementById('branchPricesForm').requestSubmit()" 'save MAR price of Mouse'
+    Check ((Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 1') -eq '420.00' -and (Text '.alert--success span') -like '1 price saved*') "branch prices: Mouse at MAR = 420.00 ($(Text '.alert span'))"
+    Check ((Sql "SELECT COUNT(*) FROM audit_logs WHERE module = 'products' AND action = 'branch_price' AND entity_id = 1") -eq '1' -and (Sql "SELECT COUNT(*) FROM notifications WHERE event = 'products.branch_price'") -eq '1') 'branch prices: audit record + notification'
+    $pp = Eval "BB.api('pos/products.php').then(d => d.products.find(p => p.id === 2).price_cents)"
+    SwitchBranch 2
+    $pp2 = Eval "BB.api('pos/products.php').then(d => d.products.find(p => p.id === 2).price_cents)"
+    Check ($pp -eq '42000' -and $pp2 -eq '35000') "POS: Mouse 420.00 at MAR, company price 350.00 at MLB ($pp / $pp2)"
+    SwitchBranch 1
+    $sale = ApiSale 2
+    $line = Sql "SELECT CONCAT(si.unit_price, '/', si.suggested_price) FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.sale_no = '$($sale -replace '^ok:', '')' AND si.product_id = 2"
+    Check ($sale -like 'ok:*' -and $line -eq '420.00/420.00') "POS sale at MAR uses the branch price ($sale, $line)"
+    Nav "$Base/pages/inventory.php?search=ITM-0002"
+    Check ((Eval "[...document.querySelectorAll('#inventoryTable tbody tr')].some(tr => tr.textContent.includes('420.00') && tr.textContent.includes('branch price'))")) 'inventory list: branch price with its tag'
+    Nav "$Base/pages/branch-prices.php?search=ITM-0002"
+    Submit "document.querySelector('[name=price_2]').value = 'abc'; document.getElementById('branchPricesForm').requestSubmit()" 'invalid price'
+    Check ((Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 1') -eq '420.00' -and (Eval "!!document.querySelector('[name=price_2].is-invalid, [name=price_2][aria-invalid=true]')")) 'branch prices: invalid price refused, field marked'
+    Nav "$Base/pages/product-form.php?id=2"
+    $nIn = Eval "document.querySelectorAll('#branchPrices .bp-input').length"
+    Check ([int]$nIn -eq [int](Sql 'SELECT COUNT(*) FROM branches WHERE is_active = 1') -and (Eval "document.querySelector('[name=branch_price_1]').value") -eq '420.00') "product form: Branch prices card, one box per branch ($nIn)"
+    Submit "document.querySelector('[name=branch_price_1]').value = ''; document.querySelector('[name=branch_price_2]').value = '399.50'; document.getElementById('saveBranchPrices').click()" 'product form branch prices'
+    Check ((Sql 'SELECT COUNT(*) FROM product_branch_prices WHERE product_id = 2 AND branch_id = 1') -eq '0' -and (Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 2') -eq '399.50') 'product form: MAR back to the company price, MLB 399.50'
+    $pp = Eval "BB.api('pos/products.php').then(d => d.products.find(p => p.id === 2).price_cents)"
+    Check ($pp -eq '35000' -and (Sql "SELECT si.unit_price FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.sale_no = '$($sale -replace '^ok:', '')' AND si.product_id = 2") -eq '420.00') "blank = company price on the POS again ($pp); the earlier sale keeps 420.00"
+    Shot '56-branch-prices'
+    Logout
+    Login 'davadmin' $script:pw
+    Nav "$Base/pages/product-form.php?id=2"
+    $ids = Eval "[...document.querySelectorAll('#branchPrices .bp-input')].map(i => i.name).join(',')"
+    $r = PostForm 'pages/product-form.php?id=2' "form: 'branch_prices', branch_price_2: '1.00', orig_price_2: '399.50', branch_price_4: '360.00', orig_price_4: ''"
+    Check ($ids -eq 'branch_price_4' -and (Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 2') -eq '399.50' -and (Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 4') -eq '360.00') "branch admin: only their own branch box ($ids); a forged MLB price is ignored, DAV saved"
+    Logout
+    Login 'davcash' $script:pw 'pos.php'
+    Check ((Status 'pages/branch-prices.php') -eq 403) 'cashier: no Branch Prices page'
+    $r = PostForm 'pages/product-form.php?id=2' "form: 'branch_prices', branch_price_4: '1.00', orig_price_4: '360.00'"
+    Check ($r -like '403:*' -and (Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 4') -eq '360.00') "cashier: posting a branch price is refused ($($r.Substring(0, 3)))"
     Logout
     Login 'admin' 'admin123' 'dashboard.php'
 

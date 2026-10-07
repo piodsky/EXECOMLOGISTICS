@@ -147,7 +147,12 @@ final class Stock
             $params[] = $locationId;
         }
         return [
-            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty FROM stock_balances sb
+            // price_value = units x the suggested price of each unit's branch (branch price, else company price).
+            "LEFT JOIN (SELECT sb.product_id, SUM(sb.qty) AS qty,
+                               SUM(sb.qty * COALESCE(bpp.price, sp.price)) AS price_value
+                          FROM stock_balances sb
+                          JOIN products sp ON sp.id = sb.product_id
+                          LEFT JOIN product_branch_prices bpp ON bpp.product_id = sb.product_id AND bpp.branch_id = sb.branch_id
                          WHERE {$scope} GROUP BY sb.product_id) bs ON bs.product_id = p.id",
             $params,
         ];

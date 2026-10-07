@@ -371,7 +371,7 @@ final class JobOrders
     /** Suggested labour at completion: the estimate minus the parts used (at their selling price), never below 0. */
     public static function suggestedLabor(array $j): string
     {
-        $stmt = db()->prepare("SELECT COALESCE(SUM(jp.qty_used * p.price), 0) FROM job_order_parts jp JOIN products p ON p.id = jp.product_id
+        $stmt = db()->prepare("SELECT COALESCE(SUM(jp.qty_used * " . BranchPrices::sql('p', (int) $j['branch_id']) . "), 0) FROM job_order_parts jp JOIN products p ON p.id = jp.product_id
                                 WHERE jp.job_order_id = ? AND jp.status = 'issued'");
         $stmt->execute([(int) $j['id']]);
         $cents = to_cents((string) ($j['estimate'] ?? '0')) - to_cents((string) $stmt->fetchColumn());

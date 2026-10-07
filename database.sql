@@ -60,6 +60,7 @@ DROP TABLE IF EXISTS product_serials;
 DROP TABLE IF EXISTS receiving_item_serials;
 DROP TABLE IF EXISTS receiving_items;
 DROP TABLE IF EXISTS receiving_reports;
+DROP TABLE IF EXISTS product_branch_prices;
 DROP TABLE IF EXISTS product_branches;
 DROP TABLE IF EXISTS document_sequences;
 DROP TABLE IF EXISTS audit_logs;
@@ -397,6 +398,24 @@ CREATE TABLE product_branches (
   CONSTRAINT fk_product_branches_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
     ON UPDATE CASCADE ON DELETE RESTRICT,
   CONSTRAINT chk_product_branches_avg_cost CHECK (avg_cost >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Branch selling price (migration 020): no row = the company price (products.price).
+CREATE TABLE product_branch_prices (
+  product_id  INT UNSIGNED  NOT NULL,
+  branch_id   INT UNSIGNED  NOT NULL,
+  price       DECIMAL(10,2) NOT NULL,
+  updated_by  INT UNSIGNED  NULL,
+  updated_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (product_id, branch_id),
+  KEY idx_product_branch_prices_branch (branch_id),
+  CONSTRAINT fk_product_branch_prices_product FOREIGN KEY (product_id) REFERENCES products (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_product_branch_prices_branch FOREIGN KEY (branch_id) REFERENCES branches (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_product_branch_prices_user FOREIGN KEY (updated_by) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL,
+  CONSTRAINT chk_product_branch_prices_price CHECK (price >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
@@ -2122,7 +2141,8 @@ INSERT INTO permissions (id, perm_key, module, label, sort_order) VALUES
   (57, 'collections.manage',      'Collections', 'Record collections of on-account bills (cash, check, bank, withholding taxes)', 134),
   (58, 'payables.cancel',         'Payables', 'Cancel supplier invoices and disbursement vouchers', 138),
   (59, 'payables.manage',         'Payables', 'Record supplier invoices and pay them (disbursement vouchers); shows costs', 137),
-  (60, 'sales.charge',            'Collections', 'Sell on account at the POS and on job bills (credit customers, within their limit)', 136);
+  (60, 'sales.charge',            'Collections', 'Sell on account at the POS and on job bills (credit customers, within their limit)', 136),
+  (61, 'products.branch_price',   'Inventory', 'Set branch selling prices (branches the user works in)', 94);
 
 -- super_admin: is_super = 1 means every permission (no role_permissions rows).
 INSERT INTO roles (id, code, name, description, is_system, is_super) VALUES
@@ -2147,7 +2167,7 @@ WHERE (r.code = 'branch_admin' AND p.perm_key IN ('pos.access', 'sales.view', 's
          'job_orders.view', 'job_orders.create', 'job_orders.update', 'job_orders.assign', 'job_parts.issue',
          'job_orders.release', 'purchasing.request', 'purchasing.approve', 'purchasing.order', 'customer_orders.manage',
          'customer_orders.approve', 'customer_orders.deliver', 'customer_orders.bill', 'collections.manage',
-         'collections.cancel', 'sales.charge', 'payables.manage', 'payables.cancel'))
+         'collections.cancel', 'sales.charge', 'payables.manage', 'payables.cancel', 'products.branch_price'))
    OR (r.code = 'cashier' AND p.perm_key IN ('pos.access', 'sales.view', 'customers.view', 'customers.edit',
          'inventory.view', 'serials.view', 'pos.change_price', 'pos.discount', 'job_orders.view', 'job_orders.create',
          'job_orders.release', 'purchasing.request', 'customer_orders.manage', 'customer_orders.bill',
