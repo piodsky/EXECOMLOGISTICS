@@ -1,0 +1,92 @@
+/* How It Works (pages/workflow.php) */
+.wf-map, .wf-flow, #wf-rules, #wf-roles { margin-bottom: 16px; scroll-margin-top: calc(var(--topbar-h) + 12px); }
+
+/* Big picture: Buy -> Stock -> Sell -> Collect */
+.wf-lane { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; counter-reset: lane; }
+.wf-lane li { position: relative; }
+.wf-lane li + li::before {
+    content: ""; position: absolute; left: -22px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%);
+    background: var(--primary-400);
+    clip-path: polygon(0 30%, 55% 30%, 55% 0, 100% 50%, 55% 100%, 55% 70%, 0 70%);
+}
+.wf-lane__item {
+    display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center;
+    height: 100%; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--surface-2); color: inherit; text-decoration: none; transition: border-color .15s, transform .1s;
+}
+.wf-lane__item:hover { border-color: var(--accent); transform: translateY(-1px); }
+.wf-lane__item strong { font-size: 15px; }
+.wf-lane__item small { grid-column: 2; color: var(--text-muted); line-height: 1.35; }
+.wf-lane__icon {
+    grid-row: 1 / 3; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px;
+    background: var(--info-bg); color: var(--primary);
+}
+.wf-lane__icon .icon { width: 22px; height: 22px; }
+.wf-side { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+.wf-lane__item--alt { background: var(--surface); border-style: dashed; }
+.wf-jump { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.wf-jump .chip { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: inherit; }
+.wf-jump .chip .icon { width: 15px; height: 15px; }
+
+/* One workflow */
+.wf-flow__head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
+.wf-flow__head h2 { font-size: 18px; margin: 0 0 2px; }
+.wf-flow__head p { margin: 0; }
+.wf-flow__icon { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: var(--primary); color: #fff; }
+.wf-flow__icon .icon { width: 22px; height: 22px; }
+
+.wf-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 24px 28px; }
+.wf-step {
+    position: relative; display: flex; flex-direction: column; gap: 8px; padding: 14px;
+    border: 1px solid var(--border); border-top: 3px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+.wf-step.is-mine { border-top-color: var(--success); }
+.wf-step + .wf-step::before {
+    content: ""; position: absolute; left: -22px; top: 22px; width: 16px; height: 16px;
+    background: var(--primary-400);
+    clip-path: polygon(0 30%, 55% 30%, 55% 0, 100% 50%, 55% 100%, 55% 70%, 0 70%);
+}
+.wf-step__top { display: flex; align-items: center; gap: 8px; }
+.wf-step__top .badge { margin-left: auto; }
+.wf-step__no {
+    flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--navy-700); color: #fff; font-size: 13px; font-weight: 700;
+}
+.wf-step__title { font-size: 14px; line-height: 1.25; }
+.wf-step__text { margin: 0; font-size: 13px; line-height: 1.45; color: var(--text); flex: 1; }
+.wf-step__meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wf-who { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.wf-who .icon { width: 13px; height: 13px; }
+.wf-step__link { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 600; color: var(--primary); text-decoration: none; }
+.wf-step__link .icon { width: 14px; height: 14px; }
+.wf-step__link:hover { text-decoration: underline; }
+
+.wf-notes { list-style: none; margin: 16px 0 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); display: grid; gap: 6px; }
+.wf-notes li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text-muted); }
+.wf-notes .icon { flex: none; width: 15px; height: 15px; margin-top: 2px; color: var(--info); }
+
+/* Rules + roles */
+.wf-rules, .wf-roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.wf-rule { display: flex; gap: 12px; align-items: flex-start; }
+.wf-rule p, .wf-role p { margin: 4px 0 0; font-size: 13px; line-height: 1.45; }
+.wf-rule__icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--info-bg); color: var(--primary); }
+.wf-rule__icon .icon { width: 18px; height: 18px; }
+.wf-role { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); }
+.wf-role.is-mine { border-color: var(--success); background: var(--success-bg); }
+.wf-role .badge { margin-left: 6px; }
+
+@media (max-width: 1100px) {
+    .wf-lane { grid-template-columns: 1fr 1fr; }
+    .wf-lane li:nth-child(3)::before { display: none; }
+}
+@media (max-width: 640px) {
+    .wf-lane, .wf-side { grid-template-columns: 1fr; gap: 14px; }
+    .wf-lane li::before, .wf-step::before { display: none; }
+}
+/* An arrow only between steps on the same row is not knowable in CSS; hide them where a row wraps. */
+@media (max-width: 900px) { .wf-step::before { display: none; } }
+
+@media print {
+    .wf-jump, .wf-step__link { display: none; }
+    .wf-flow { break-inside: avoid; }
+}

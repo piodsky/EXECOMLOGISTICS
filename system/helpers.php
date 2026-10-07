@@ -273,7 +273,9 @@ function require_page(string $key): array
     if (!is_array($item)) {
         throw new LogicException("Unknown page [{$key}] — add it to config/menu.php");
     }
-    if (isset($item['permission'])) {
+    if (!empty($item['login'])) {
+        Auth::requireLogin(); // any signed-in user
+    } elseif (isset($item['permission'])) {
         Auth::requirePermission(...(array) $item['permission']);
     } else {
         Auth::requireRole(...($item['roles'] ?? []));
@@ -284,6 +286,9 @@ function require_page(string $key): array
 /** Can the signed-in user open this menu item? */
 function can_open_menu(array $item): bool
 {
+    if (!empty($item['login'])) {
+        return Auth::check();
+    }
     if (isset($item['permission'])) {
         return Auth::canAny(...(array) $item['permission']);
     }

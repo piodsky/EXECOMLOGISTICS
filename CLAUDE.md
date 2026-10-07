@@ -254,6 +254,12 @@ Read this first; open only the files a task needs.
   prices) and the "Branch prices" card on product-form (own form `form=branch_prices`; branch admins see only their
   own branch box). Both post only boxes whose value differs from the hidden `orig_*` value (stale page safe).
 
+## How It Works page
+- `pages/workflow.php` (menu "How It Works", group overview, `'login' => true` = any signed-in user, `home` 1000 so
+  it is never a landing page); content in `Workflow::flows()` / `rules()` / `ROLES` (POS, customer orders, billing &
+  collections, buying, stock, service). Steps the user can do (`Workflow::canDo(perm)`) get "You" + an Open link.
+  Keep it in step with the real flows when a workflow changes. CSS `assets/css/workflow.css`.
+
 ## Job intake checklists, several job types + technicians (migration 017; user: "go", option 2)
 - Intake form (`job-form.php`): Accessories / Condition on arrival = checkboxes from Master Data lists `accessories`
   / `conditions` (lookups `accessory` / `device_condition`) + an "Other" box; saved as TEXT ("A, B, other") in
