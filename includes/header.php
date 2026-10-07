@@ -25,7 +25,7 @@ $hdrSearch = Auth::can('pos.access') ? ['pages/pos.php', 'q'] : (Auth::can('inve
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="csrf-token" content="<?= e(Csrf::token()) ?>">
     <title><?= e($page['title'] ?? 'POS') ?> · <?= e(config('app.name')) ?> POS</title>
     <link rel="icon" href="<?= e(asset('img/favicon.png')) ?>" type="image/png">
