@@ -254,6 +254,13 @@ Read this first; open only the files a task needs.
   prices) and the "Branch prices" card on product-form (own form `form=branch_prices`; branch admins see only their
   own branch box). Both post only boxes whose value differs from the hidden `orig_*` value (stale page safe).
 
+## Phone bottom navigation
+- `includes/bottom-nav.php` (from footer.php), shown at <= 768px: the first four pages the user can open from
+  `$bnTabs` (Home / POS / Jobs / Stock / Orders / Billing / Sales / Buying / Customers / Serials) + Menu
+  (`data-sidebar-toggle`): on phones the sidebar opens as a full-page menu above the bar (name card, 2-column
+  shortcut tiles per section, Sign out; `.sidebar__phone-*` parts). Topbar menu button + Logout hidden on phones
+  (Sign out is in the account menu); content / toasts / sidebar leave room for the bar (safe-area aware).
+
 ## How It Works page
 - `pages/workflow.php` (menu "How It Works", group overview, `'login' => true` = any signed-in user, `home` 1000 so
   it is never a landing page); content in `Workflow::flows()` / `rules()` / `ROLES` (POS, customer orders, billing &

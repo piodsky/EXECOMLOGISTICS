@@ -15,6 +15,12 @@ foreach (config('menu', []) as $key => $item) {
 }
 ?>
 <aside class="sidebar" id="sidebar">
+    <!-- Phone: the menu is a full page (Menu tab of the bottom bar); this head shows only there -->
+    <div class="sidebar__phone-head">
+        <span class="avatar"><?= icon('user') ?></span>
+        <span><strong><?= e($user['full_name']) ?></strong><small><?= e($roleName) ?> · <?= e(Branch::label()) ?></small></span>
+    </div>
+    <h2 class="sidebar__phone-title">Menu</h2>
     <nav class="sidebar__nav" aria-label="Main menu">
         <?php foreach ($menuGroups as $group => $groupLabel): ?>
             <?php if (empty($menuItems[$group])) continue; ?>
@@ -52,6 +58,10 @@ foreach (config('menu', []) as $key => $item) {
             </a>
         <?php endif; ?>
 
+        <form class="sidebar__signout" action="<?= e(url('logout.php')) ?>" method="post">
+            <?= Csrf::field() ?>
+            <button type="submit" class="btn btn--light btn--block"><?= icon('logout') ?> Sign out</button>
+        </form>
         <div class="sidebar__footer">
             <strong>EXECOM Logistics</strong>
             <small>Inventory <span>•</span> Sales <span>•</span> Distribution</small>

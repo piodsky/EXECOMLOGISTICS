@@ -1899,6 +1899,21 @@ try {
     Check ((Eval "document.body.classList.contains('sidebar-open') && !document.body.classList.contains('sidebar-collapsed') && document.querySelector('.topbar__toggle').getAttribute('aria-expanded') === 'true'")) 'mobile: the menu button opens the slide-in sidebar'
     [void](Eval "document.querySelector('.sidebar-backdrop').click()")
     Check ((Eval "!document.body.classList.contains('sidebar-open')")) 'mobile: backdrop closes it'
+    # Phone: app-style bottom tab bar (4 main pages + Menu); hidden on desktop
+    Size 412 860
+    Nav "$Base/pages/dashboard.php"
+    $tabs = Eval "[...document.querySelectorAll('#bottomNav .bottom-nav__item span')].map(s => s.textContent).join('|')"
+    $bn = Eval "(() => { const n = document.getElementById('bottomNav').getBoundingClientRect(); return getComputedStyle(document.getElementById('bottomNav')).display !== 'none' && Math.round(n.bottom) === window.innerHeight && getComputedStyle(document.querySelector('.topbar__toggle')).display === 'none'; })()"
+    Check ($tabs -eq 'Home|POS|Jobs|Stock|Menu' -and $bn -and (Eval "document.querySelector('#bottomNav [data-tab=dashboard]').classList.contains('is-active')")) "phone: bottom tab bar fixed at the bottom ($tabs), Home active, topbar menu button hidden"
+    [void](Eval "document.querySelector('#bottomNav [data-tab=menu]').click()")
+    Start-Sleep -Milliseconds 300
+    Check ((Eval "document.body.classList.contains('sidebar-open') && document.getElementById('sidebar').getBoundingClientRect().bottom <= document.getElementById('bottomNav').getBoundingClientRect().top + 1 && Math.round(document.getElementById('sidebar').getBoundingClientRect().width) === window.innerWidth && getComputedStyle(document.querySelector('.sidebar__nav')).gridTemplateColumns.split(' ').length === 2 && !!document.querySelector('.sidebar__signout button').offsetParent")) 'phone: Menu tab opens a full-page menu (2-column tiles, Sign out) above the tab bar'
+    Shot '58-phone-bottom-nav'
+    [void](Eval "document.querySelector('#bottomNav [data-tab=menu]').click()")
+    Nav "$Base/pages/inventory.php"
+    Check ((Eval "document.querySelector('#bottomNav [data-tab=inventory]').classList.contains('is-active') && document.documentElement.scrollWidth <= window.innerWidth")) 'phone: Stock tab active on Inventory, no horizontal scroll'
+    Size 1536 1024
+    Check ((Eval "getComputedStyle(document.getElementById('bottomNav')).display") -eq 'none') 'desktop: no bottom tab bar'
     Size 1536 1024
 
     # Notifications (migration 018): made from the audit log of the flows above
@@ -1986,6 +2001,7 @@ try {
     Logout
     Login 'davcash' $script:pw 'pos.php'
     Check ((Status 'pages/branch-prices.php') -eq 403) 'cashier: no Branch Prices page'
+    Check ((Eval "[...document.querySelectorAll('#bottomNav .bottom-nav__item span')].map(s => s.textContent).join('|')") -eq 'POS|Jobs|Stock|Orders|Menu') 'cashier: bottom tab bar POS / Jobs / Stock / Orders / Menu'
     $r = PostForm 'pages/product-form.php?id=2' "form: 'branch_prices', branch_price_4: '1.00', orig_price_4: '360.00'"
     Check ($r -like '403:*' -and (Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 4') -eq '360.00') "cashier: posting a branch price is refused ($($r.Substring(0, 3)))"
     # How It Works page: any signed-in user; steps the user can do are marked and linked

@@ -6,6 +6,7 @@
 ?>
     </main>
 </div>
+<?php require ROOT_PATH . '/includes/bottom-nav.php'; ?>
 
 <script src="<?= e(asset('js/app.js')) ?>" defer></script>
 <script src="<?= e(asset('js/notifications.js')) ?>" defer></script>
