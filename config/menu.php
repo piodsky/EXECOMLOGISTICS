@@ -6,6 +6,7 @@
  * 'home'  = landing priority: home_path() sends a user to the openable item with the lowest 'home' (default 100,
  *           then menu order): admins → Dashboard, cashiers → POS, technicians → Job Orders.
  * 'show'  = optional extra permission to SHOW the item in the sidebar (the page still opens with 'permission').
+ * 'login' => true: any signed-in user may open it (no permission).
  * 'tabs' => true: the link goes to the first Settings tab the user can open (settings_tabs()).
  */
 declare(strict_types=1);
@@ -19,6 +20,15 @@ return [
         'permission' => 'reports.view',
         'group'      => 'overview',
         'home'       => 1,
+    ],
+    // How the system works: every workflow step by step, who does each step (any signed-in user).
+    'workflow' => [
+        'label'      => 'How It Works',
+        'icon'       => 'info',
+        'url'        => 'pages/workflow.php',
+        'login'      => true,
+        'group'      => 'overview',
+        'home'       => 1000, // never the landing page while the user can open anything else
     ],
 
     // ---- Selling: POS, customer orders, receivables, customers

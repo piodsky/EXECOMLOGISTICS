@@ -555,7 +555,7 @@ try {
     Login 'davadmin' $script:pw
     $menu = Eval "[...document.querySelectorAll('.sidebar__nav .nav-link span')].map(s => s.textContent.trim()).join('|')"
     # Phase 7a: Receiving + Serial Lookup added after Inventory (branch_admin has receiving.view / serials.view).
-    Check ($menu -eq 'Dashboard|POS Sales|Sales History|Customer Orders|Billing & Collections|Customers|Job Orders|Purchasing|Receiving|Payables|Suppliers|Inventory|Branch Prices|Stock Operations|Branch Transfers|Serial Lookup|Reports|Settings') "branch admin menu: $menu"
+    Check ($menu -eq 'Dashboard|How It Works|POS Sales|Sales History|Customer Orders|Billing & Collections|Customers|Job Orders|Purchasing|Receiving|Payables|Suppliers|Inventory|Branch Prices|Stock Operations|Branch Transfers|Serial Lookup|Reports|Settings') "branch admin menu: $menu"
     Check (Eval "[...document.querySelectorAll('.sidebar__nav .nav-link')].pop().href.endsWith('/pages/users.php')") 'branch admin Settings opens the Users tab'
     Check ((Text '[data-branch-code]') -like 'DAV*Davao City' -and (Eval "!document.getElementById('branchSelect')")) 'branch admin: fixed DAV chip, no switcher'
     $st = "$(Status 'pages/roles.php'),$(Status 'pages/branches.php'),$(Status 'pages/settings.php')"
@@ -1988,6 +1988,12 @@ try {
     Check ((Status 'pages/branch-prices.php') -eq 403) 'cashier: no Branch Prices page'
     $r = PostForm 'pages/product-form.php?id=2' "form: 'branch_prices', branch_price_4: '1.00', orig_price_4: '360.00'"
     Check ($r -like '403:*' -and (Sql 'SELECT price FROM product_branch_prices WHERE product_id = 2 AND branch_id = 4') -eq '360.00') "cashier: posting a branch price is refused ($($r.Substring(0, 3)))"
+    # How It Works page: any signed-in user; steps the user can do are marked and linked
+    Nav "$Base/pages/workflow.php"
+    $wf = Eval "document.querySelectorAll('.wf-flow').length + '/' + document.querySelectorAll('.wf-step').length + '/' + document.querySelectorAll('#wf-pos .wf-step.is-mine').length + '/' + document.querySelectorAll('#wf-buy .wf-step.is-mine').length"
+    Check ($wf -like '6/3*/*/1' -and (Text '.wf-role.is-mine strong') -eq 'Cashier' -and (Eval "[...document.querySelectorAll('.wf-step__link')].every(a => !/payables|purchase-orders|receiving/.test(a.href))")) "cashier: How It Works (flows/steps/mine POS/mine buying = $wf), role highlighted, no links to buying pages"
+    Check ((Eval "document.documentElement.scrollWidth <= window.innerWidth")) 'How It Works: no horizontal scroll'
+    Shot '57-workflow'
     Logout
     Login 'admin' 'admin123' 'dashboard.php'
 
