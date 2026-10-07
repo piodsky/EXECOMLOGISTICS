@@ -29,9 +29,10 @@ final class JobParts
     public static function forJob(int $jobId): array
     {
         $stmt = db()->prepare(
-            'SELECT jp.*, p.code AS product_code, p.name AS product_name, p.price, p.track_serial, un.code AS unit_code,
+            'SELECT jp.*, p.code AS product_code, p.name AS product_name, ' . BranchPrices::sql('p', 'jo.branch_id') . ' AS price, p.track_serial, un.code AS unit_code,
                     ru.full_name AS requested_by_name, iu.full_name AS issued_by_name
                FROM job_order_parts jp
+               JOIN job_orders jo ON jo.id = jp.job_order_id
                JOIN products p ON p.id = jp.product_id
                LEFT JOIN units un ON un.id = p.unit_id
                JOIN users ru ON ru.id = jp.requested_by

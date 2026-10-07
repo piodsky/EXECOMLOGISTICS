@@ -124,7 +124,7 @@ $rowVal = static fn (array $row, string $key): string => is_string($row[$key] ??
 // Products with their suggested price and the units free at this branch (POS location minus reservations).
 $location = $concrete ? Branch::defaultLocation((int) Branch::current()) : null;
 $stmt = db()->prepare(
-    "SELECT p.id, p.code, p.barcode, p.name, p.price, p.track_serial, p.is_active,
+    "SELECT p.id, p.code, p.barcode, p.name, " . ($concrete ? BranchPrices::sql('p', (int) Branch::current()) : 'p.price') . " AS price, p.track_serial, p.is_active,
             COALESCE(sb.qty, 0) - COALESCE((SELECT SUM(l.qty_ordered - l.qty_delivered) FROM customer_order_lines l
                                               JOIN customer_orders o ON o.id = l.order_id
                                              WHERE l.product_id = p.id AND o.location_id = ? AND o.status IN ('confirmed', 'partial')), 0) AS free

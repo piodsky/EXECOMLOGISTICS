@@ -22,7 +22,7 @@ final class JobBilling
     public static function quote(array $job): array
     {
         $stmt = db()->prepare(
-            "SELECT jp.id, jp.product_id, jp.qty_used, jp.unit_cost, p.code, p.name, p.price
+            "SELECT jp.id, jp.product_id, jp.qty_used, jp.unit_cost, p.code, p.name, " . BranchPrices::sql('p', (int) $job['branch_id']) . " AS price
                FROM job_order_parts jp JOIN products p ON p.id = jp.product_id
               WHERE jp.job_order_id = ? AND jp.status = 'issued' AND jp.qty_used > 0 ORDER BY jp.product_id, jp.id"
         );

@@ -2,7 +2,7 @@
 /**
  * POS pricing rules (Phase 9). Prices are VAT-exclusive (VAT is added on top, as before).
  *
- *   suggested = products.price; the cashier may charge another price ("actual") per line:
+ *   suggested = the branch price, else products.price (BranchPrices); the cashier may charge another price ("actual") per line:
  *     - any change needs pos.change_price; a lower price needs a reason;
  *     - lower than the role limit (roles.max_price_drop %) or below cost needs approval;
  *   sale discount: needs pos.discount; above roles.max_discount % needs approval;

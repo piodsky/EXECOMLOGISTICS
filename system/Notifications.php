@@ -55,6 +55,7 @@ final class Notifications
         'inventory.count_post'      => ['stock', 'green', 'Stock count {ref} was approved and posted', [], 'creator', 'event'],
         'sales.void'                => ['receipt', 'red', '{actor} voided sale No. {ref}', ['sales.cancel'], null, 'event'],
         'sales.price_override'      => ['receipt', 'orange', 'Sale No. {ref} was sold below the price limit (approved)', ['pos.price_override'], null, 'event'],
+        'products.branch_price'     => ['tag', 'blue', '{actor} changed selling prices at {ref}', ['products.branch_price'], null, 'event'],
         'auth.login_locked'         => ['shield', 'red', 'Sign-in locked for "{ref}" after failed attempts', [], null, 'none'],
     ];
 
@@ -64,6 +65,7 @@ final class Notifications
         'stock_transfer' => 'transfer-view.php', 'customer_order' => 'co-view.php', 'customer_delivery' => 'dr-view.php',
         'collection' => 'collection-view.php', 'supplier_invoice' => 'ap-view.php', 'disbursement' => 'dv-view.php',
         'job_order' => 'job-view.php', 'inventory_doc' => 'stock-doc-view.php', 'sale' => 'sale-view.php',
+        'branch_price' => 'branch-prices.php',
     ];
 
     /** People involved: resolver => [entity type => [table, column]] (table / column names are code literals). */

@@ -1,7 +1,8 @@
 <?php
 /**
  * Products: validation, listing, CRUD and stock adjustments (with audit log).
- * The catalogue (products, prices) is company-wide; stock is per branch (stock_balances).
+ * The catalogue is company-wide (products.price = the company price; a branch may have its own price,
+ * BranchPrices); stock is per branch (stock_balances).
  * Stock only changes through sales or adjustStock() (both via Stock::move), never by editing
  * the product, so every change lands in stock_movements.
  * Stock figures shown here are the sum over the current branch scope ("All branches" = company total).
@@ -88,8 +89,10 @@ final class Products
         [$join, $joinParams] = Stock::scopeJoin($f['location'] ?? null);
         [$where, $params] = self::where($f);
         $cost = Auth::can('products.cost') ? 'p.unit_cost, ' : ''; // cost only with products.cost
+        // One branch: its branch price (company_price kept for the "branch" tag); All branches: the company price.
+        $price = Branch::isConcrete() ? BranchPrices::sql('p', (int) Branch::current()) : 'p.price';
         $stmt = db()->prepare(
-            "SELECT p.id, p.code, p.barcode, p.name, p.price, {$cost}COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock, p.track_serial,
+            "SELECT p.id, p.code, p.barcode, p.name, {$price} AS price, p.price AS company_price, {$cost}COALESCE(bs.qty, 0) AS stock, p.stock AS total_stock, p.track_serial,
                     p.reorder_level, p.image, p.is_active, c.name AS category_name,
                     br.name AS brand_name, pm.name AS model_name, un.code AS unit_code, un.name AS unit_name,
                     (SELECT COUNT(*) FROM sale_items si WHERE si.product_id = p.id) AS times_sold
@@ -137,7 +140,7 @@ final class Products
         [$join, $params] = Stock::scopeJoin();
         $stmt = db()->prepare(
             "SELECT COUNT(*) AS items,
-                    COALESCE(SUM(p.price * COALESCE(bs.qty, 0)), 0) AS stock_value,
+                    COALESCE(SUM(bs.price_value), 0) AS stock_value,
                     COALESCE(SUM(COALESCE(bs.qty, 0) > 0 AND COALESCE(bs.qty, 0) <= p.reorder_level), 0) AS low,
                     COALESCE(SUM(COALESCE(bs.qty, 0) = 0), 0) AS out_of_stock
                FROM products p

@@ -121,11 +121,14 @@ require ROOT_PATH . '/includes/header.php';
 <div class="page-head">
     <div>
         <h1>Inventory</h1>
-        <p class="muted">Products, prices, stock levels and images · stock at <strong id="stockScope"><?= e(Branch::label()) ?><?= $locationLabel !== null ? ' · ' . e($locationLabel) : '' ?></strong>.</p>
+        <p class="muted">Products, prices, stock levels and images · prices and stock at <strong id="stockScope"><?= e(Branch::label()) ?><?= $locationLabel !== null ? ' · ' . e($locationLabel) : '' ?></strong>.</p>
     </div>
     <div class="page-actions">
         <?php if (Auth::can('inventory.integrity')): ?>
             <a class="btn btn--light" href="<?= e(url('pages/stock-integrity.php')) ?>" id="integrityLink"><?= icon('shield') ?> Stock Integrity</a>
+        <?php endif; ?>
+        <?php if (Auth::can('products.branch_price')): ?>
+            <a class="btn btn--light" href="<?= e(url('pages/branch-prices.php')) ?>" id="branchPricesLink"><?= icon('tag') ?> Branch Prices</a>
         <?php endif; ?>
         <?php if ($canManage): ?>
             <a class="btn btn--primary" href="<?= e(url('pages/product-form.php?return=' . rawurlencode($returnTo))) ?>">
@@ -240,7 +243,7 @@ require ROOT_PATH . '/includes/header.php';
                     </td>
                     <td><?= e($p['category_name']) ?></td>
                     <td class="col-opt"><?= e($p['brand_name'] ?? '—') ?><?php if ($p['model_name']): ?><span class="cell-sub"><?= e($p['model_name']) ?></span><?php endif; ?></td>
-                    <td class="num"><?= e(money($p['price'])) ?></td>
+                    <td class="num"><?= e(money($p['price'])) ?><?php if ($p['price'] !== $p['company_price']): ?><small class="muted block" title="Company price <?= e(money($p['company_price'])) ?>">branch price</small><?php endif; ?></td>
                     <?php if ($canCost): ?><td class="num col-opt"><?= e(money($p['unit_cost'])) ?></td><?php endif; ?>
                     <td class="num">
                         <span class="badge <?= $stockClass ?>"><?= $stock === 0 ? 'Out' : $stock ?></span>

@@ -70,6 +70,8 @@ Read this first; open only the files a task needs.
 - [x] Phase 14: payment status on PO / order pages + lists, attachments (PO Internal, PO Outgoing, collections),
       grouped sidebar, Buying / Selling chain tab bars + Overview pages, document chain strip. Migration
       `migrations/016_attachments.sql`. Built without agents.
+- [x] Branch prices: a different selling price per branch (migration 020), Branch Prices page + product form card.
+      Built without agents.
 
 ## Security & operations (Phase 12) — user decisions
 - MySQL: the app runs as `execom_app` (SELECT/INSERT/UPDATE/DELETE on execomlogistics_db + execomlogistics_e2e,
@@ -235,6 +237,22 @@ Read this first; open only the files a task needs.
   items / categories, Sales today by payment / cashier, Slow-moving stock (60 days, value at cost with products.cost),
   Stock by category, Service & Quotations, Top customers, My notifications. Each part needs its permission.
 - `branches.monthly_target` (migration 019, Settings -> Branches; blank = no target) feeds the target bar.
+
+## Branch prices (migration 020; user: "go build it", recommended choices)
+- `product_branch_prices` (product, branch, price, updated_by): no row = company price (`products.price`). Its own
+  table, never product_branches (a price must not create / touch a branch cost row). Any price >= 0 (above or
+  below the company price). Class `BranchPrices`: `sql(alias, branchId|'x.branch_id')` = COALESCE(branch, company)
+  expression, `map()` / `apply()` / `of()`, `canEdit(branch)` = `products.branch_price` (branch_admin; super admin)
+  + branch in `Branch::allowedIds()`, `saveForBranch()` (only changed rows, one audit `products.branch_price` per
+  branch with old / new per product code; notification to the branch's price editors + super admins).
+- Used by every selling path at the selling branch: POS products API + `Sales::complete` (map after the product
+  locks), job bills / suggested labour / job parts list (job branch), quotation + customer order validate and forms
+  (working branch). Inventory list price = branch price with a "branch price" tag (All branches = company price);
+  stock value at price (`Stock::scopeJoin` bs.price_value, Reports stockByCategory / branches, Dashboard slow movers).
+  Sales keep their snapshots, so past documents never change.
+- Edit: Branch Prices page (`pages/branch-prices.php`, menu Stock, 50 per page, search / category / only branch
+  prices) and the "Branch prices" card on product-form (own form `form=branch_prices`; branch admins see only their
+  own branch box). Both post only boxes whose value differs from the hidden `orig_*` value (stale page safe).
 
 ## Job intake checklists, several job types + technicians (migration 017; user: "go", option 2)
 - Intake form (`job-form.php`): Accessories / Condition on arrival = checkboxes from Master Data lists `accessories`

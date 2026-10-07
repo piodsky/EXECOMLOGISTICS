@@ -357,7 +357,7 @@ final class Dashboard
         $cost = Auth::can('products.cost');
         [$scope, $params] = Branch::scopeSql('sb.branch_id');
         [$sScope, $sParams] = Branch::scopeSql('s.branch_id');
-        $valueExpr = $cost ? 'SUM(sb.qty * COALESCE(pb.avg_cost, p.unit_cost))' : 'SUM(sb.qty) * MAX(p.price)';
+        $valueExpr = $cost ? 'SUM(sb.qty * COALESCE(pb.avg_cost, p.unit_cost))' : 'SUM(sb.qty * COALESCE(bpp.price, p.price))';
         $stmt = db()->prepare(
             "SELECT p.id, p.code, p.name, SUM(sb.qty) AS qty, {$valueExpr} AS value,
                     (SELECT MAX(s.created_at) FROM sale_items si JOIN sales s ON s.id = si.sale_id
@@ -365,6 +365,7 @@ final class Dashboard
                FROM stock_balances sb
                JOIN products p ON p.id = sb.product_id
                LEFT JOIN product_branches pb ON pb.product_id = sb.product_id AND pb.branch_id = sb.branch_id
+               LEFT JOIN product_branch_prices bpp ON bpp.product_id = sb.product_id AND bpp.branch_id = sb.branch_id
               WHERE sb.qty > 0 AND p.is_active = 1 AND {$scope}
               GROUP BY p.id, p.code, p.name
              HAVING last_sold IS NULL OR last_sold < NOW() - INTERVAL ? DAY
