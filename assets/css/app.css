@@ -1357,3 +1357,13 @@ textarea.form-input { resize: vertical; min-height: 84px; }
     .sidebar__footer small { color: var(--text-muted); }
 }
 @media (max-width: 768px) and (prefers-reduced-motion: reduce) { .sidebar { transition: none !important; } }
+
+/* Customer select + quick-add button (includes/customer-quick-add.php, assets/js/customer-add.js) */
+.select-add { display: flex; gap: 8px; align-items: stretch; }
+.select-add > select { flex: 1; min-width: 0; }
+.select-add__btn { flex: none; width: auto; min-width: 44px; height: auto; border-color: var(--primary); color: var(--primary); }
+.select-add__btn:hover { background: var(--primary); color: #fff; }
+.select-add__btn .icon { width: 20px; height: 20px; }
+#customerAddDialog { width: min(560px, calc(100vw - 32px)); }
+.cqa-grid { margin-top: 4px; }
+.cqa-error { margin: 12px 0 0; }

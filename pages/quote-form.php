@@ -118,6 +118,10 @@ $page['title'] = $title;
 
 $pageStyles  = ['css/sales.css', 'css/receiving.css', 'css/stock-docs.css', 'css/transfers.css', 'css/purchasing.css'];
 $pageScripts = ['js/purchasing.js'];
+$canAddCustomer = customer_quick_add_allowed(); // "+" next to the customer select
+if ($canAddCustomer) {
+    $pageScripts[] = 'js/customer-add.js';
+}
 require ROOT_PATH . '/includes/header.php';
 
 /** One line; $i = 'N' or '__i__' in the template. */
@@ -195,14 +199,19 @@ $renderLine = static function (string $i, array $row, int $n) use ($products, $r
             <div class="form-grid">
                 <label class="form-field form-field--full">
                     <span class="form-label">Customer *</span>
+                    <div class="select-add">
                     <select class="form-input" name="customer_id" required id="qtCustomer"<?= invalid('customer_id') ?>>
                         <option value="">Choose a customer…</option>
                         <?php foreach ($customers as $c): ?>
                             <option value="<?= (int) $c['id'] ?>"<?= $customerId === (string) $c['id'] ? ' selected' : '' ?>><?= e($c['name']) ?><?= $c['type_name'] ? ' · ' . e($c['type_name']) : '' ?><?= (int) $c['is_active'] === 1 ? '' : ' (inactive)' ?></option>
                         <?php endforeach; ?>
                     </select>
+                        <?php if ($canAddCustomer): ?>
+                            <button type="button" class="icon-btn select-add__btn" data-add-customer="qtCustomer" aria-label="Add a new customer" title="Add a new customer"><?= icon('plus') ?></button>
+                        <?php endif; ?>
+                    </div>
                     <?= field_error('customer_id') ?>
-                    <?php if (!$customers && $concrete): ?><small class="form-hint">Add the customer first (Customers → Add).</small><?php endif; ?>
+                    <?php if (!$customers && $concrete): ?><small class="form-hint">No customers yet: add one with the + button.</small><?php endif; ?>
                 </label>
                 <label class="form-field">
                     <span class="form-label">Attention</span>
@@ -307,4 +316,5 @@ $renderLine = static function (string $i, array $row, int $n) use ($products, $r
 
 <template id="lineTpl"><?php $renderLine('__i__', [], 0); ?></template>
 
+<?php if ($canAddCustomer) { require ROOT_PATH . '/includes/customer-quick-add.php'; } ?>
 <?php require ROOT_PATH . '/includes/footer.php'; ?>

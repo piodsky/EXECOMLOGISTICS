@@ -132,7 +132,7 @@ function Cdp([string]$method, $params = @{}) {
             return $obj.result
         }
         if ($txt -match '"method":"Runtime.exceptionThrown"') { [void]$script:problems.Add('JS exception: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
-        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and $txt -notmatch '/storage/attachments/' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print|attachment|attachments|buying|selling|branch-prices)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
+        elseif ($txt -match '"method":"Log.entryAdded"' -and $txt -match '"level":"(error|warning)"' -and $txt -notmatch 'nope.php' -and $txt -notmatch '/storage/attachments/' -and -not ($txt -match 'status of 4(03|04|09|22)' -and $txt -match '(reports|settings|roles|branches|receipt|sale-view|pos|checkout|user-form|switch-branch|master-data|suppliers|supplier-form|customer-form|receiving|receiving-view|receiving-form|serials|product-form|stock-integrity|stock-docs|stock-doc-form|stock-doc-view|warehouses|serial-register|transfers|transfer-form|transfer-view|approve|job-view|job-form|job-orders|dashboard|report-profit|report-jobs|report-pricing|report-branches|purchase-requests|purchase-orders|pr-form|pr-view|po-form|po-view|po-print|pr-print|customer-orders|co-form|co-view|dr-form|dr-view|deliveries|order-tracking|dr-print|bill-print|quotations|quote-form|quote-view|quote-print|collections|collection-receipts|collection-form|collection-view|collection-print|checks|soa|soa-print|payables|ap-form|ap-view|disbursements|dv-form|dv-view|dv-print|attachment|attachments|buying|selling|branch-prices|customers/create)\.php')) { [void]$script:problems.Add('log: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
         elseif ($txt -match '"method":"Runtime.consoleAPICalled"' -and $txt -match '"type":"error"') { [void]$script:problems.Add('console.error: ' + $txt.Substring(0, [Math]::Min(400, $txt.Length))) }
     }
 }
@@ -1385,6 +1385,8 @@ try {
 
     Login 'martech' $script:pw 'job-orders.php'
     Check ((Text '[data-work=unassigned]') -eq '1' -and (Eval "!!document.getElementById('newJobBtn')")) 'technician lands on Job Orders: 1 unassigned job'
+    Nav "$Base/pages/job-form.php"
+    Check ((Eval "!document.querySelector('[data-add-customer]') && !document.getElementById('customerAddDialog')")) 'technician (no customers.edit): no + add customer on the job form'
     Nav "$Base/pages/job-view.php?id=$job1"
     Submit "document.getElementById('takeJobBtn').click()" 'take job'
     Check ((Text '#jobStatus') -eq 'Assigned' -and (Text '#jobTechnician') -like 'Marco Tech*') 'technician took the job'
@@ -1992,6 +1994,23 @@ try {
     $pp = Eval "BB.api('pos/products.php').then(d => d.products.find(p => p.id === 2).price_cents)"
     Check ($pp -eq '35000' -and (Sql "SELECT si.unit_price FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.sale_no = '$($sale -replace '^ok:', '')' AND si.product_id = 2") -eq '420.00') "blank = company price on the POS again ($pp); the earlier sale keeps 420.00"
     Shot '56-branch-prices'
+    # Quick add customer (+) next to the customer select of the quotation / customer PO / job order forms
+    Nav "$Base/pages/quote-form.php"
+    [void](Eval "document.querySelector('[data-add-customer=qtCustomer]').click()")
+    Check ((Eval "document.getElementById('customerAddDialog').open")) 'quotation form: + opens the Add Customer dialog'
+    [void](Eval "{ const f0 = document.getElementById('customerAddForm'); f0.elements.name.value = 'Quick Add Office'; f0.elements.phone.value = '09175550199'; f0.elements.address.value = 'Capitol Compound'; f0.requestSubmit(); } true")
+    WaitFor "!document.getElementById('customerAddDialog').open" 'quick add saved'
+    $qa = Sql "SELECT CONCAT(c.id, ':', c.branch_id, ':', (SELECT COUNT(*) FROM customer_branches cb WHERE cb.customer_id = c.id AND cb.branch_id = 1)) FROM customers c WHERE c.name = 'Quick Add Office'"
+    $sel = Eval "document.getElementById('qtCustomer').value"
+    Check ($qa -like "${sel}:1:1" -and (Eval "document.getElementById('qtCustomer').selectedOptions[0].textContent") -eq 'Quick Add Office') "quick add: customer saved at MAR and selected in the form ($qa / sel $sel / $(Eval "document.getElementById('qtCustomer').selectedOptions[0].textContent"))"
+    Nav "$Base/pages/job-form.php"
+    [void](Eval "{ document.querySelector('[data-add-customer=customerId]').click(); const f1 = document.getElementById('customerAddForm'); f1.elements.name.value = 'Quick Walk Two'; f1.elements.phone.value = '09175550288'; f1.requestSubmit(); } true")
+    WaitFor "!document.getElementById('customerAddDialog').open" 'quick add on job form'
+    Check ((Eval "document.getElementById('customerName').value === 'Quick Walk Two' && document.getElementById('customerId').selectedOptions[0].textContent.includes('09175550288')")) 'job form: new customer selected, name + phone filled in'
+    [void](Eval "{ document.querySelector('[data-add-customer=customerId]').click(); const f2 = document.getElementById('customerAddForm'); f2.elements.name.value = 'Dup Phone'; f2.elements.phone.value = '09175550288'; f2.requestSubmit(); } true")
+    WaitFor "!document.getElementById('customerAddError').hidden" 'duplicate phone error'
+    Check ((Text '#customerAddError') -like '*already belongs to Quick Walk Two*' -and (Sql "SELECT COUNT(*) FROM customers WHERE name = 'Dup Phone'") -eq '0') "quick add: duplicate phone refused in the dialog ($(Text '#customerAddError'))"
+    [void](Eval "document.getElementById('customerAddDialog').close()")
     Logout
     Login 'davadmin' $script:pw
     Nav "$Base/pages/product-form.php?id=2"
