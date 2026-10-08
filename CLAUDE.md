@@ -261,6 +261,12 @@ Read this first; open only the files a task needs.
   shortcut tiles per section, Sign out; `.sidebar__phone-*` parts). Topbar menu button + Logout hidden on phones
   (Sign out is in the account menu); content / toasts / sidebar leave room for the bar (safe-area aware).
 
+## Quick add customer (+)
+- `includes/customer-quick-add.php` dialog + `assets/js/customer-add.js`: a `[data-add-customer="<select id>"]` button next to the
+  customer select of quote-form, co-form and job-form (POS keeps its own). Posts to `api/customers/create.php` (name, phone,
+  email, type, TIN, address; customers.edit; created in the working branch), adds + selects the option (data-name / phone /
+  address) and fires change. Shown only when `customer_quick_add_allowed()` (customers.edit + concrete branch).
+
 ## How It Works page
 - `pages/workflow.php` (menu "How It Works", group overview, `'login' => true` = any signed-in user, `home` 1000 so
   it is never a landing page); content in `Workflow::flows()` / `rules()` / `ROLES` (POS, customer orders, billing &

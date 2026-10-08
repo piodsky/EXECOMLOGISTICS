@@ -353,6 +353,12 @@ function home_path(): string
     return $best !== null ? menu_path($best) : 'pages/account.php';
 }
 
+/** May the user quick-add a customer from a form ("+" next to a customer select)? Customers are created in the working branch. */
+function customer_quick_add_allowed(): bool
+{
+    return Auth::can('customers.edit') && Branch::isConcrete();
+}
+
 function home_url(): string
 {
     return url(home_path());

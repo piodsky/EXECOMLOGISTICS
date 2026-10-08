@@ -114,6 +114,10 @@ $select = static function (string $name, array $options, string $value, string $
 
 $pageStyles  = ['css/jobs.css'];
 $pageScripts = ['js/jobs.js'];
+$canAddCustomer = customer_quick_add_allowed(); // "+" next to the customer select
+if ($canAddCustomer) {
+    $pageScripts[] = 'js/customer-add.js';
+}
 require ROOT_PATH . '/includes/header.php';
 ?>
 
@@ -148,13 +152,18 @@ require ROOT_PATH . '/includes/header.php';
             <div class="form-grid">
                 <label class="form-field form-field--full">
                     <span class="form-label">Customer record <small class="muted">(optional; leave empty for a walk-in)</small></span>
-                    <select class="form-input" name="customer_id" id="customerId"<?= invalid('customer_id') ?>>
+                    <div class="select-add">
+                    <select class="form-input" name="customer_id" id="customerId" data-label-phone<?= invalid('customer_id') ?>>
                         <option value="">Walk-in / not registered</option>
                         <?php foreach ($customers as $c): ?>
                             <option value="<?= (int) $c['id'] ?>" data-name="<?= e($c['name']) ?>" data-phone="<?= e((string) $c['phone']) ?>"<?= $val('customer_id') === (string) $c['id'] ? ' selected' : '' ?>>
                                 <?= e($c['name']) ?><?= $c['phone'] ? ' · ' . e($c['phone']) : '' ?></option>
                         <?php endforeach; ?>
                     </select>
+                        <?php if ($canAddCustomer): ?>
+                            <button type="button" class="icon-btn select-add__btn" data-add-customer="customerId" aria-label="Add a new customer" title="Add a new customer"><?= icon('plus') ?></button>
+                        <?php endif; ?>
+                    </div>
                     <?= field_error('customer_id') ?>
                 </label>
                 <label class="form-field">
@@ -298,4 +307,5 @@ require ROOT_PATH . '/includes/header.php';
     </div>
 </form>
 
+<?php if ($canAddCustomer) { require ROOT_PATH . '/includes/customer-quick-add.php'; } ?>
 <?php require ROOT_PATH . '/includes/footer.php'; ?>
